@@ -1,0 +1,64 @@
+# Linh News — Daily Generation Prompt
+
+You are generating Linh's personalized daily edition for {{DATE}} ({{SLOT}} — `midnight`, `noon`, or `refresh`).
+All facts must be dated within 1–2 days of {{DATE}}. Use the `web_search` tool aggressively.
+
+## Output (return STRICT JSON, no prose outside the JSON)
+```json
+{
+  "html": "<full HTML page, mobile-friendly, sectioned as below>",
+  "pdf_html": "<print-styled one-page HTML for WeasyPrint, NYT-front-page aesthetic>"
+}
+```
+
+## HTML page sections
+Render in this order. **Omit a section entirely if there is no fresh content.**
+
+1. **Top global political news**
+2. **Top US political news**
+3. **Top NJ / NY news**
+4. **Top Dorchester Elementary School news + upcoming events**
+5. **Top financial news**
+6. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)
+7. **Stocks** — GOOG, SMCI, NVDA, TSLA. Show current price and % change today.
+   Include a "why it moved" blurb **ONLY** when `|daily %| > 5`.
+8. **Movies** (ages 8–12) currently in theaters or opening within 2 weeks.
+   - Each card: title, theater date (label `Opens {date}` if future, `In theaters since {date}` if past).
+   - **Dedupe** early-access vs. wide release of the same film: while the early-access date is in the future, show the early-access entry; once that date is past, show the wide-release entry instead.
+   - **Skip**: any title in `{{HIDDEN_MOVIES}}`; any film that has been in theaters > 7 days; any re-release of a film whose original release was > 1 year ago.
+   - Each card has `<button class="hide-movie" data-title="...">Hide</button>`.
+   - **Omit the section entirely if the list is empty.**
+9. **Weather** — today + tomorrow for **15 Hunter Ridge, Woodcliff Lake, NJ 07677** (coords: `{{WEATHER_COORDS}}`). Surface any active alerts or warnings prominently.
+10. **Calendar** — from `{{CALENDAR_EVENTS_JSON}}` (window: today through today+30 days, past events already dropped).
+    - **Timed events**: list all of today's and tomorrow's, plus notable ones in the next week.
+    - **All-day events**: surface only important ones — birthdays, school closures or special days, William or Elizabeth soccer / dance / photo events, water delivery, anniversaries (wedding or otherwise), US public holidays, Lunar New Year, plus everything in `{{IMPORTANT_EVENTS_JSON}}`. The more important the event, the further in advance it should appear.
+
+## Sources (HTML only — NOT in the PDF)
+For every news, finance, AI, movie, school, and weather item, append a `Sources:` line at the end of the item. Each source is rendered as:
+
+```html
+<span class="src" title="[N] {full source title}\n{url}"><a href="{url}" target="_blank" rel="noopener">[N]</a></span>
+```
+
+Sort sources by relevance, most relevant first. The tooltip shows the ranked title plus URL on hover. **Do not include sources in `pdf_html`.**
+
+## PDF (Linh Times) requirements
+- Single US Letter page, 2–3 columns NYT-style.
+- Masthead: **Linh Times** in bold serif (use a system serif — `"Times New Roman", "Georgia", serif` — so WeasyPrint renders without external assets).
+- Date line, weather strip, 4–6 prioritized stories (headline + 1–2 sentence summary), calendar sidebar, stocks ticker footer.
+- **No** source citations, **no** Hide buttons, **no** interactive elements.
+- Must fit on exactly one page.
+
+## Calendar list (informational)
+Subscribed Google calendars: `{{ALL_CALENDARS_JSON}}`.
+Hidden calendars (events excluded entirely): `{{HIDDEN_CALENDARS_JSON}}`.
+
+## Mobile + desktop responsive
+The HTML must read well at 375px (phone), 768px (tablet), and ≥1200px (desktop). Use a single column on phones, two columns ≥768px, three ≥1200px. Use `clamp()` for fluid type. Touch targets ≥ 44px.
+
+---
+
+## Manual extension area (do not remove this fence)
+<!-- CUSTOM_TOPICS_BEGIN -->
+{{CUSTOM_TOPICS}}
+<!-- CUSTOM_TOPICS_END -->

@@ -1,0 +1,4 @@
+# Authorized Google accounts for Linh News.
+# One email per line. Lines starting with # are comments. Blank lines OK.
+# Edit this file and redeploy to add or remove access.
+vtlinh87@gmail.com

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# uv
+# (uv.lock IS committed; only ignore caches)
+.uv-cache/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+service-account*.json
+client_secret*.json
+
+# Local DB / artifacts
+*.db
+*.sqlite
+*.sqlite3
+*.pdf
+/tmp/
+/local/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Fly.io
+.fly/

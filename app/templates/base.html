@@ -129,6 +129,9 @@
     button.hide-movie:hover {
       background: var(--accent); color: #fff; border-color: var(--accent);
     }
+    /* Hide-movie button is admin-only — never even render for viewers,
+       so no flash before JS runs. */
+    body.viewer button.hide-movie { display: none !important; }
 
     details.collapsible {
       border: 1px solid var(--rule);
@@ -341,7 +344,7 @@
     }
   </style>
 </head>
-<body>
+<body class="{% if is_admin %}admin{% else %}viewer{% endif %}">
   {% block body %}{% endblock %}
   <div class="toast-host" id="toast-host" aria-live="polite"></div>
   <script>

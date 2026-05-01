@@ -172,8 +172,7 @@
         if (r.ok) btn.closest('article,.movie,section')?.remove() ?? btn.remove();
       });
     });
-  } else {
-    document.querySelectorAll('button.hide-movie').forEach(b => b.style.display = 'none');
   }
+  // Non-admins: hide-movie buttons are hidden via body.viewer CSS rule.
 </script>
 {% endblock %}

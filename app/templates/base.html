@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Linh News{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #fbfaf6;
+      --fg: #1a1a1a;
+      --muted: #555;
+      --rule: #ddd;
+      --accent: #a51c30;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(15px, 2.4vw, 17px);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header.site {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--rule);
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+      background: #fff;
+      position: sticky; top: 0; z-index: 5;
+    }
+    header.site h1 { margin: 0; font-size: clamp(20px, 4vw, 28px); }
+    header.site .spacer { flex: 1; }
+    header.site .actions button, header.site .actions a {
+      min-height: 44px; padding: 8px 14px;
+      border: 1px solid var(--fg); background: #fff; color: var(--fg);
+      font: inherit; border-radius: 4px; cursor: pointer;
+    }
+    header.site .actions .primary { background: var(--fg); color: #fff; }
+    main { padding: 16px; max-width: 1280px; margin: 0 auto; }
+    .src { font-size: 0.8em; }
+    .src a { padding: 0 2px; }
+    button.hide-movie { min-height: 44px; }
+
+    @media (min-width: 768px) {
+      main.cols { columns: 2; column-gap: 28px; }
+      main.cols > section { break-inside: avoid; margin-bottom: 1.4em; }
+    }
+    @media (min-width: 1200px) {
+      main.cols { columns: 3; }
+    }
+  </style>
+</head>
+<body>
+  {% block body %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

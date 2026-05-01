@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Linh News{% endblock %}
+{% block body %}
+<header class="site"><h1>Linh News</h1></header>
+<main>
+  <section style="max-width:480px; margin: 10vh auto; text-align:center;">
+    <h2>Sign in to continue</h2>
+    <p>This site is private. Sign in with an authorized Google account.</p>
+    <p><a href="{{ login_url }}" class="actions"
+          style="display:inline-block; padding:12px 20px; border:1px solid #1a1a1a; border-radius:4px;">
+      Sign in with Google</a></p>
+    {% if error %}<p style="color: var(--accent);">{{ error }}</p>{% endif %}
+  </section>
+</main>
+{% endblock %}

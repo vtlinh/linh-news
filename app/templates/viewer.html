@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Linh News — {{ edition_date }}{% endblock %}
+{% block body %}
+<header class="site">
+  <h1>Linh News</h1>
+  <form method="get" action="/d/" style="display:flex; gap:6px; align-items:center;"
+        onsubmit="event.preventDefault(); window.location='/d/'+this.d.value;">
+    <a href="/d/{{ prev_date }}" class="actions" aria-label="Previous day">←</a>
+    <input type="date" name="d" value="{{ edition_date }}" />
+    <a href="/d/{{ next_date }}" class="actions" aria-label="Next day">→</a>
+  </form>
+  <div class="spacer"></div>
+  <div class="actions" style="display:flex; gap:8px; flex-wrap:wrap;">
+    <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
+    <button id="refresh-btn" type="button">Refresh</button>
+    {% if is_admin %}
+      <a href="/admin/events">Events</a>
+      <a href="/admin/calendars">Calendars</a>
+    {% endif %}
+    <a href="/logout">Logout</a>
+  </div>
+</header>
+<main class="cols" id="content">
+  {% if edition_html %}
+    {{ edition_html | safe }}
+  {% else %}
+    <section><h2>No edition for {{ edition_date }} yet.</h2>
+      <p>Click <strong>Refresh</strong> to generate today's edition.</p></section>
+  {% endif %}
+</main>
+{% endblock %}
+{% block scripts %}
+<script>
+  const isAdmin = {{ 'true' if is_admin else 'false' }};
+  const refreshBtn = document.getElementById('refresh-btn');
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = 'Refreshing...';
+    const r = await fetch('/refresh', {method: 'POST'});
+    if (r.ok) location.reload();
+    else { refreshBtn.disabled = false; refreshBtn.textContent = 'Refresh'; alert('Refresh failed'); }
+  });
+  if (isAdmin) {
+    document.querySelectorAll('button.hide-movie').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const title = btn.dataset.title;
+        if (!title) return;
+        const r = await fetch('/hide-movie', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({title})
+        });
+        if (r.ok) btn.closest('article,.movie,section')?.remove() ?? btn.remove();
+      });
+    });
+  } else {
+    document.querySelectorAll('button.hide-movie').forEach(b => b.style.display = 'none');
+  }
+</script>
+{% endblock %}

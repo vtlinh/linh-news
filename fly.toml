@@ -1,0 +1,40 @@
+app = "linh-news"
+primary_region = "ewr"
+
+[build]
+
+[env]
+TZ = "America/New_York"
+
+[http_service]
+internal_port = 8000
+force_https = true
+auto_stop_machines = true
+auto_start_machines = true
+min_machines_running = 0
+
+[[http_service.checks]]
+grace_period = "10s"
+interval = "30s"
+method = "GET"
+timeout = "5s"
+path = "/healthz"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "512mb"
+
+[deploy]
+release_command = "uv run alembic upgrade head"
+
+[processes]
+app = "uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+[[mounts]]
+source = "linh_news_data"
+destination = "/data"
+
+# Scheduled machines (cron) — run the same image with a different command.
+# Configure via `fly machine run --schedule daily ...` after first deploy:
+#   fly machine run --schedule "0 0 * * *" -e SLOT=midnight ... -- python -m app.generate midnight
+#   fly machine run --schedule "0 12 * * *" -e SLOT=noon    ... -- python -m app.generate noon

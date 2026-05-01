@@ -37,6 +37,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+# B008: FastAPI's canonical pattern is `x = Depends(...)` / `x = Form(...)` in
+# defaults. The check is unhelpful for FastAPI handlers.
+ignore = ["B008"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

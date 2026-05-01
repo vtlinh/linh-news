@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Admin · Important Events{% endblock %}
+{% block body %}
+<header class="site"><h1>Important Events</h1>
+  <div class="spacer"></div>
+  <div class="actions"><a href="/">← Back</a></div>
+</header>
+<main>
+  <form method="post" action="/admin/events" style="display:grid; gap:8px; max-width:540px;">
+    <label>Title <input name="title" required /></label>
+    <label>Date <input type="date" name="event_date" required /></label>
+    <label>Importance (1–10) <input type="number" name="importance" value="5" min="1" max="10" /></label>
+    <label>Notes <textarea name="notes" rows="2"></textarea></label>
+    <button type="submit" class="actions" style="padding:10px 16px;">Add event</button>
+  </form>
+
+  <h2>Upcoming</h2>
+  <table style="width:100%; border-collapse:collapse;">
+    <thead><tr><th align="left">Date</th><th align="left">Title</th><th>Imp.</th><th></th></tr></thead>
+    <tbody>
+    {% for ev in events %}
+      <tr style="border-top:1px solid var(--rule);">
+        <td>{{ ev.event_date }}</td>
+        <td>{{ ev.title }}{% if ev.notes %} <small>({{ ev.notes }})</small>{% endif %}</td>
+        <td align="center">{{ ev.importance }}</td>
+        <td><form method="post" action="/admin/events/{{ ev.id }}/delete"
+                  onsubmit="return confirm('Delete this event?');">
+              <button type="submit">Delete</button></form></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4"><em>None.</em></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</main>
+{% endblock %}

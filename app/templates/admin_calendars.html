@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Admin · Calendars{% endblock %}
+{% block body %}
+<header class="site"><h1>Calendars</h1>
+  <div class="spacer"></div><div class="actions"><a href="/">← Back</a></div>
+</header>
+<main>
+  <p>All Google calendars subscribed by Linh. Hidden calendars are excluded
+     from event fetching during generation.</p>
+  <form method="post" action="/admin/calendars">
+    <table style="width:100%; border-collapse:collapse;">
+      <thead><tr><th align="left">Calendar</th><th>Hidden?</th></tr></thead>
+      <tbody>
+      {% for cal in calendars %}
+        <tr style="border-top:1px solid var(--rule);">
+          <td>{{ cal.name }}{% if cal.primary %} <small>(primary)</small>{% endif %}
+              <br><small style="color:var(--muted);">{{ cal.id }}</small></td>
+          <td align="center">
+            <input type="checkbox" name="hidden" value="{{ cal.id }}"
+                   {% if cal.id in hidden_ids %}checked{% endif %} />
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit" class="actions" style="margin-top:12px; padding:10px 16px;">
+      Save
+    </button>
+  </form>
+</main>
+{% endblock %}

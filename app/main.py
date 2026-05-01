@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app import auth, cache, calendar_oauth, calendar_summary, overlays, tmdb
 from app import movies as movies_mod
@@ -31,6 +31,20 @@ async def _lifespan(app):
 
 app = FastAPI(title="Linh News", lifespan=_lifespan)
 templates = Jinja2Templates(directory=str(REPO_ROOT / "app" / "templates"))
+
+
+@app.middleware("http")
+async def _canonical_host(request: Request, call_next):
+    """Redirect 127.0.0.1 → localhost so OAuth state cookies stay scoped to
+    a single hostname. Without this, hitting 127.0.0.1:8000 sets cookies on
+    one origin while the OAuth callback (which uses PUBLIC_BASE_URL =
+    localhost) lands on another, causing 'invalid_state'."""
+    host = request.headers.get("host", "")
+    if host.startswith("127.0.0.1"):
+        new_host = host.replace("127.0.0.1", "localhost", 1)
+        new_url = request.url.replace(netloc=new_host)
+        return RedirectResponse(str(new_url), status_code=307)
+    return await call_next(request)
 
 
 @app.get("/healthz")
@@ -104,7 +118,14 @@ def _inject_calendar(html: str, s: Session, today: date) -> str:
 def _render_viewer(
     request: Request, day: date, s: Session, viewer_email: str
 ) -> HTMLResponse:
-    edition = s.get(Edition, day)
+    # Defer the multi-MB pdf column — the home page only needs html +
+    # generated_at. Fetching pdf on every request through the Fly proxy
+    # was the dominant page-load cost.
+    edition = s.execute(
+        select(Edition)
+        .where(Edition.date == day)
+        .options(defer(Edition.pdf), defer(Edition.pdf_html))
+    ).scalar_one_or_none()
     today = local_today()
     next_date = day + timedelta(days=1)
     edition_html = edition.html if edition else None
@@ -206,12 +227,16 @@ def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int
     env = os.environ.copy()
     # Make sure the worker inherits the same .env / repo root.
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    # Inherit the parent's stdout/stderr (None) so refresh logs appear live in
+    # the dev terminal that's running uvicorn. The subprocess also writes to a
+    # per-run log file inside _cli() (configured in app/generate.py) for
+    # durability when the parent terminal is closed.
     kwargs: dict = {
         "cwd": str(REPO_ROOT),
         "env": env,
         "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        "stdout": None,
+        "stderr": None,
     }
     if sys.platform == "win32":
         # CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS make the child outlive
@@ -228,7 +253,7 @@ def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int
 
 
 @app.post("/refresh", status_code=status.HTTP_202_ACCEPTED)
-async def refresh(request: Request, email: str = Depends(auth.require_viewer)):
+async def refresh(request: Request, email: str = Depends(auth.require_admin)):
     """Kick a background regeneration in a *detached subprocess* so the
     refresh keeps running even if uvicorn restarts. Returns 202 immediately
     so the page can keep showing the old edition until the new one is ready.

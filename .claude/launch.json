@@ -4,7 +4,7 @@
     {
       "name": "FastAPI (uvicorn dev)",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", "8000"],
+      "runtimeArgs": ["run", "uvicorn", "app.main:app", "--host", "localhost", "--port", "8000"],
       "port": 8000
     }
   ]

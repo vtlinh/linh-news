@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 # Bumped whenever the per-day prompt format changes — folded into the
 # fingerprint so old DB rows are auto-invalidated and regenerated.
-_PROMPT_VERSION = "v2-single-line"
+_PROMPT_VERSION = "v3-no-bullet"
 
 _DAY_SUMMARY_SCHEMA = {
     "type": "object",
@@ -80,19 +80,22 @@ _DAY_SYSTEM_PROMPT = (
     "for a daily newspaper.\n"
     "OUTPUT FORMAT — produce exactly this shape:\n"
     "  <div><strong>Friday, May 2:</strong> 9:00 AM 📚 Library visit · "
-    "12:00 PM 🍕 Lunch with team · • 🎂 Dad's birthday</div>\n"
+    "12:00 PM 🍕 Lunch with team · 🎂 Dad's birthday</div>\n"
     "RULES:\n"
     "- All events for the day go on ONE line inside a single <div>. "
     "Never use <br>, <ul>, <li>, or any vertical separator.\n"
     "- Separate events with ' · ' (space, middle dot, space).\n"
     "- Bold the date with <strong>…</strong> and follow it with a colon.\n"
-    "- Timed events: show the time in 12-hour format ('9:00 AM') before the title.\n"
-    "- All-day events: prefix with the bullet '•' (no time).\n"
+    "- Timed events: show the time in 12-hour format ('9:00 AM') BEFORE the emoji.\n"
+    "- All-day events: NO time and NO bullet — just emoji + title.\n"
+    "- DO NOT use the '•' bullet character anywhere — the emoji is the only "
+    "visual marker for each event.\n"
     "- Add ONE contextually relevant emoji to each event, placed between the "
-    "time/bullet and the event title (e.g. '9:00 AM 📚 Library visit', "
-    "'• 🎂 Dad's birthday'). Pick the emoji from the event title — birthday → 🎂, "
-    "soccer → ⚽, dance → 💃, school → 🏫, dentist/doctor → 🦷/🩺, dinner → 🍽, "
-    "flight/travel → ✈️, holiday → 🎉, etc. Use 📅 only as a last resort.\n"
+    "time (if any) and the event title — e.g. '9:00 AM 📚 Library visit', "
+    "'🎂 Dad's birthday', '🎉 International Labor Day'. Pick the emoji from "
+    "the event title — birthday → 🎂, soccer → ⚽, dance → 💃, school → 🏫, "
+    "dentist/doctor → 🦷/🩺, dinner → 🍽, flight/travel → ✈️, holiday → 🎉, "
+    "water/utility → 💧, etc. Use 📅 only as a last resort.\n"
     "- HTML ONLY. NEVER use markdown syntax: do NOT write '**bold**', '*emphasis*', "
     "'# heading', '- list', or backticks. Use <strong> tags instead of asterisks.\n"
     "- No source links, no citations, no external URLs, no inline styles.\n"
@@ -113,6 +116,18 @@ def _day_user_prompt(day: date, events: list[dict]) -> str:
     )
 
 
+_BAD_TAG_RE = re.compile(r"<\s*/?\s*(ul|ol|li|br|p\b)", re.IGNORECASE)
+
+
+def _looks_single_line(html: str) -> bool:
+    """Reject Claude outputs that fall back to bulleted lists / vertical
+    layouts despite the prompt. The single-line format we want is a single
+    <div> with <strong> + ' · '-separated events — no list/break tags."""
+    if not html or not html.strip():
+        return False
+    return _BAD_TAG_RE.search(html) is None
+
+
 def _generate_day_html(day: date, events: list[dict]) -> str:
     """Ask Claude (Haiku — no web_search) to format one day's events as HTML.
 
@@ -126,7 +141,12 @@ def _generate_day_html(day: date, events: list[dict]) -> str:
         max_tokens=_DAY_MAX_TOKENS,
         model=_DAY_MODEL,
     )
-    return result["html"]
+    html = result["html"]
+    if not _looks_single_line(html):
+        log.warning("Calendar day %s: Claude returned non-single-line HTML "
+                    "(%r); falling back to plain formatter.", day, html[:200])
+        return _plain_fallback(day, events)
+    return html
 
 
 def _batch_generate_days(
@@ -195,12 +215,50 @@ def _batch_generate_days(
         for block in msg.content:
             if getattr(block, "type", None) == "tool_use" and block.name == "return_day_summary":
                 html = (block.input or {}).get("html", "").strip()
-                if html:
-                    out[day] = html
+                if not html:
+                    break
+                if not _looks_single_line(html):
+                    log.warning(
+                        "Batch entry %s: Claude returned non-single-line HTML "
+                        "(%r); will fall back to plain formatter.",
+                        entry.custom_id, html[:200],
+                    )
+                    break  # leave `day` absent → caller falls back
+                out[day] = html
                 break
 
-    log.info("Calendar batch %s: %d/%d days produced HTML", batch.id, len(out), len(items))
+    log.info("Calendar batch %s: %d/%d days produced single-line HTML",
+             batch.id, len(out), len(items))
     return out
+
+
+_FALLBACK_EMOJI_RULES: list[tuple[tuple[str, ...], str]] = [
+    (("birthday",), "🎂"),
+    (("anniversary",), "💞"),
+    (("soccer",), "⚽"),
+    (("dance",), "💃"),
+    (("school", "elementary", "dorchester"), "🏫"),
+    (("dentist",), "🦷"),
+    (("doctor", "appointment", "checkup"), "🩺"),
+    (("dinner",), "🍽"),
+    (("lunch",), "🍱"),
+    (("breakfast",), "🥐"),
+    (("flight", "travel", "trip"), "✈️"),
+    (("holiday", "labor day", "memorial day", "thanksgiving", "christmas",
+      "new year", "easter"), "🎉"),
+    (("water",), "💧"),
+    (("delivery",), "📦"),
+    (("photo",), "📷"),
+    (("library",), "📚"),
+]
+
+
+def _fallback_emoji(title: str) -> str:
+    t = (title or "").lower()
+    for keywords, emoji in _FALLBACK_EMOJI_RULES:
+        if any(kw in t for kw in keywords):
+            return emoji
+    return "📅"
 
 
 def _plain_fallback(day: date, events: list[dict]) -> str:
@@ -210,16 +268,17 @@ def _plain_fallback(day: date, events: list[dict]) -> str:
     for e in sorted(events, key=lambda x: x.get("start", "")):
         start = e.get("start", "")
         title = e.get("summary", "(untitled)")
+        emoji = _fallback_emoji(title)
         if "T" in start:
             try:
                 dt = datetime.fromisoformat(start)
                 h = dt.hour % 12 or 12
                 t = f"{h}:{dt.strftime('%M')} {'AM' if dt.hour < 12 else 'PM'}"
-                pieces.append(f"{t} {title}")
+                pieces.append(f"{t} {emoji} {title}")
             except ValueError:
-                pieces.append(title)
+                pieces.append(f"{emoji} {title}")
         else:
-            pieces.append(f"• {title}")
+            pieces.append(f"{emoji} {title}")
     return f"<div><strong>{day_label}:</strong> " + " · ".join(pieces) + "</div>"
 
 

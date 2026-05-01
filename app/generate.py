@@ -56,11 +56,25 @@ def run(slot: Slot, today: date | None = None) -> date:
         response["pdf_html"] = _inject_lead_image(response["pdf_html"], today)
     with _step("ensure_lead_image"):
         response["pdf_html"] = _ensure_lead_image(response["pdf_html"])
+    # Snapshot the print HTML *exactly* as it goes into WeasyPrint, so we
+    # can inspect missing-image and overflow problems after the fact.
+    try:
+        from pathlib import Path
+        snap_dir = Path(__file__).resolve().parent.parent / "logs"
+        snap_dir.mkdir(exist_ok=True)
+        snap = snap_dir / f"pdf-html-{slot}-{int(datetime.now(UTC).timestamp())}.html"
+        snap.write_text(response["pdf_html"], encoding="utf-8")
+        log.info("Saved pre-WeasyPrint pdf_html: %s (%d bytes, %d <img> tags)",
+                 snap, len(response["pdf_html"]),
+                 response["pdf_html"].lower().count("<img"))
+    except Exception:
+        log.exception("Could not snapshot pdf_html")
+
     with _step("html_to_pdf"):
         pdf_bytes = pdf.html_to_pdf(response["pdf_html"])
 
     with _step("upsert_edition"), Maker() as s:
-        _upsert_edition(s, today, response["html"], pdf_bytes)
+        _upsert_edition(s, today, response["html"], pdf_bytes, response["pdf_html"])
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
     # Each generation cycle also refreshes the year-out movie list so the
@@ -198,14 +212,17 @@ _FALLBACK_IMG_URL = (
 
 
 def _url_alive(url: str, timeout: float = 8.0) -> bool:
-    """HEAD-check a URL with our real User-Agent. Returns True only on a
-    2xx response with an image-like Content-Type."""
+    """Verify a URL serves an image. Uses a tiny ranged GET instead of HEAD
+    because Wikimedia's thumbnail server frequently returns 404 on HEAD for
+    not-yet-cached thumbnails (HEAD is technically supported but stale-cache
+    behaviour differs from GET). One-byte range keeps bandwidth minimal."""
     import urllib.error
     import urllib.request
 
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": _UA}, method="HEAD"
+            url,
+            headers={"User-Agent": _UA, "Range": "bytes=0-0"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
             ctype = (
@@ -213,8 +230,12 @@ def _url_alive(url: str, timeout: float = 8.0) -> bool:
                 if hasattr(r.headers, "get_content_type")
                 else r.headers.get("Content-Type", "")
             )
-            return 200 <= r.status < 300 and ctype.startswith("image/")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
+            # Range requests succeed with 206; servers that ignore Range
+            # return 200. Both are fine here.
+            ok_status = r.status in (200, 206)
+            return ok_status and (ctype or "").startswith("image/")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+        log.info("URL preflight failed (%s): %s", e, url[:200])
         return False
 
 
@@ -350,16 +371,19 @@ def _strip_document_wrapper(html: str) -> str:
     return html.strip()
 
 
-def _upsert_edition(s: Session, day: date, html: str, pdf_bytes: bytes) -> None:
+def _upsert_edition(
+    s: Session, day: date, html: str, pdf_bytes: bytes, pdf_html: str | None = None
+) -> None:
     now = datetime.now(UTC)
     if s.bind.dialect.name == "postgresql":
         stmt = pg_insert(Edition).values(
-            date=day, html=html, pdf=pdf_bytes, generated_at=now
+            date=day, html=html, pdf_html=pdf_html, pdf=pdf_bytes, generated_at=now
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[Edition.date],
             set_={
                 "html": stmt.excluded.html,
+                "pdf_html": stmt.excluded.pdf_html,
                 "pdf": stmt.excluded.pdf,
                 "generated_at": stmt.excluded.generated_at,
             },
@@ -368,18 +392,38 @@ def _upsert_edition(s: Session, day: date, html: str, pdf_bytes: bytes) -> None:
     else:
         # Fallback path used by tests / sqlite.
         s.execute(text("DELETE FROM editions WHERE date = :d"), {"d": day})
-        s.add(Edition(date=day, html=html, pdf=pdf_bytes, generated_at=now))
+        s.add(Edition(
+            date=day, html=html, pdf_html=pdf_html, pdf=pdf_bytes, generated_at=now,
+        ))
     s.commit()
 
 
 def _cli() -> int:
     import time
+    from pathlib import Path
 
     p = argparse.ArgumentParser()
     p.add_argument("slot", choices=["morning", "evening", "refresh"])
     p.add_argument("--date", default=None, help="Override date (YYYY-MM-DD)")
     args = p.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    # Logs go to BOTH the inherited stderr (so they appear in the dev terminal
+    # running uvicorn when triggered via /refresh) AND a per-run log file
+    # under logs/refresh-*.log so you can tail them later.
+    log_dir = Path(__file__).resolve().parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"refresh-{args.slot}-{int(time.time())}.log"
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    stream_h = logging.StreamHandler(sys.stderr)
+    stream_h.setFormatter(fmt)
+    file_h = logging.FileHandler(log_path, encoding="utf-8")
+    file_h.setFormatter(fmt)
+    # Replace any handlers basicConfig may have set so we don't get duplicates.
+    root.handlers[:] = [stream_h, file_h]
+    log.info("Refresh log file: %s", log_path)
+
     from app import cache
 
     target_date: date | None = None

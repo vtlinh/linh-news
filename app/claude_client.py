@@ -68,27 +68,51 @@ def call_with_schema(
         "input_schema": schema,
     }
     tools = [return_tool] + list(extra_tools or [])
+    client = _client()
+    model_name = model or settings.anthropic_model
+    system_blocks = [
+        {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+    ]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
 
     # Streaming is required for long requests (>10 min) per the Anthropic SDK.
     # We don't surface partial deltas to callers — we just consume the stream
-    # and read the final message.
-    with _client().messages.stream(
-        model=model or settings.anthropic_model,
-        max_tokens=max_tokens,
-        tools=tools,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user}],
-    ) as stream:
-        msg = stream.get_final_message()
+    # and read the final message. If the model returns ``stop_reason="pause_turn"``
+    # (long tool-use turn was suspended to avoid hitting the per-turn limit),
+    # Anthropic's API tells us to append the assistant content and call again.
+    # We do that up to a small cap so we don't spin forever.
+    MAX_PAUSE_RESUMES = 4
+    last_msg = None
+    for _ in range(MAX_PAUSE_RESUMES + 1):
+        with client.messages.stream(
+            model=model_name,
+            max_tokens=max_tokens,
+            tools=tools,
+            system=system_blocks,
+            messages=messages,
+        ) as stream:
+            msg = stream.get_final_message()
+        last_msg = msg
 
-    for block in msg.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == schema_name:
-            return dict(block.input)
+        # Did the model produce the structured payload? If so, we're done.
+        for block in msg.content:
+            if getattr(block, "type", None) == "tool_use" and block.name == schema_name:
+                return dict(block.input)
 
-    # The model failed to call the structured-output tool.
-    text_blocks = [b.text for b in msg.content if getattr(b, "type", None) == "text"]
+        # If the turn paused mid-tool-use (e.g. web_search ran long), continue
+        # the conversation — append the assistant's content unchanged, then loop.
+        if msg.stop_reason == "pause_turn":
+            messages.append({"role": "assistant", "content": msg.content})
+            continue
+
+        # Any other terminal stop reason → can't recover.
+        break
+
+    msg = last_msg
+    text_blocks = [b.text for b in (msg.content if msg else []) if getattr(b, "type", None) == "text"]
     raise ValueError(
-        f"Claude did not invoke {schema_name!r}. stop_reason={msg.stop_reason}. "
+        f"Claude did not invoke {schema_name!r}. "
+        f"stop_reason={getattr(msg, 'stop_reason', None)}. "
         f"Text content: {' '.join(text_blocks)[:500]}"
     )
 

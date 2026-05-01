@@ -51,3 +51,4 @@ htmlcov/
 
 # Fly.io
 .fly/
+logs/

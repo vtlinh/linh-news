@@ -112,19 +112,36 @@ def html_to_pdf(html: str) -> bytes:
     )
 
     def _url_fetcher(url, *args, **kwargs):
+        # Log every external resource WeasyPrint asks for — the lead-image
+        # failures we've been seeing usually look like a silent fetch error
+        # here, so we want a trace for every attempt and outcome.
+        is_data = url.startswith("data:")
+        if not is_data:
+            log.info("WeasyPrint fetch: %s", url[:200])
         try:
-            return default_url_fetcher(
-                url, *args, headers={"User-Agent": ua}, **kwargs
-            )
-        except TypeError:
-            import urllib.request
-            req = urllib.request.Request(url, headers={"User-Agent": ua})
-            with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310
-                return {
-                    "string": r.read(),
-                    "mime_type": r.headers.get_content_type(),
-                    "redirected_url": r.url,
-                }
+            try:
+                result = default_url_fetcher(
+                    url, *args, headers={"User-Agent": ua}, **kwargs
+                )
+            except TypeError:
+                import urllib.request
+                req = urllib.request.Request(url, headers={"User-Agent": ua})
+                with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310
+                    result = {
+                        "string": r.read(),
+                        "mime_type": r.headers.get_content_type(),
+                        "redirected_url": r.url,
+                    }
+            if not is_data:
+                size = len(result.get("string", b"")) if "string" in result else "stream"
+                log.info("WeasyPrint fetch ok: %s [%s, %s bytes]",
+                         result.get("redirected_url", url)[:200],
+                         result.get("mime_type"), size)
+            return result
+        except Exception as e:  # noqa: BLE001
+            if not is_data:
+                log.warning("WeasyPrint fetch FAILED: %s — %s", url[:200], e)
+            raise
 
     def _make_css(base_pt: float) -> CSS:
         # Cap masthead independently so it stays readable even at large body sizes.

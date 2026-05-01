@@ -16,9 +16,9 @@
   <div class="toolbar">
     <div class="actions toolbar-actions">
       <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
-      <button id="refresh-btn" type="button"
-              {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
       {% if is_admin %}
+        <button id="refresh-btn" type="button"
+                {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
         <a href="/admin/calendars">Calendars</a>
         <a href="/admin/movies">Movies</a>
         <a href="/admin/stocks">Stocks</a>
@@ -41,10 +41,11 @@
   // All Jinja interpolation goes through `| tojson` so HTML autoescape
   // (which would turn " into &#34; and break the script parse) never bites.
   const isAdmin = {{ is_admin | tojson }};
-  const refreshBtn = document.getElementById('refresh-btn');
   const editionDate = {{ edition_date | tojson }};
   const serverInProgress = {{ refresh_in_progress | tojson }};
   let initialGeneratedAt = {{ edition_generated_at | tojson }};
+  // Refresh button only exists in the DOM for admins (template-gated).
+  const refreshBtn = isAdmin ? document.getElementById('refresh-btn') : null;
 
   async function fetchFreshness() {
     try {
@@ -90,37 +91,39 @@
     }
   }
 
-  refreshBtn.addEventListener('click', async () => {
-    console.log('[refresh] click');
-    try {
-      const f0 = await fetchFreshness();
-      initialGeneratedAt = f0?.generated_at ?? null;
-      if (f0?.refresh_in_progress) {
-        pollUntilFresh();
-        return;
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', async () => {
+      console.log('[refresh] click');
+      try {
+        const f0 = await fetchFreshness();
+        initialGeneratedAt = f0?.generated_at ?? null;
+        if (f0?.refresh_in_progress) {
+          pollUntilFresh();
+          return;
+        }
+        const r = await fetch('/refresh', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({date: editionDate}),
+        });
+        console.log('[refresh] /refresh =>', r.status);
+        if (r.status === 202 || r.status === 409) {
+          pollUntilFresh();
+        } else {
+          const body = await r.text().catch(() => '');
+          window.toast(`Refresh failed (${r.status}): ${body || 'no body'}`, true);
+        }
+      } catch (e) {
+        console.error('[refresh] handler error', e);
+        window.toast('Refresh handler error: ' + (e?.message || e), true);
       }
-      const r = await fetch('/refresh', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({date: editionDate}),
-      });
-      console.log('[refresh] /refresh =>', r.status);
-      if (r.status === 202 || r.status === 409) {
-        pollUntilFresh();
-      } else {
-        const body = await r.text().catch(() => '');
-        window.toast(`Refresh failed (${r.status}): ${body || 'no body'}`, true);
-      }
-    } catch (e) {
-      console.error('[refresh] handler error', e);
-      window.toast('Refresh handler error: ' + (e?.message || e), true);
-    }
-  });
+    });
 
-  // If the user lands on the page while a refresh is mid-flight, surface that
-  // immediately. The server already rendered the button in its disabled state
-  // (no flash), and we kick the polling loop.
-  if (serverInProgress) pollUntilFresh();
+    // If the user lands on the page while a refresh is mid-flight, surface that
+    // immediately. The server already rendered the button in its disabled state
+    // (no flash), and we kick the polling loop.
+    if (serverInProgress) pollUntilFresh();
+  }
 
   // ── Collapsible sections (mobile only) ──────────────────────────────────
   // On viewports ≤ 768px every <section> with an <h2> gets a right-side

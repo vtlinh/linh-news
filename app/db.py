@@ -18,6 +18,10 @@ class Edition(Base):
     __tablename__ = "editions"
     date: Mapped[date] = mapped_column(Date, primary_key=True)
     html: Mapped[str] = mapped_column(Text, nullable=False)
+    # The print-styled HTML we hand to WeasyPrint. Stored alongside the rendered
+    # PDF so we can reproduce / debug image-fetch failures and font sizing
+    # without re-running the expensive Claude pipeline.
+    pdf_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -121,6 +121,44 @@
   // immediately. The server already rendered the button in its disabled state
   // (no flash), and we kick the polling loop.
   if (serverInProgress) pollUntilFresh();
+
+  // ── Collapsible sections (mobile only) ──────────────────────────────────
+  // On viewports ≤ 768px every <section> with an <h2> gets a right-side
+  // chevron that collapses/expands its body. Weather is a <div>, not a
+  // <section>, so it is naturally excluded. State is preserved in
+  // sessionStorage so navigating back doesn't re-collapse everything.
+  function initCollapsible() {
+    if (window.innerWidth > 768) return;
+    const STORE_KEY = 'sec-collapsed-' + editionDate;
+    let saved;
+    try { saved = JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null'); } catch { saved = null; }
+
+    document.querySelectorAll('main section').forEach((sec, i) => {
+      const h2 = sec.querySelector(':scope > h2');
+      if (!h2) return;
+
+      h2.classList.add('collapsible-heading');
+      const chev = document.createElement('span');
+      chev.className = 'section-chev';
+      chev.setAttribute('aria-hidden', 'true');
+      chev.textContent = '›';
+      h2.appendChild(chev);
+
+      const key = h2.textContent.trim().slice(0, 40);
+      const startCollapsed = saved ? !!saved[key] : true; // default: all collapsed
+      if (startCollapsed) sec.classList.add('sec-collapsed');
+
+      h2.addEventListener('click', () => {
+        const collapsed = sec.classList.toggle('sec-collapsed');
+        try {
+          const state = JSON.parse(sessionStorage.getItem(STORE_KEY) || '{}');
+          state[key] = collapsed;
+          sessionStorage.setItem(STORE_KEY, JSON.stringify(state));
+        } catch {}
+      });
+    });
+  }
+  initCollapsible();
   if (isAdmin) {
     document.querySelectorAll('button.hide-movie').forEach(btn => {
       btn.addEventListener('click', async () => {

@@ -86,6 +86,13 @@
       font: inherit; border-radius: 4px; cursor: pointer; text-decoration: none;
     }
     header.site .actions .primary { background: var(--fg); color: #fff; }
+    /* On narrow screens shrink the toolbar buttons so they all fit one row. */
+    @media (max-width: 600px) {
+      header.site .actions button, header.site .actions a {
+        min-height: 36px; padding: 5px 9px; font-size: 13px;
+      }
+      header.site .toolbar { gap: 6px; }
+    }
     main { padding: 16px; max-width: 1600px; margin: 0 auto; }
     /* Movie card with corner ✕ close button. */
     .movie-card {
@@ -136,6 +143,22 @@
     /* The "Hidden?" label sits at the row level — only show when the
        collapsible is open so it lines up with the actual checkboxes. */
     details.collapsible:not([open]) .hidden-col-label { display: none; }
+
+    /* Collapsible section headings (mobile only — JS adds these classes). */
+    main section > h2.collapsible-heading {
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; user-select: none;
+      gap: 8px;
+    }
+    main section > h2.collapsible-heading .section-chev {
+      flex-shrink: 0;
+      font-style: normal; font-size: 0.9em; color: var(--muted);
+      transition: transform 0.2s ease;
+    }
+    main section.sec-collapsed > h2.collapsible-heading .section-chev {
+      transform: rotate(-90deg);
+    }
+    main section.sec-collapsed > *:not(h2) { display: none !important; }
 
     /* Hover-revealed Sources popup OR direct anchor when there is exactly
        one source. Both forms use the same `.sources` class so they look

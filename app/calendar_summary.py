@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 
@@ -62,35 +63,120 @@ def _fingerprint(events: list[dict]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _generate_day_html(day: date, events: list[dict]) -> str:
-    """Ask Claude (Haiku — no web_search) to format one day's events as HTML."""
+_DAY_SYSTEM_PROMPT = (
+    "You produce compact HTML calendar snippets for a daily newspaper. "
+    "Given calendar events for a single day, output clean readable HTML.\n"
+    "Rules:\n"
+    "- Open with a bold date: <strong>Friday, May 2</strong>\n"
+    "- Timed events: show time in 12-hour format then the title.\n"
+    "- All-day events: prefix with a bullet •.\n"
+    "- Wrap the whole thing in a <div> — no <section>.\n"
+    "- No source links, no citations, no external URLs.\n"
+    "- Do NOT mention William or Elizabeth by name unless their name "
+    "appears verbatim in the event title.\n"
+    "- Keep it short and scannable."
+)
+_DAY_MODEL = "claude-haiku-4-5-20251001"
+_DAY_MAX_TOKENS = 800
+
+
+def _day_user_prompt(day: date, events: list[dict]) -> str:
     day_label = f"{day.strftime('%A, %B')} {day.day}, {day.year}"
+    return (
+        f"Day: {day_label}\n\n"
+        f"Events:\n{json.dumps(events, indent=2, ensure_ascii=False, default=str)}\n\n"
+        "Produce the HTML snippet."
+    )
+
+
+def _generate_day_html(day: date, events: list[dict]) -> str:
+    """Ask Claude (Haiku — no web_search) to format one day's events as HTML.
+
+    Used as a fallback when the batch path can't run a single day (rare)."""
     result = claude_client.call_with_schema(
-        system=(
-            "You produce compact HTML calendar snippets for a daily newspaper. "
-            "Given calendar events for a single day, output clean readable HTML.\n"
-            "Rules:\n"
-            "- Open with a bold date: <strong>Friday, May 2</strong>\n"
-            "- Timed events: show time in 12-hour format then the title.\n"
-            "- All-day events: prefix with a bullet •.\n"
-            "- Wrap the whole thing in a <div> — no <section>.\n"
-            "- No source links, no citations, no external URLs.\n"
-            "- Do NOT mention William or Elizabeth by name unless their name "
-            "appears verbatim in the event title.\n"
-            "- Keep it short and scannable."
-        ),
-        user=(
-            f"Day: {day_label}\n\n"
-            f"Events:\n{json.dumps(events, indent=2, ensure_ascii=False, default=str)}\n\n"
-            "Produce the HTML snippet."
-        ),
+        system=_DAY_SYSTEM_PROMPT,
+        user=_day_user_prompt(day, events),
         schema=_DAY_SUMMARY_SCHEMA,
         schema_name="return_day_summary",
         schema_description="HTML snippet for one calendar day.",
-        max_tokens=800,
-        model="claude-haiku-4-5-20251001",
+        max_tokens=_DAY_MAX_TOKENS,
+        model=_DAY_MODEL,
     )
     return result["html"]
+
+
+def _batch_generate_days(
+    items: list[tuple[date, list[dict], str]],
+) -> dict[date, str]:
+    """Submit one Anthropic Batch request with one entry per day.
+
+    Polls until the batch ends, then returns ``{day: html}``. Days whose entry
+    failed inside the batch are simply absent from the result — the caller
+    falls back to ``_plain_fallback`` for those.
+    """
+    from app.claude_client import _client
+
+    client = _client()
+
+    requests = []
+    for day, events, _fp in items:
+        requests.append({
+            "custom_id": day.isoformat(),
+            "params": {
+                "model": _DAY_MODEL,
+                "max_tokens": _DAY_MAX_TOKENS,
+                "system": _DAY_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": _day_user_prompt(day, events)}],
+                "tools": [{
+                    "name": "return_day_summary",
+                    "description": "HTML snippet for one calendar day.",
+                    "input_schema": _DAY_SUMMARY_SCHEMA,
+                }],
+                "tool_choice": {"type": "tool", "name": "return_day_summary"},
+            },
+        })
+
+    batch = client.messages.batches.create(requests=requests)
+    log.info("Calendar batch %s submitted (%d days), polling…", batch.id, len(items))
+
+    deadline = time.monotonic() + 600  # 10 min cap
+    while True:
+        if time.monotonic() > deadline:
+            log.warning("Calendar batch %s exceeded 10-min cap; cancelling", batch.id)
+            try:
+                client.messages.batches.cancel(batch.id)
+            except Exception:  # noqa: BLE001
+                pass
+            raise TimeoutError(f"calendar batch {batch.id} timed out")
+        batch = client.messages.batches.retrieve(batch.id)
+        if batch.processing_status == "ended":
+            break
+        log.info("Calendar batch %s status=%s — sleeping 5s",
+                 batch.id, batch.processing_status)
+        time.sleep(5)
+
+    log.info("Calendar batch %s ended, reading results", batch.id)
+
+    out: dict[date, str] = {}
+    for entry in client.messages.batches.results(batch.id):
+        try:
+            day = date.fromisoformat(entry.custom_id)
+        except ValueError:
+            continue
+        result_type = getattr(entry.result, "type", None)
+        if result_type != "succeeded":
+            log.warning("Batch entry %s: %s", entry.custom_id, result_type)
+            continue
+        msg = entry.result.message
+        for block in msg.content:
+            if getattr(block, "type", None) == "tool_use" and block.name == "return_day_summary":
+                html = (block.input or {}).get("html", "").strip()
+                if html:
+                    out[day] = html
+                break
+
+    log.info("Calendar batch %s: %d/%d days produced HTML", batch.id, len(out), len(items))
+    return out
 
 
 def _plain_fallback(day: date, events: list[dict]) -> str:
@@ -163,8 +249,10 @@ def get_or_generate_summaries(
 ) -> dict[date, str]:
     """Return {day: html} for all days with events.
 
-    Cache hits are returned immediately. Misses trigger a Claude call and are
-    persisted so subsequent runs skip generation.
+    Cache hits return immediately. Misses are submitted as a single Anthropic
+    Batch API request — Haiku, no web_search, no streaming, all parallel
+    server-side at 50% the per-request cost. On batch failure or timeout each
+    missing day falls back to a plain-Python listing.
     """
     from app.db import CalendarDaySummary
 
@@ -179,15 +267,21 @@ def get_or_generate_summaries(
             log.debug("Calendar day %s: cache hit", day)
             results[day] = row.summary_html
         else:
-            log.info("Calendar day %s: %s — generating", day, "stale" if row else "new")
+            log.info("Calendar day %s: %s — queueing for batch",
+                     day, "stale" if row else "new")
             to_generate.append((day, events, fp))
 
+    if not to_generate:
+        return results
+
+    batched_html: dict[date, str] = {}
+    try:
+        batched_html = _batch_generate_days(to_generate)
+    except Exception:
+        log.exception("Calendar batch failed; will use plain fallbacks")
+
     for day, events, fp in to_generate:
-        try:
-            html = _generate_day_html(day, events)
-        except Exception:
-            log.exception("Calendar day %s: generation failed, using fallback", day)
-            html = _plain_fallback(day, events)
+        html = batched_html.get(day) or _plain_fallback(day, events)
         events_json = json.dumps(events, ensure_ascii=False, default=str)
         _upsert_day(s, day, html, fp, events_json)
         results[day] = html

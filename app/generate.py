@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import logging
 import re
 import sys
+import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
@@ -21,6 +23,18 @@ log = logging.getLogger(__name__)
 Slot = Literal["morning", "evening", "refresh"]
 
 
+@contextlib.contextmanager
+def _step(name: str):
+    """Log how long a named step took. Logs even on exception."""
+    t0 = time.monotonic()
+    log.info("⏱  START   %s", name)
+    try:
+        yield
+    finally:
+        dt = time.monotonic() - t0
+        log.info("⏱  DONE    %s (%.2fs)", name, dt)
+
+
 def run(slot: Slot, today: date | None = None) -> date:
     """Generate today's edition and upsert into editions. Returns the date row."""
     today = today or local_today()
@@ -28,16 +42,24 @@ def run(slot: Slot, today: date | None = None) -> date:
     template = settings.news_pr_path.read_text(encoding="utf-8")
     Maker = session_factory()
 
-    with Maker() as s:
+    overall_t0 = time.monotonic()
+    log.info("⏱  ── refresh pipeline begin (slot=%s, date=%s) ──", slot, today)
+
+    with _step("build_context"), Maker() as s:
         ctx = _build_context(s, today, slot)
 
-    response = claude_client.generate_edition(template, ctx)
-    response["html"] = _strip_document_wrapper(response["html"])
-    response["pdf_html"] = _inject_lead_image(response["pdf_html"], today)
-    response["pdf_html"] = _ensure_lead_image(response["pdf_html"])
-    pdf_bytes = pdf.html_to_pdf(response["pdf_html"])
+    with _step("claude_generate_edition"):
+        response = claude_client.generate_edition(template, ctx)
+    with _step("strip_document_wrapper"):
+        response["html"] = _strip_document_wrapper(response["html"])
+    with _step("inject_lead_image"):
+        response["pdf_html"] = _inject_lead_image(response["pdf_html"], today)
+    with _step("ensure_lead_image"):
+        response["pdf_html"] = _ensure_lead_image(response["pdf_html"])
+    with _step("html_to_pdf"):
+        pdf_bytes = pdf.html_to_pdf(response["pdf_html"])
 
-    with Maker() as s:
+    with _step("upsert_edition"), Maker() as s:
         _upsert_edition(s, today, response["html"], pdf_bytes)
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
@@ -46,9 +68,13 @@ def run(slot: Slot, today: date | None = None) -> date:
     # the user-triggered home Refresh both pass through here.
     try:
         from app import movies
-        movies.get_or_fetch_movies(force=True)
+        with _step("movies.get_or_fetch_movies(force=True)"):
+            movies.get_or_fetch_movies(force=True)
     except Exception:  # noqa: BLE001
         log.exception("Movie cache refresh failed")
+
+    log.info("⏱  ── refresh pipeline end (total %.2fs) ──",
+             time.monotonic() - overall_t0)
     return today
 
 
@@ -57,28 +83,33 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     horizon = today + timedelta(days=30)
     tomorrow = today + timedelta(days=1)
 
-    hidden_movies = overlays.active_hidden_movie_titles(s, today)
-    watchlist = overlays.watchlist_symbols(s)
+    with _step("overlays (hidden movies + watchlist)"):
+        hidden_movies = overlays.active_hidden_movie_titles(s, today)
+        watchlist = overlays.watchlist_symbols(s)
 
     # ── Calendar pipeline ────────────────────────────────────────────────
     events: list[dict] = []
     important_uids: set[str] = set()
     try:
-        hidden_cals = overlays.hidden_calendar_ids(s)
-        suppressed_uids = overlays.suppressed_event_uids(s)
-        important = overlays.important_events_from(s, today)
-        important_uids = {
-            e["ical_uid"] for e in important if e.get("ical_uid")
-        }
+        with _step("overlays (calendar/event lookups)"):
+            hidden_cals = overlays.hidden_calendar_ids(s)
+            suppressed_uids = overlays.suppressed_event_uids(s)
+            important = overlays.important_events_from(s, today)
+            important_uids = {
+                e["ical_uid"] for e in important if e.get("ical_uid")
+            }
 
-        all_calendars = calendar_oauth.list_calendars(s)
-        hidden_ids = {c["id"] for c in hidden_cals}
-        active_ids = [c["id"] for c in all_calendars if c["id"] not in hidden_ids]
-        cal_names = {c["id"]: c["name"] for c in all_calendars}
-        events = calendar_oauth.fetch_events(
-            s, active_ids, today, horizon, calendar_names=cal_names
-        )
-        events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
+        with _step("google list_calendars"):
+            all_calendars = calendar_oauth.list_calendars(s)
+            hidden_ids = {c["id"] for c in hidden_cals}
+            active_ids = [c["id"] for c in all_calendars if c["id"] not in hidden_ids]
+            cal_names = {c["id"]: c["name"] for c in all_calendars}
+
+        with _step("google fetch_events (today..+30d)"):
+            events = calendar_oauth.fetch_events(
+                s, active_ids, today, horizon, calendar_names=cal_names
+            )
+            events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
 
         # Auto-mark important events and collect their uids for PDF calendar.
         for ev in events:
@@ -95,7 +126,8 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
                 events_by_day.setdefault(d, []).append(ev)
             except ValueError:
                 pass
-        calendar_summary.get_or_generate_summaries(s, events_by_day)
+        with _step(f"calendar_summary ({len(events_by_day)} days)"):
+            calendar_summary.get_or_generate_summaries(s, events_by_day)
 
     except Exception as e:  # noqa: BLE001 — never let calendar break generation
         log.warning("Calendar unavailable: %s", e)
@@ -104,7 +136,8 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
 
     # Current "Now" observation from NWS (empty string → Claude falls back to web_search).
-    now_weather = weather.fetch_current_now(settings.weather_coords)
+    with _step("NWS fetch_current_now"):
+        now_weather = weather.fetch_current_now(settings.weather_coords)
 
     return {
         "DATE": today.isoformat(),

@@ -86,12 +86,24 @@
       font: inherit; border-radius: 4px; cursor: pointer; text-decoration: none;
     }
     header.site .actions .primary { background: var(--fg); color: #fff; }
-    /* On narrow screens shrink the toolbar buttons so they all fit one row. */
+    /* Toolbar action row: wraps on wide screens, single scrollable row on mobile. */
+    .toolbar-actions {
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    /* On narrow screens shrink buttons and keep them on one non-wrapping row. */
     @media (max-width: 600px) {
       header.site .actions button, header.site .actions a {
-        min-height: 36px; padding: 5px 9px; font-size: 13px;
+        min-height: 36px; padding: 5px 9px; font-size: 13px; white-space: nowrap;
       }
       header.site .toolbar { gap: 6px; }
+      .toolbar-actions {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        /* hide scrollbar visually but keep it functional */
+        scrollbar-width: none;
+      }
+      .toolbar-actions::-webkit-scrollbar { display: none; }
     }
     main { padding: 16px; max-width: 1600px; margin: 0 auto; }
     /* Movie card with corner ✕ close button. */

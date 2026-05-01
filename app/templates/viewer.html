@@ -14,7 +14,7 @@
     {% endif %}
   </form>
   <div class="toolbar">
-    <div class="actions" style="display:flex; gap:8px; flex-wrap:wrap;">
+    <div class="actions toolbar-actions">
       <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
       <button id="refresh-btn" type="button"
               {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
@@ -145,7 +145,7 @@
       h2.appendChild(chev);
 
       const key = h2.textContent.trim().slice(0, 40);
-      const startCollapsed = saved ? !!saved[key] : true; // default: all collapsed
+      const startCollapsed = saved ? !!saved[key] : false; // default: all expanded
       if (startCollapsed) sec.classList.add('sec-collapsed');
 
       h2.addEventListener('click', () => {

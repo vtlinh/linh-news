@@ -108,6 +108,7 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
     - **Dedupe** early-access vs. wide release: while the early-access date is in the future, show the early-access entry; once past, show the wide-release entry.
     - **Skip**: any title in `{{HIDDEN_MOVIES}}`; any title whose rating is not in `{{ALLOWED_MOVIE_RATINGS}}`; any "Now in theaters" film whose wide-release date is more than 7 days ago; any re-release of a film whose original release was > 1 year ago.
     - **Movie title is plain text** — no hover tooltip, no wrapper span, no source citations.
+    - **NO Sources element** — do NOT append a `<span class="sources">` or `<a class="sources">` or any "SOURCES" text to any movie card or to the Movies section. The trailer button is the only interactive element per card.
     - **Trailer button (required when verified trailers exist):** next to each movie title, point to **real, working YouTube watch URLs** in the form `https://www.youtube.com/watch?v=XXXXXXXXXXX` (canonical 11-char video ID). Use `web_search` to verify each video ID. **Do not use** YouTube search URLs (`/results?search_query=...`), embed URLs, or short-link URLs.
       - **Zero verified trailers** → omit the button entirely.
       - **Exactly one trailer** → render a direct anchor labelled `▶ Trailer` (singular). No hover popup; clicking goes straight to the video:

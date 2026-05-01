@@ -550,6 +550,36 @@ async def admin_movies_toggle(
     return {"ok": True, "hidden": hide}
 
 
+@app.post("/admin/movies/poster")
+async def admin_movies_poster(
+    request: Request,
+    email: str = Depends(auth.require_admin),
+):
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title required")
+    year: int | None = None
+    try:
+        year = int(body["year"]) if body.get("year") else None
+    except (TypeError, ValueError):
+        year = None
+
+    poster_url = tmdb.lookup_poster(title, year=year)
+    if poster_url:
+        movies, _ = cache.get_movies()
+        if movies:
+            updated = False
+            for m in movies:
+                if m.get("title") == title and not m.get("poster_url"):
+                    m["poster_url"] = poster_url
+                    updated = True
+                    break
+            if updated:
+                cache.store_movies(movies)
+    return {"poster_url": poster_url}
+
+
 @app.get("/admin/stocks", response_class=HTMLResponse)
 def admin_stocks_get(
     request: Request,

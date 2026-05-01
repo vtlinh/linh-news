@@ -121,10 +121,16 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
 
     Server-rendered at view-time (not generation-time) so the admin's
     hide / unhide toggles take effect on the next page reload without
-    waiting for the next refresh cycle."""
+    waiting for the next refresh cycle.
+
+    Reads the cache directly — never triggers a fetch. The generation
+    pipeline owns refreshing the movie cache; a viewer request must not
+    block on a 30–60 s LLM call when the cache is stale or empty."""
     if "<!-- MOVIES_PLACEHOLDER -->" not in html:
         return html
-    cached = movies_mod.get_or_fetch_movies()
+    cached, _ = cache.get_movies()
+    if not cached:
+        return html.replace("<!-- MOVIES_PLACEHOLDER -->", "", 1)
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
     allowed = set(calendar_oauth.allowed_movie_ratings(today))
     section = movies_mod.render_html_section(

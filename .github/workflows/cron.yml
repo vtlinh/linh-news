@@ -1,17 +1,13 @@
-name: Cron — daily editions
+name: Cron — daily edition
 
-# Runs every 6 hours at 0, 6, 12, 18 UTC.
-# UTC 0 ≈ 8 PM ET, UTC 6 ≈ 2 AM ET, UTC 12 ≈ 8 AM ET, UTC 18 ≈ 2 PM ET.
+# 6 AM EST = 11:00 UTC (winter). Slides to 7 AM EDT in summer — acceptable.
 on:
   schedule:
-    - cron: '0 0 * * *'   # ~8 PM ET  → evening
-    - cron: '0 6 * * *'   # ~2 AM ET  → morning
-    - cron: '0 12 * * *'  # ~8 AM ET  → morning
-    - cron: '0 18 * * *'  # ~2 PM ET  → evening
+    - cron: '0 11 * * *'
   workflow_dispatch:
     inputs:
       slot:
-        description: "Slot to run (morning or evening)"
+        description: "Slot to run"
         required: true
         default: morning
         type: choice
@@ -21,31 +17,17 @@ jobs:
   trigger:
     runs-on: ubuntu-latest
     steps:
-      - name: Pick slot from schedule cron
-        id: slot
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "slot=${{ github.event.inputs.slot }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "0 12 * * *" ] || \
-               [ "${{ github.event.schedule }}" = "0 6 * * *" ]; then
-            echo "slot=morning" >> "$GITHUB_OUTPUT"
-          else
-            echo "slot=evening" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Trigger Linh News cron
         env:
           BASE_URL: https://linh-news.fly.dev
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SLOT: ${{ github.event.inputs.slot || 'morning' }}
         run: |
           set -euo pipefail
-          slot="${{ steps.slot.outputs.slot }}"
-          echo "Triggering /cron/$slot on $BASE_URL"
+          echo "Triggering /cron/$SLOT on $BASE_URL"
           status=$(curl -sS -o /tmp/cron.out -w "%{http_code}" \
-            -X POST "$BASE_URL/cron/$slot" \
+            -X POST "$BASE_URL/cron/$SLOT" \
             -H "X-Cron-Token: $CRON_SECRET")
           echo "HTTP $status"
           cat /tmp/cron.out
-          if [ "$status" != "202" ]; then
-            exit 1
-          fi
+          if [ "$status" != "202" ]; then exit 1; fi

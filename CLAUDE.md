@@ -17,7 +17,7 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 - LLM: Anthropic API (`claude-opus-4-7`) with the `web_search_20250305` tool. Use prompt caching on the static `news.pr` block.
 - PDF: WeasyPrint (system serif fonts, US Letter, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
-- Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) at UTC 0, 6, 12, 18 (≈ 8 PM, 2 AM, 8 AM, 2 PM ET).
+- Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) once daily at 11:00 UTC (6 AM EST / 7 AM EDT).
 
 ## Common commands
 

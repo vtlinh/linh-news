@@ -97,27 +97,37 @@ def html_to_pdf(html: str) -> bytes:
         section, article, header, footer, div {{ margin: 0 0 3pt !important; }}
         """)
 
-    # Render at progressively smaller font sizes until the PDF fits one page.
-    _FONT_STEPS = [8.0, 7.5, 7.0, 6.5, 6.0, 5.5, 5.0]
-    pdf_bytes = _PLACEHOLDER_PDF
-    for font_pt in _FONT_STEPS:
-        try:
-            pdf_bytes = HTML(string=html, url_fetcher=_url_fetcher).write_pdf(
-                stylesheets=[_make_css(font_pt)]
-            )
-        except Exception as e:  # noqa: BLE001
-            log.exception("WeasyPrint render failed at %.1fpt: %s", font_pt, e)
-            return _PLACEHOLDER_PDF
-        pages = page_count(pdf_bytes)
-        if pages <= 1:
-            if font_pt < _FONT_STEPS[0]:
-                log.info("PDF fitted to 1 page at %.1fpt (was overflowing at 8pt)", font_pt)
-            return pdf_bytes
-        log.info("PDF overflowed (%d pages) at %.1fpt — retrying smaller", pages, font_pt)
+    # Binary-search for the largest font size in [5, 11]pt (step 0.5) that
+    # produces exactly one page. This fills the page when content is light
+    # and shrinks when content is heavy — all in O(log n) renders (~4 passes).
+    _SIZES = [round(5.0 + i * 0.5, 1) for i in range(13)]  # 5.0 … 11.0
 
-    log.warning("Could not fit PDF to 1 page even at %.1fpt — returning %d-page PDF",
-                _FONT_STEPS[-1], page_count(pdf_bytes))
-    return pdf_bytes
+    def _render(pt: float) -> bytes:
+        return HTML(string=html, url_fetcher=_url_fetcher).write_pdf(
+            stylesheets=[_make_css(pt)]
+        )
+
+    best_bytes: bytes = _PLACEHOLDER_PDF
+    best_pt: float = _SIZES[0]
+    lo, hi = 0, len(_SIZES) - 1
+
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        pt = _SIZES[mid]
+        try:
+            pdf_bytes = _render(pt)
+        except Exception as e:  # noqa: BLE001
+            log.exception("WeasyPrint render failed at %.1fpt: %s", pt, e)
+            return _PLACEHOLDER_PDF
+        if page_count(pdf_bytes) <= 1:
+            best_bytes, best_pt = pdf_bytes, pt
+            lo = mid + 1   # try a larger font
+        else:
+            hi = mid - 1   # too big — try smaller
+
+    if best_pt != 8.0:
+        log.info("PDF auto-sized to %.1fpt to fill one page", best_pt)
+    return best_bytes
 
 
 def page_count(pdf_bytes: bytes) -> int:

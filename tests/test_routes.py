@@ -62,7 +62,7 @@ def test_admin_pages_blocked_for_viewer(client, login_as):
 
 
 def test_refresh_spawns_detached_subprocess(client, login_as):
-    login_as("friend@example.com")
+    login_as("vtlinh87@gmail.com")
     with patch("app.main.subprocess.Popen") as popen:
         r = client.post("/refresh")
     assert r.status_code == 202
@@ -74,9 +74,17 @@ def test_refresh_spawns_detached_subprocess(client, login_as):
 
 
 def test_refresh_returns_409_when_lock_held(client, login_as):
-    login_as("friend@example.com")
+    login_as("vtlinh87@gmail.com")
     with patch("app.main.cache.begin_edition_refresh", return_value=False), \
          patch("app.main.subprocess.Popen") as popen:
         r = client.post("/refresh")
     assert r.status_code == 409
+    popen.assert_not_called()
+
+
+def test_refresh_forbidden_for_non_admin(client, login_as):
+    login_as("friend@example.com")
+    with patch("app.main.subprocess.Popen") as popen:
+        r = client.post("/refresh")
+    assert r.status_code == 403
     popen.assert_not_called()

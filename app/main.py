@@ -115,6 +115,24 @@ def _inject_calendar(html: str, s: Session, today: date) -> str:
     return html.replace("<!-- CALENDAR_PLACEHOLDER -->", section, 1)
 
 
+def _inject_movies(html: str, s: Session, today: date) -> str:
+    """Replace ``<!-- MOVIES_PLACEHOLDER -->`` with the cached movie list,
+    filtered to the daily-edition date window and the admin-hidden titles.
+
+    Server-rendered at view-time (not generation-time) so the admin's
+    hide / unhide toggles take effect on the next page reload without
+    waiting for the next refresh cycle."""
+    if "<!-- MOVIES_PLACEHOLDER -->" not in html:
+        return html
+    cached = movies_mod.get_or_fetch_movies()
+    hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
+    allowed = set(calendar_oauth.allowed_movie_ratings(today))
+    section = movies_mod.render_html_section(
+        cached, today, hidden_titles=hidden, allowed_ratings=allowed,
+    )
+    return html.replace("<!-- MOVIES_PLACEHOLDER -->", section, 1)
+
+
 def _render_viewer(
     request: Request, day: date, s: Session, viewer_email: str
 ) -> HTMLResponse:
@@ -131,6 +149,7 @@ def _render_viewer(
     edition_html = edition.html if edition else None
     if edition_html:
         edition_html = _inject_calendar(edition_html, s, today)
+        edition_html = _inject_movies(edition_html, s, today)
     return templates.TemplateResponse(
         request,
         "viewer.html",

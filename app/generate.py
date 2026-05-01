@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf, weather
+from app import movies as movies_mod
 from app.db import Edition, session_factory
 from app.settings import get_settings, local_today
 
@@ -47,11 +48,16 @@ def run(slot: Slot, today: date | None = None) -> date:
 
     with _step("build_context"), Maker() as s:
         ctx = _build_context(s, today, slot)
+    pdf_movies_html = ctx.pop("_pdf_movies_html", "")
 
     with _step("claude_generate_edition"):
         response = claude_client.generate_edition(template, ctx)
     with _step("strip_document_wrapper"):
         response["html"] = _strip_document_wrapper(response["html"])
+    with _step("inject_pdf_movies"):
+        response["pdf_html"] = _inject_pdf_movies(
+            response["pdf_html"], pdf_movies_html
+        )
     with _step("inject_lead_image"):
         response["pdf_html"] = _inject_lead_image(response["pdf_html"], today)
     with _step("ensure_lead_image"):
@@ -77,16 +83,6 @@ def run(slot: Slot, today: date | None = None) -> date:
         _upsert_edition(s, today, response["html"], pdf_bytes, response["pdf_html"])
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
-    # Each generation cycle also refreshes the year-out movie list so the
-    # admin /admin/movies page stays current. Cron runs (morning/evening) and
-    # the user-triggered home Refresh both pass through here.
-    try:
-        from app import movies
-        with _step("movies.get_or_fetch_movies(force=True)"):
-            movies.get_or_fetch_movies(force=True)
-    except Exception:  # noqa: BLE001
-        log.exception("Movie cache refresh failed")
-
     log.info("⏱  ── refresh pipeline end (total %.2fs) ──",
              time.monotonic() - overall_t0)
     return today
@@ -99,6 +95,24 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     with _step("overlays (hidden movies + watchlist)"):
         hidden_movies = overlays.active_hidden_movie_titles(s, today)
         watchlist = overlays.watchlist_symbols(s)
+
+    # Refresh the cached movie list (long-horizon, kid-appropriate) once per
+    # generation cycle and render its PDF block server-side. The HTML page
+    # block is rendered at view-time (see ``main._inject_movies``) so admin
+    # hides apply immediately without waiting for the next refresh.
+    allowed_ratings = set(calendar_oauth.allowed_movie_ratings(today))
+    hidden_set = set(hidden_movies)
+    pdf_movies_html = ""
+    try:
+        with _step("movies.get_or_fetch_movies(force=True)"):
+            cached_movies = movies_mod.get_or_fetch_movies(force=True)
+        with _step("movies.render_pdf_html"):
+            pdf_movies_html = movies_mod.render_pdf_html(
+                cached_movies, today,
+                hidden_titles=hidden_set, allowed_ratings=allowed_ratings,
+            )
+    except Exception:  # noqa: BLE001
+        log.exception("Movie cache refresh / render failed")
 
     # ── Calendar pipeline ────────────────────────────────────────────────
     events: list[dict] = []
@@ -156,13 +170,16 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
         "DATE": today.isoformat(),
         "KID_AGE": calendar_oauth.current_kid_age(today),
         "KID_GRADE": calendar_oauth.current_kid_grade(today),
-        "ALLOWED_MOVIE_RATINGS": calendar_oauth.allowed_movie_ratings(today),
-        "HIDDEN_MOVIES": hidden_movies,
         "WATCHLIST_STOCKS": watchlist,
         "WEATHER_COORDS": settings.weather_coords,
         "NOW_WEATHER": now_weather,
         "PDF_CALENDAR_HTML": pdf_calendar_html,
         "CUSTOM_TOPICS": "",
+        # The PDF movie block is server-rendered and substituted into
+        # ``pdf_html`` after Claude returns (see ``_inject_pdf_movies``).
+        # Held as a private context key so it doesn't leak into the user
+        # message sent to the LLM.
+        "_pdf_movies_html": pdf_movies_html,
     }
 
 
@@ -355,6 +372,24 @@ def _ensure_lead_image(pdf_html: str) -> str:
         )
         rewritten = injection + rewritten
     return rewritten
+
+
+_PDF_MOVIES_PLACEHOLDER = "<!-- PDF_MOVIES_PLACEHOLDER -->"
+
+
+def _inject_pdf_movies(pdf_html: str, movies_html: str) -> str:
+    """Replace ``<!-- PDF_MOVIES_PLACEHOLDER -->`` in the LLM-rendered PDF
+    HTML with the server-rendered movies block. If the LLM omitted the
+    placeholder there's nothing to do — the PDF simply ships without
+    movies (which is acceptable per the priority list)."""
+    if _PDF_MOVIES_PLACEHOLDER not in pdf_html:
+        if movies_html:
+            log.warning(
+                "PDF movies placeholder missing — server-rendered movies block "
+                "will not appear in this PDF.",
+            )
+        return pdf_html
+    return pdf_html.replace(_PDF_MOVIES_PLACEHOLDER, movies_html, 1)
 
 
 def _strip_document_wrapper(html: str) -> str:

@@ -89,6 +89,21 @@ class CalendarDaySummary(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class EventEmoji(Base):
+    """Cached emoji for a normalized calendar-event title.
+
+    The Python calendar renderer looks up an event's emoji here first; if a
+    title is missing we ask Claude (Haiku) for a single emoji once and store
+    it. After that, the daily edition is built without any LLM call for
+    calendar formatting."""
+    __tablename__ = "event_emojis"
+    title_norm: Mapped[str] = mapped_column(String, primary_key=True)
+    emoji: Mapped[str] = mapped_column(String, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
     id: Mapped[str] = mapped_column(String, primary_key=True)

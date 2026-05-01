@@ -40,8 +40,8 @@ Render exactly:
 </div>
 <aside class="rail">
   <section>…stocks…</section>
-  <section>…calendar…</section>
-  <section>…movies…</section>
+  <!-- CALENDAR_PLACEHOLDER -->
+  <!-- MOVIES_PLACEHOLDER -->
 </aside>
 ```
 
@@ -97,45 +97,7 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
    - At least 5 source links are required for every stock. Style the links inside `.tooltip-popup` as block elements (the chrome already does this).
    - The `<span class="tooltip">` wrapper is ALWAYS present — the hover popup is the only place the explanation lives, regardless of the day's move size.
    - Use the same green/red colour rules used in the PDF (`#0a7d1f` for ≥0, `#b00020` for <0; prefix `+` on positive moves).
-11. **Movies** — section heading is **exactly "Movies"**. Do **not** print "Movies for William", "Family movies", "Kid-friendly movies", "Movies for ages 8–12", or any audience descriptor. Do **not** print MPAA ratings (G/PG/PG-13) anywhere in the HTML or PDF — they are used internally to filter the list (use `{{ALLOWED_MOVIE_RATINGS}}` for the allowed set), but the user-facing card has no rating text.
-    - Internal age-tier filter (do not display, just enforce):
-      - under 11 → G, PG only
-      - under 15 → G, PG, PG-13
-      - 15 and above → all ratings
-    - Show two groups within a single section:
-      - **Now in theaters** — currently showing.
-      - **Coming soon** — opening within the next **3 months**.
-    - Each card structure:
-      - Title (plain text, no rating, no age band).
-      - **Subtitle line** beneath the title: render the date label as a `<small>` or `<div class="movie-subtitle">` element — `Opens {date}` if future, `In theaters since {date}` if past. The date is **not** part of the title.
-      - **Plot-only description**: 1–2 sentences describing what the movie is about. Do not mention "appropriate for kids", "G-rated", "family-friendly", "ages 8–12", audience suitability, or William/Elizabeth. Pure plot.
-    - **Dedupe** early-access vs. wide release: while the early-access date is in the future, show the early-access entry; once past, show the wide-release entry.
-    - **Skip**: any title in `{{HIDDEN_MOVIES}}`; any title whose rating is not in `{{ALLOWED_MOVIE_RATINGS}}`; any "Now in theaters" film whose wide-release date is more than 21 days ago; any re-release of a film whose original release was > 1 year ago.
-    - **Movie title is plain text** — no hover tooltip, no wrapper span, no source citations.
-    - **NO Sources element** — do NOT append a `<span class="sources">` or `<a class="sources">` or any "SOURCES" text to any movie card or to the Movies section. The trailer button is the only interactive element per card.
-    - **Trailer button (required when verified trailers exist):** next to each movie title, point to **real, working YouTube watch URLs** in the form `https://www.youtube.com/watch?v=XXXXXXXXXXX` (canonical 11-char video ID). Use `web_search` to verify each video ID. **Do not use** YouTube search URLs (`/results?search_query=...`), embed URLs, or short-link URLs.
-      - **Zero verified trailers** → omit the button entirely.
-      - **Exactly one trailer** → render a direct anchor labelled `▶ Trailer` (singular). No hover popup; clicking goes straight to the video:
-        ```html
-        <a class="sources" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener" title="Watch the trailer on YouTube">▶ Trailer</a>
-        ```
-      - **Two or more trailers** → render the hover popup labelled `▶ Trailers` (plural):
-        ```html
-        <span class="sources" tabindex="0">▶ Trailers<span class="sources-popup">
-          <a href="https://www.youtube.com/watch?v={video_id_1}" target="_blank" rel="noopener">Official Trailer</a>
-          <a href="https://www.youtube.com/watch?v={video_id_2}" target="_blank" rel="noopener">Teaser</a>
-        </span></span>
-        ```
-      Reuse the existing `.sources` / `.sources-popup` classes so the styling is consistent.
-    - **Hide control:** each movie card must be a positioned container with a small ✕ button pinned to its top-right corner (no "Hide" text label). Render exactly:
-      ```html
-      <article class="movie-card">
-        <button class="hide-movie" data-title="{Movie Title}" aria-label="Hide {Movie Title}">×</button>
-        ... title, rating, dates, Trailers, summary ...
-      </article>
-      ```
-      The page chrome supplies the styling (top-right absolute positioning, hover-only visibility) — do not inline your own positioning CSS for the close button.
-    - **Omit the section entirely if both groups are empty.**
+11. **Movies** — place exactly `<!-- MOVIES_PLACEHOLDER -->` where the Movies section belongs in the rail (after Stocks and the Calendar placeholder). Do **not** generate any movie content yourself — the server injects a pre-filtered, server-rendered Movies block at render time using the cached watchlist (the same list the `/admin/movies` page shows). Output only the literal comment tag, nothing else at this position.
 
 ## Sources (HTML only — NOT in the PDF)
 For every news, finance, AI, and school item, append **exactly one** `Sources` element at the end of the item. **Do not** add a Sources element to the weather strip (single-value lookup) or to movie cards (movies use a separate "▶ Trailers" button — see the movies section).
@@ -167,7 +129,7 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
   4. **Stocks row** — full width, single line, sits **directly under the weather strip** (no longer a footer ticker). Same one-line layout: `GOOG $182.45 +2.3% · SMCI $54.10 -1.1% · NVDA …`. Use the `font-size: 7pt` colour rules below.
   5. Lead story column (with image) and the rest of the article columns.
   6. Calendar sidebar (`{{PDF_CALENDAR_HTML}}`).
-  7. Movies (lowest priority — first to drop when tight).
+  7. Movies sidebar (`<!-- PDF_MOVIES_PLACEHOLDER -->` — server-injected; treat as a fixed-size block).
 - **Density strategy:** Fetch and write **substantially more content than fits**, ordered by priority below. If the page would overflow, **remove individual articles** from the lowest-priority section first (one article at a time), keeping that section alive with at least 1 article when possible. **Removing whole sections is a last resort** — drop articles, not sections. Never leave whitespace below the last column; if everything fits with room to spare, lengthen story summaries to fill.
   Priority (1 = most important, 7 = drop articles first when tight):
   1. Lead story (headline + image + body)
@@ -188,6 +150,7 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
   If after a real search you cannot find a CC-licensed image for the lead story, **swap the lead story** for one whose subject has a Wikipedia/Wikimedia image. The page must not ship without a lead image.
 - **No** source citations, **no** Hide buttons, **no** interactive elements.
 - **Calendar in PDF:** insert `{{PDF_CALENDAR_HTML}}` verbatim as the calendar sidebar content. If empty, omit the calendar sidebar entirely.
+- **Movies in PDF:** place exactly `<!-- PDF_MOVIES_PLACEHOLDER -->` where the Movies sidebar belongs (typically alongside the Calendar). The server replaces this comment with a pre-rendered movies block (same source as the `/admin/movies` list, filtered to the 3-week-past / 2-month-future window). Do **not** generate any movie content yourself — output only the literal comment tag.
 
 ### Typography rules (use these exact CSS values, scaled down to fit one page)
 - Page setup: `@page { size: 12in 22in; margin: 0.4in; }`

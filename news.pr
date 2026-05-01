@@ -35,6 +35,7 @@ Render exactly:
   <section>…NJ/NY…</section>
   <section>…Dorchester…</section>
   <section>…financial news…</section>
+  <section>…tech news…</section>
   <section>…AI news…</section>
 </div>
 <aside class="rail">
@@ -64,8 +65,9 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
    - In addition to general web searches, **always check `https://www.wclpfa.com/WlL/index.cfm`** (the Woodcliff Lake PFA / Dorchester family page) for fresh announcements, events, and deadlines. Use `web_search` and/or fetch the page directly. Surface anything dated within the next 4 weeks; flag deadlines (registration cutoffs, sign-ups, payment due dates) prominently.
    - Avoid duplicating school events that are already on the family calendar; mention the PFA URL as a source on each item.
 7. **Top financial news**
-8. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)
-9. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. **Always include a hover-revealed explanation** for every stock in the list — even when the daily move is small. The explanation is shown only inside the tooltip; never inline. Tone the depth to the move: a small (<2%) day gets a one-sentence note ("trading flat alongside the S&P", "drifted with semis"); a moderate move gets 2–3 sentences with the catalyst; a >5% day gets the full multi-source rundown described below.
+8. **Top tech news** — major developments in the tech industry: product launches, acquisitions, regulatory actions, platform changes, hardware releases. Exclude AI-specific stories (those go in the next section) and financial/earnings coverage (that goes in financial news). 3–5 items with sources.
+9. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)
+10. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. **Always include a hover-revealed explanation** for every stock in the list — even when the daily move is small. The explanation is shown only inside the tooltip; never inline. Tone the depth to the move: a small (<2%) day gets a one-sentence note ("trading flat alongside the S&P", "drifted with semis"); a moderate move gets 2–3 sentences with the catalyst; a >5% day gets the full multi-source rundown described below.
 
    For every stock:
    - Use `web_search` to find **at least 5 distinct sources** explaining today's price action (earnings reports, analyst notes, regulatory news, sector moves, broad-market context — whatever applies). Even a quiet day has reasonable sources; if the symbol genuinely had nothing happen, cite the broad market read (S&P/Nasdaq, sector ETF) plus any analyst coverage you can find.
@@ -92,7 +94,7 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
    - At least 5 source links are required for every stock. Style the links inside `.tooltip-popup` as block elements (the chrome already does this).
    - The `<span class="tooltip">` wrapper is ALWAYS present — the hover popup is the only place the explanation lives, regardless of the day's move size.
    - Use the same green/red colour rules used in the PDF (`#0a7d1f` for ≥0, `#b00020` for <0; prefix `+` on positive moves).
-10. **Movies** — section heading is **exactly "Movies"**. Do **not** print "Movies for William", "Family movies", "Kid-friendly movies", "Movies for ages 8–12", or any audience descriptor. Do **not** print MPAA ratings (G/PG/PG-13) anywhere in the HTML or PDF — they are used internally to filter the list (use `{{ALLOWED_MOVIE_RATINGS}}` for the allowed set), but the user-facing card has no rating text.
+11. **Movies** — section heading is **exactly "Movies"**. Do **not** print "Movies for William", "Family movies", "Kid-friendly movies", "Movies for ages 8–12", or any audience descriptor. Do **not** print MPAA ratings (G/PG/PG-13) anywhere in the HTML or PDF — they are used internally to filter the list (use `{{ALLOWED_MOVIE_RATINGS}}` for the allowed set), but the user-facing card has no rating text.
     - Internal age-tier filter (do not display, just enforce):
       - under 11 → G, PG only
       - under 15 → G, PG, PG-13

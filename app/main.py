@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
-from app import auth, cache, calendar_oauth, overlays, tmdb
+from app import auth, cache, calendar_oauth, calendar_summary, overlays, tmdb
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, get_session
@@ -93,12 +93,23 @@ def logout(request: Request, s: Session = Depends(get_session)):
 
 # ──────────────────────── Viewer ────────────────────────
 
+def _inject_calendar(html: str, s: Session, today: date) -> str:
+    """Replace <!-- CALENDAR_PLACEHOLDER --> with live calendar from DB."""
+    if "<!-- CALENDAR_PLACEHOLDER -->" not in html:
+        return html
+    section = calendar_summary.load_calendar_section(s, today)
+    return html.replace("<!-- CALENDAR_PLACEHOLDER -->", section, 1)
+
+
 def _render_viewer(
     request: Request, day: date, s: Session, viewer_email: str
 ) -> HTMLResponse:
     edition = s.get(Edition, day)
     today = local_today()
     next_date = day + timedelta(days=1)
+    edition_html = edition.html if edition else None
+    if edition_html:
+        edition_html = _inject_calendar(edition_html, s, today)
     return templates.TemplateResponse(
         request,
         "viewer.html",
@@ -108,7 +119,7 @@ def _render_viewer(
             "next_date": next_date.isoformat(),
             "next_date_allowed": next_date <= today,
             "today_str": today.isoformat(),
-            "edition_html": edition.html if edition else None,
+            "edition_html": edition_html,
             "is_admin": viewer_email.lower() == ADMIN_EMAIL.lower(),
             # First-paint hint so the button renders in the right state with
             # no flash if a background refresh is already running.

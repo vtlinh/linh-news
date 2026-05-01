@@ -53,17 +53,13 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
 1. **Weather** — render as a **single one-line strip** at the very top, immediately under the masthead, with NO heading/title and NO sub-paragraphs. Wrap it in `<div class="weather-strip">…</div>` so the page chrome can style it. Always start with **Now**, then today's high/low, then tomorrow. Format example:
    `Now 12°C 🌤 · Today H 14° / L 7° ☀️ · Tomorrow H 16° / L 9° ☁️ · ⚠ Wind advisory until 6 PM`
    The current ("Now") temperature is required; pull it from a current-conditions source (e.g. NWS observation, Weather.gov) and clearly label it. Today + tomorrow for **15 Hunter Ridge, Woodcliff Lake, NJ 07677** (coords: `{{WEATHER_COORDS}}`). All temperatures in **degrees Celsius (°C)** — convert from any Fahrenheit source. If there are active alerts or warnings, surface them inline at the end of the strip with a ⚠ glyph; do not split them into a separate section.
-2. **Calendar** — from `{{CALENDAR_EVENTS_JSON}}` (window: today through today+30 days, past events already dropped). Render as a **single combined section** (one heading, one chronological list) — do NOT split into "Today", "Tomorrow", "Important", or "All-day" subsections.
-   - **Default window: ≤ 7 days from today.** Include only events whose start date is within the next 7 days (today inclusive). This is the rule for ordinary timed events and ordinary all-day events that are NOT marked important.
-   - **Important window: ≤ 30 days from today.** Events that appear in `{{IMPORTANT_EVENTS_JSON}}` — and the auto-marked categories (birthdays, school closures/special days, William or Elizabeth soccer/dance/photo events, water delivery, anniversaries, US public holidays, Lunar New Year) — should be surfaced when their start date is within the next 30 days, even if that's beyond the 7-day default. The more important, the further in advance you may surface it.
-   - Drop anything outside the applicable window. Sort the combined list chronologically.
-   - **Skip empty dates entirely.** Do not print headings like "Friday, May 2 — No events." or "Tomorrow: nothing scheduled." If a date has zero events that pass the filters, omit that date from the rendering altogether.
+2. **Calendar** — place exactly `<!-- CALENDAR_PLACEHOLDER -->` where the calendar section belongs in the rail (between Stocks and Movies). Do **not** generate any calendar content yourself — the server injects real pre-generated calendar data at render time. Output only the literal comment tag, nothing else at this position.
 3. **Top global political news**
 4. **Top US political news**
 5. **Top NJ / NY news**
 6. **Top Dorchester Elementary School news + upcoming events**
    - In addition to general web searches, **always check `https://www.wclpfa.com/WlL/index.cfm`** (the Woodcliff Lake PFA / Dorchester family page) for fresh announcements, events, and deadlines. Use `web_search` and/or fetch the page directly. Surface anything dated within the next 4 weeks; flag deadlines (registration cutoffs, sign-ups, payment due dates) prominently.
-   - Cross-reference with `{{CALENDAR_EVENTS_JSON}}` to avoid duplicating events already on the calendar; mention the PFA URL as a source on each item.
+   - Avoid duplicating school events that are already on the family calendar; mention the PFA URL as a source on each item.
 7. **Top financial news**
 8. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)
 9. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. **Always include a hover-revealed explanation** for every stock in the list — even when the daily move is small. The explanation is shown only inside the tooltip; never inline. Tone the depth to the move: a small (<2%) day gets a one-sentence note ("trading flat alongside the S&P", "drifted with semis"); a moderate move gets 2–3 sentences with the catalyst; a >5% day gets the full multi-source rundown described below.
@@ -160,7 +156,7 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
   Priority (1 = most important, 7 = drop first when tight):
   1. Lead story (headline + image + body)
   2. Weather strip
-  3. Today's calendar (timed events only; no all-day events unless in `{{IMPORTANT_EVENTS_JSON}}`)
+  3. Today's calendar (from `{{PDF_CALENDAR_HTML}}`)
   4. Stocks ticker footer
   5. 3–5 secondary stories (politics, NJ/NY, AI, finance)
   6. Dorchester / school news
@@ -175,7 +171,7 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
   Render as: `<img src="..." alt="..." style="width:100%; max-height:1.6in; object-fit:cover; margin:0 0 4pt;">`.
   If after a real search you cannot find a CC-licensed image for the lead story, **swap the lead story** for one whose subject has a Wikipedia/Wikimedia image. The page must not ship without a lead image.
 - **No** source citations, **no** Hide buttons, **no** interactive elements.
-- **Calendar in PDF:** include all timed events for today and tomorrow. **Do NOT include all-day events** unless they appear in `{{IMPORTANT_EVENTS_JSON}}` or auto-marked notes (e.g. school closures from the auto-rule). All-day clutter is the #1 reason the page overflows.
+- **Calendar in PDF:** insert `{{PDF_CALENDAR_HTML}}` verbatim as the calendar sidebar content. If empty, omit the calendar sidebar entirely.
 
 ### Typography rules (use these exact CSS values, scaled down to fit one page)
 - Page setup: `@page { size: Letter; margin: 0.4in; }`
@@ -189,13 +185,6 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
 - Column gutter: 12pt; column-rule: `0.5pt solid #999`.
 - Use `<small>` for any tertiary text (7pt).
 - Do not use `<br><br>`, `<hr>`, large `<h1>`/`<h2>`, or any heading larger than 11pt outside the masthead.
-
-## Calendar list (informational)
-Subscribed Google calendars: `{{ALL_CALENDARS_JSON}}`.
-Hidden calendars (events excluded entirely): `{{HIDDEN_CALENDARS_JSON}}`.
-
-## Suppressed events
-The events listed in `{{SUPPRESSED_EVENTS_JSON}}` are explicitly marked unimportant by the user. **Do NOT mention them anywhere in the HTML or PDF**, even if they look relevant.
 
 ## Mobile + desktop responsive
 The HTML must read well at 375px (phone), 768px (tablet), and ≥1200px (desktop). The page chrome handles columnization (1 column on phones, 2 on tablets, 3 on desktop) — **do NOT add your own `column-count` styles**.

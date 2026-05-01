@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app import calendar_oauth, claude_client, overlays, pdf
+from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf
 from app.db import Edition, session_factory
 from app.settings import get_settings, local_today
 
@@ -55,17 +55,22 @@ def run(slot: Slot, today: date | None = None) -> date:
 def _build_context(s: Session, today: date, slot: Slot) -> dict:
     settings = get_settings()
     horizon = today + timedelta(days=30)
+    tomorrow = today + timedelta(days=1)
 
     hidden_movies = overlays.active_hidden_movie_titles(s, today)
-    hidden_cals = overlays.hidden_calendar_ids(s)
-    important = overlays.important_events_from(s, today)
-    suppressed_uids = overlays.suppressed_event_uids(s)
-    suppressed_list = overlays.suppressed_events_list(s)
     watchlist = overlays.watchlist_symbols(s)
 
-    all_calendars: list[dict] = []
+    # ── Calendar pipeline ────────────────────────────────────────────────
     events: list[dict] = []
+    important_uids: set[str] = set()
     try:
+        hidden_cals = overlays.hidden_calendar_ids(s)
+        suppressed_uids = overlays.suppressed_event_uids(s)
+        important = overlays.important_events_from(s, today)
+        important_uids = {
+            e["ical_uid"] for e in important if e.get("ical_uid")
+        }
+
         all_calendars = calendar_oauth.list_calendars(s)
         hidden_ids = {c["id"] for c in hidden_cals}
         active_ids = [c["id"] for c in all_calendars if c["id"] not in hidden_ids]
@@ -73,22 +78,30 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
         events = calendar_oauth.fetch_events(
             s, active_ids, today, horizon, calendar_names=cal_names
         )
-        # Drop suppressed events outright — Claude never sees them.
         events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
-        # Promote auto-rule matches into important_events list shown to Claude.
+
+        # Auto-mark important events and collect their uids for PDF calendar.
         for ev in events:
             cn = cal_names.get(ev.get("calendar_id"), "")
             if calendar_oauth.is_auto_important(cn, ev.get("summary", "")):
-                important.append(
-                    {
-                        "title": ev.get("summary"),
-                        "date": (ev.get("start") or "")[:10],
-                        "importance": 9,
-                        "notes": f"auto-marked: {cn}",
-                    }
-                )
+                important_uids.add(ev.get("ical_uid", ""))
+
+        # Group by day and generate/retrieve per-day HTML summaries.
+        events_by_day: dict[date, list[dict]] = {}
+        for ev in events:
+            day_str = (ev.get("start") or "")[:10]
+            try:
+                d = date.fromisoformat(day_str)
+                events_by_day.setdefault(d, []).append(ev)
+            except ValueError:
+                pass
+        calendar_summary.get_or_generate_summaries(s, events_by_day)
+
     except Exception as e:  # noqa: BLE001 — never let calendar break generation
         log.warning("Calendar unavailable: %s", e)
+
+    # PDF calendar: today+tomorrow timed events + important all-day, pure Python.
+    pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
 
     return {
         "DATE": today.isoformat(),
@@ -96,13 +109,9 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
         "KID_GRADE": calendar_oauth.current_kid_grade(today),
         "ALLOWED_MOVIE_RATINGS": calendar_oauth.allowed_movie_ratings(today),
         "HIDDEN_MOVIES": hidden_movies,
-        "HIDDEN_CALENDARS_JSON": hidden_cals,
-        "ALL_CALENDARS_JSON": all_calendars,
-        "CALENDAR_EVENTS_JSON": events,
-        "IMPORTANT_EVENTS_JSON": important,
-        "WEATHER_COORDS": settings.weather_coords,
-        "SUPPRESSED_EVENTS_JSON": suppressed_list,
         "WATCHLIST_STOCKS": watchlist,
+        "WEATHER_COORDS": settings.weather_coords,
+        "PDF_CALENDAR_HTML": pdf_calendar_html,
         "CUSTOM_TOPICS": "",
     }
 

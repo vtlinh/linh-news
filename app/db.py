@@ -76,6 +76,15 @@ class GoogleOAuth(Base):
     client_secret: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class CalendarDaySummary(Base):
+    __tablename__ = "calendar_day_summaries"
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    summary_html: Mapped[str] = mapped_column(Text, nullable=False)
+    event_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    events_json: Mapped[str] = mapped_column(Text, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
     id: Mapped[str] = mapped_column(String, primary_key=True)

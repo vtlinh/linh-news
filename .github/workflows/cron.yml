@@ -1,12 +1,13 @@
 name: Cron — daily editions
 
-# Schedules are in UTC. We pin to the EST offset (UTC-5) so winter hits
-# exactly 7 AM / 7 PM ET. During EDT (UTC-4) the runs slide one hour later
-# (8 AM / 8 PM ET) — acceptable drift across DST.
+# Runs every 6 hours at 0, 6, 12, 18 UTC.
+# UTC 0 ≈ 8 PM ET, UTC 6 ≈ 2 AM ET, UTC 12 ≈ 8 AM ET, UTC 18 ≈ 2 PM ET.
 on:
   schedule:
-    - cron: '0 12 * * *'  # 7 AM ET in winter, 8 AM ET in summer
-    - cron: '0 0 * * *'   # 7 PM ET in winter, 8 PM ET in summer
+    - cron: '0 0 * * *'   # ~8 PM ET  → evening
+    - cron: '0 6 * * *'   # ~2 AM ET  → morning
+    - cron: '0 12 * * *'  # ~8 AM ET  → morning
+    - cron: '0 18 * * *'  # ~2 PM ET  → evening
   workflow_dispatch:
     inputs:
       slot:
@@ -25,7 +26,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "slot=${{ github.event.inputs.slot }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "0 12 * * *" ]; then
+          elif [ "${{ github.event.schedule }}" = "0 12 * * *" ] || \
+               [ "${{ github.event.schedule }}" = "0 6 * * *" ]; then
             echo "slot=morning" >> "$GITHUB_OUTPUT"
           else
             echo "slot=evening" >> "$GITHUB_OUTPUT"

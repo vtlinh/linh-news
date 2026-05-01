@@ -249,9 +249,9 @@
     .tooltip-popup {
       display: none;
       position: absolute;
-      bottom: 100%; left: 0;
+      top: 100%; left: 0;
       min-width: 320px; max-width: min(500px, 90vw);
-      padding: 10px 12px; margin-bottom: 6px;
+      padding: 10px 12px; margin-top: 6px;
       background: #fff;
       border: 1px solid var(--fg);
       box-shadow: 0 4px 14px rgba(0,0,0,0.15);
@@ -261,7 +261,7 @@
     }
     /* Dynamic placement classes toggled by JS */
     .tooltip-popup.flip-right { left: auto; right: 0; }
-    .tooltip-popup.flip-down  { bottom: auto; top: 100%; margin-bottom: 0; margin-top: 6px; }
+    .tooltip-popup.flip-up    { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 6px; }
     .tooltip:hover .tooltip-popup,
     .tooltip-popup:hover,
     .tooltip:focus-within .tooltip-popup { display: block; }
@@ -319,17 +319,18 @@
       setTimeout(() => { el.remove(); }, 2200);
     };
 
-    // Dynamic tooltip placement: flip popup left/right and up/down so it
-    // never overflows the viewport.
+    // Dynamic tooltip placement: default is below the trigger. Flip left when
+    // the popup would overflow the right edge; flip upward when it would
+    // overflow the bottom of the viewport.
     document.addEventListener('mouseenter', function(e) {
       const trigger = e.target.closest('.tooltip');
       if (!trigger) return;
       const popup = trigger.querySelector('.tooltip-popup');
       if (!popup) return;
-      popup.classList.remove('flip-right', 'flip-down');
+      popup.classList.remove('flip-right', 'flip-up');
       const r = popup.getBoundingClientRect();
       if (r.right > window.innerWidth - 8) popup.classList.add('flip-right');
-      if (r.top < 8) popup.classList.add('flip-down');
+      if (r.bottom > window.innerHeight - 8) popup.classList.add('flip-up');
     }, true);
   </script>
   {% block scripts %}{% endblock %}

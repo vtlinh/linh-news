@@ -99,7 +99,11 @@
         pollUntilFresh();
         return;
       }
-      const r = await fetch('/refresh', {method: 'POST'});
+      const r = await fetch('/refresh', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({date: editionDate}),
+      });
       console.log('[refresh] /refresh =>', r.status);
       if (r.status === 202 || r.status === 409) {
         pollUntilFresh();

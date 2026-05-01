@@ -246,16 +246,25 @@ def _cli() -> int:
 
     p = argparse.ArgumentParser()
     p.add_argument("slot", choices=["morning", "evening", "refresh"])
+    p.add_argument("--date", default=None, help="Override date (YYYY-MM-DD)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     from app import cache
+
+    target_date: date | None = None
+    if args.date:
+        try:
+            target_date = date.fromisoformat(args.date)
+        except ValueError:
+            log.error("Invalid --date value: %s", args.date)
+            return 1
 
     if args.slot == "refresh":
         cache.clear_edition_refresh_error()
     error_msg: str | None = None
     started = time.monotonic()
     try:
-        run(args.slot)
+        run(args.slot, today=target_date)
     except Exception as e:  # noqa: BLE001
         error_msg = _summarize_error(e)
         log.exception("generate.run failed")

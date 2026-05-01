@@ -179,8 +179,9 @@ def view_pdf(
     )
 
 
-def _spawn_generate_subprocess(slot: str) -> int:
-    """Launch `python -m app.generate refresh` as a detached subprocess.
+def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int:
+    """Launch `python -m app.generate refresh [--date YYYY-MM-DD]` as a
+    detached subprocess.
 
     Detached means: when the FastAPI process is killed (uvicorn --reload, a
     crash, or graceful shutdown), the worker keeps running. The worker holds
@@ -189,6 +190,8 @@ def _spawn_generate_subprocess(slot: str) -> int:
     stale timeout kicks in.
     """
     cmd = [sys.executable, "-m", "app.generate", slot]
+    if target_date:
+        cmd += ["--date", target_date]
     env = os.environ.copy()
     # Make sure the worker inherits the same .env / repo root.
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
@@ -214,19 +217,31 @@ def _spawn_generate_subprocess(slot: str) -> int:
 
 
 @app.post("/refresh", status_code=status.HTTP_202_ACCEPTED)
-def refresh(email: str = Depends(auth.require_viewer)):
+async def refresh(request: Request, email: str = Depends(auth.require_viewer)):
     """Kick a background regeneration in a *detached subprocess* so the
     refresh keeps running even if uvicorn restarts. Returns 202 immediately
-    so the page can keep showing the old edition until the new one is ready."""
-    today = local_today()
+    so the page can keep showing the old edition until the new one is ready.
+
+    Accepts an optional JSON body ``{"date": "YYYY-MM-DD"}`` to regenerate a
+    specific date instead of today."""
+    target_date: str | None = None
+    try:
+        body = await request.json()
+        raw = (body.get("date") or "").strip()
+        if raw:
+            date.fromisoformat(raw)  # validate
+            target_date = raw
+    except Exception:  # noqa: BLE001 — missing/invalid body is fine
+        pass
+    effective_date = target_date or local_today().isoformat()
     if not cache.begin_edition_refresh():
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "A refresh is already in progress.",
         )
-    pid = _spawn_generate_subprocess("refresh")
+    pid = _spawn_generate_subprocess("refresh", target_date=target_date)
     cache.set_edition_refresh_pid(pid)
-    return {"ok": True, "date": today.isoformat(), "in_progress": True}
+    return {"ok": True, "date": effective_date, "in_progress": True}
 
 
 @app.post("/cron/{slot}", status_code=status.HTTP_202_ACCEPTED)

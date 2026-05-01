@@ -38,11 +38,13 @@
 {% endblock %}
 {% block scripts %}
 <script>
-  const isAdmin = {{ 'true' if is_admin else 'false' }};
+  // All Jinja interpolation goes through `| tojson` so HTML autoescape
+  // (which would turn " into &#34; and break the script parse) never bites.
+  const isAdmin = {{ is_admin | tojson }};
   const refreshBtn = document.getElementById('refresh-btn');
-  const editionDate = "{{ edition_date }}";
-  const serverInProgress = {{ 'true' if refresh_in_progress else 'false' }};
-  let initialGeneratedAt = {{ ('"' + edition_generated_at + '"') if edition_generated_at else 'null' }};
+  const editionDate = {{ edition_date | tojson }};
+  const serverInProgress = {{ refresh_in_progress | tojson }};
+  let initialGeneratedAt = {{ edition_generated_at | tojson }};
 
   async function fetchFreshness() {
     try {

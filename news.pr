@@ -66,10 +66,10 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
    - Cross-reference with `{{CALENDAR_EVENTS_JSON}}` to avoid duplicating events already on the calendar; mention the PFA URL as a source on each item.
 7. **Top financial news**
 8. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)
-9. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. The "why it moved" explanation is shown only as a hover tooltip when `|daily %| > 5` — not inline.
+9. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. **Always include a hover-revealed explanation** for every stock in the list — even when the daily move is small. The explanation is shown only inside the tooltip; never inline. Tone the depth to the move: a small (<2%) day gets a one-sentence note ("trading flat alongside the S&P", "drifted with semis"); a moderate move gets 2–3 sentences with the catalyst; a >5% day gets the full multi-source rundown described below.
 
-   When `|daily %| > 5`:
-   - Use `web_search` to find **at least 5 distinct sources** explaining today's move (earnings reports, analyst notes, regulatory news, sector moves, etc.).
+   For every stock:
+   - Use `web_search` to find **at least 5 distinct sources** explaining today's price action (earnings reports, analyst notes, regulatory news, sector moves, broad-market context — whatever applies). Even a quiet day has reasonable sources; if the symbol genuinely had nothing happen, cite the broad market read (S&P/Nasdaq, sector ETF) plus any analyst coverage you can find.
    - **Sort sources by trustworthiness, most trusted first.** Rough hierarchy:
      1. **Tier 1 — primary / wire**: Reuters, Bloomberg, Wall Street Journal, Financial Times, Associated Press, the company's own SEC filings or investor relations release.
      2. **Tier 2 — established financial press**: CNBC, Barron's, MarketWatch, The Economist, Forbes (staff reporting only — skip Forbes contributor blogs).
@@ -90,8 +90,8 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
        </span>
      </span>
      ```
-   - At least 5 source links are required. Style the links inside `.tooltip-popup` as block elements (the chrome already does this).
-   - When `|daily %| ≤ 5`, omit the wrapping `tooltip` span entirely so the row is plain text — there's nothing to hover-reveal.
+   - At least 5 source links are required for every stock. Style the links inside `.tooltip-popup` as block elements (the chrome already does this).
+   - The `<span class="tooltip">` wrapper is ALWAYS present — the hover popup is the only place the explanation lives, regardless of the day's move size.
    - Use the same green/red colour rules used in the PDF (`#0a7d1f` for ≥0, `#b00020` for <0; prefix `+` on positive moves).
 10. **Movies** — section heading is **exactly "Movies"**. Do **not** print "Movies for William", "Family movies", "Kid-friendly movies", "Movies for ages 8–12", or any audience descriptor. Do **not** print MPAA ratings (G/PG/PG-13) anywhere in the HTML or PDF — they are used internally to filter the list (use `{{ALLOWED_MOVIE_RATINGS}}` for the allowed set), but the user-facing card has no rating text.
     - Internal age-tier filter (do not display, just enforce):
@@ -108,14 +108,20 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
     - **Dedupe** early-access vs. wide release: while the early-access date is in the future, show the early-access entry; once past, show the wide-release entry.
     - **Skip**: any title in `{{HIDDEN_MOVIES}}`; any title whose rating is not in `{{ALLOWED_MOVIE_RATINGS}}`; any "Now in theaters" film whose wide-release date is more than 7 days ago; any re-release of a film whose original release was > 1 year ago.
     - **Movie title is plain text** — no hover tooltip, no wrapper span, no source citations.
-    - **Trailers button (required):** next to each movie title, render a hover-revealed `▶ Trailers` button that lists **real, working YouTube watch URLs** for the trailers. Use `web_search` to find the canonical video IDs — the URL must look like `https://www.youtube.com/watch?v=XXXXXXXXXXX` where the `v` query param is an 11-character video ID. **Do not use** YouTube search URLs (`/results?search_query=...`), embed URLs, or short-link URLs — only canonical `watch?v=` links to actual trailer videos. Verify each ID via web_search before including it. If you cannot find a real video ID, omit that link rather than guessing. Provide 1–3 links per movie (e.g. official trailer, teaser, sneak peek). Render exactly:
-      ```html
-      <span class="sources" tabindex="0">▶ Trailers<span class="sources-popup">
-        <a href="https://www.youtube.com/watch?v={video_id_1}" target="_blank" rel="noopener">Official Trailer</a>
-        <a href="https://www.youtube.com/watch?v={video_id_2}" target="_blank" rel="noopener">Teaser</a>
-      </span></span>
-      ```
-      Reuse the existing `.sources` / `.sources-popup` classes so the popup styling is consistent.
+    - **Trailer button (required when verified trailers exist):** next to each movie title, point to **real, working YouTube watch URLs** in the form `https://www.youtube.com/watch?v=XXXXXXXXXXX` (canonical 11-char video ID). Use `web_search` to verify each video ID. **Do not use** YouTube search URLs (`/results?search_query=...`), embed URLs, or short-link URLs.
+      - **Zero verified trailers** → omit the button entirely.
+      - **Exactly one trailer** → render a direct anchor labelled `▶ Trailer` (singular). No hover popup; clicking goes straight to the video:
+        ```html
+        <a class="sources" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener" title="Watch the trailer on YouTube">▶ Trailer</a>
+        ```
+      - **Two or more trailers** → render the hover popup labelled `▶ Trailers` (plural):
+        ```html
+        <span class="sources" tabindex="0">▶ Trailers<span class="sources-popup">
+          <a href="https://www.youtube.com/watch?v={video_id_1}" target="_blank" rel="noopener">Official Trailer</a>
+          <a href="https://www.youtube.com/watch?v={video_id_2}" target="_blank" rel="noopener">Teaser</a>
+        </span></span>
+        ```
+      Reuse the existing `.sources` / `.sources-popup` classes so the styling is consistent.
     - **Hide control:** each movie card must be a positioned container with a small ✕ button pinned to its top-right corner (no "Hide" text label). Render exactly:
       ```html
       <article class="movie-card">

@@ -261,6 +261,17 @@
     .tooltip:hover .tooltip-popup,
     .tooltip-popup:hover,
     .tooltip:focus-within .tooltip-popup { display: block; }
+    /* Each source link in the tooltip popup gets its own row, matching the
+       Sources popup elsewhere on the page. */
+    .tooltip-popup a {
+      display: block;
+      padding: 4px 0;
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule);
+    }
+    .tooltip-popup a:last-child { border-bottom: 0; }
+    .tooltip-popup a:hover { text-decoration: underline; }
 
     /* Weather strip: one-line band right below the masthead's separator.
        Spans every column whether the parent is multi-column (column-span:all)

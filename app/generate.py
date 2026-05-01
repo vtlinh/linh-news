@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import logging
 import re
 import sys
@@ -32,6 +33,7 @@ def run(slot: Slot, today: date | None = None) -> date:
 
     response = claude_client.generate_edition(template, ctx)
     response["html"] = _strip_document_wrapper(response["html"])
+    response["pdf_html"] = _ensure_lead_image(response["pdf_html"])
     pdf_bytes = pdf.html_to_pdf(response["pdf_html"])
 
     with Maker() as s:
@@ -111,17 +113,109 @@ _HEAD_LEAK_RE = re.compile(
     r"meta[^>]*/?|title[^>]*/?|link[^>]*/?)>",
     re.IGNORECASE,
 )
+# Claude's web_search emits <cite index="..."> wrappers around quoted
+# passages and inline citation references. We use our own SOURCES popup at
+# the end of each item, so these wrappers just clutter the body text.
+_CITE_RE = re.compile(r"<cite[^>]*>(.*?)</cite\s*>", re.IGNORECASE | re.DOTALL)
+
+
+_IMG_TAG_RE = re.compile(
+    r'(<img\b[^>]*\bsrc\s*=\s*)(["\'])([^"\']+)\2([^>]*>)',
+    re.IGNORECASE,
+)
+_UA = "Linh-News/1.0 (https://github.com/vtlinh/linh-news; vtlinh87+linhnews@gmail.com)"
+# Inline SVG fallback (data URI) so we never depend on the network. Renders
+# as a generic newspaper graphic in the lead column when no real image is
+# available.
+_FALLBACK_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 200'>"
+    "<rect width='320' height='200' fill='#f4f0e8'/>"
+    "<rect x='20' y='20' width='280' height='28' fill='#1a1a1a'/>"
+    "<text x='160' y='40' font-family='Times New Roman, serif' font-size='22' "
+    "font-weight='bold' fill='#f4f0e8' text-anchor='middle'>HEADLINE</text>"
+    "<rect x='20' y='62' width='280' height='4' fill='#1a1a1a'/>"
+    "<rect x='20' y='80' width='130' height='100' fill='#cdbfa9'/>"
+    "<line x1='160' y1='80' x2='300' y2='80' stroke='#444' stroke-width='1'/>"
+    "<line x1='160' y1='95' x2='300' y2='95' stroke='#888' stroke-width='1'/>"
+    "<line x1='160' y1='110' x2='300' y2='110' stroke='#888' stroke-width='1'/>"
+    "<line x1='160' y1='125' x2='280' y2='125' stroke='#888' stroke-width='1'/>"
+    "<line x1='160' y1='140' x2='300' y2='140' stroke='#888' stroke-width='1'/>"
+    "<line x1='160' y1='155' x2='270' y2='155' stroke='#888' stroke-width='1'/>"
+    "<line x1='160' y1='170' x2='300' y2='170' stroke='#888' stroke-width='1'/>"
+    "</svg>"
+)
+_FALLBACK_IMG_URL = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(_FALLBACK_SVG.encode("utf-8")).decode("ascii")
+)
+
+
+def _url_alive(url: str, timeout: float = 8.0) -> bool:
+    """HEAD-check a URL with our real User-Agent. Returns True only on a
+    2xx response with an image-like Content-Type."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": _UA}, method="HEAD"
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+            ctype = (
+                r.headers.get_content_type()
+                if hasattr(r.headers, "get_content_type")
+                else r.headers.get("Content-Type", "")
+            )
+            return 200 <= r.status < 300 and ctype.startswith("image/")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def _ensure_lead_image(pdf_html: str) -> str:
+    """Validate every <img src=...> in the print HTML and replace any that
+    don't load with a stable fallback. If Claude omitted images entirely,
+    inject the fallback at the very top of the document so the PDF still
+    leads with an image as required."""
+    found_any = False
+    bad_urls: list[str] = []
+
+    def _replace(m: re.Match[str]) -> str:
+        nonlocal found_any
+        found_any = True
+        url = m.group(3)
+        if _url_alive(url):
+            return m.group(0)
+        bad_urls.append(url)
+        return f'{m.group(1)}{m.group(2)}{_FALLBACK_IMG_URL}{m.group(2)}{m.group(4)}'
+
+    rewritten = _IMG_TAG_RE.sub(_replace, pdf_html)
+    if bad_urls:
+        log.warning(
+            "Lead-image URL(s) failed preflight, swapping in fallback: %s",
+            ", ".join(bad_urls),
+        )
+    if not found_any:
+        log.warning(
+            "Claude omitted the lead-story <img> entirely — injecting fallback image."
+        )
+        injection = (
+            f'<img src="{_FALLBACK_IMG_URL}" alt="" '
+            f'style="width:100%; max-height:1.6in; object-fit:cover; margin:0 0 4pt;">'
+        )
+        rewritten = injection + rewritten
+    return rewritten
 
 
 def _strip_document_wrapper(html: str) -> str:
     """If Claude emitted a full HTML document, peel off the document chrome
-    (DOCTYPE, html/head/body) plus any leaked <style> blocks. Leaving them in
-    place breaks the parent page's script execution and leaks global styles."""
+    (DOCTYPE, html/head/body) plus any leaked <style> blocks. Also strip
+    <cite> wrappers from web_search citations (we keep their inner text)."""
     body_match = _BODY_RE.search(html)
     if body_match:
         html = body_match.group(1)
     html = _STYLE_RE.sub("", html)
     html = _HEAD_LEAK_RE.sub("", html)
+    html = _CITE_RE.sub(lambda m: m.group(1), html)
     return html.strip()
 
 

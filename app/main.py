@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
-from app import auth, cache, calendar_oauth, overlays
+from app import auth, cache, calendar_oauth, overlays, tmdb
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, get_session
@@ -511,6 +511,20 @@ def admin_movies_data(
         except Exception:  # noqa: BLE001
             return True
     movies = [m for m in movies if _still_fresh(m)]
+    # Backfill missing posters via TMDB (and replace any obviously bad ones).
+    for m in movies:
+        url = m.get("poster_url") or ""
+        if not url or "search" in url or not url.lower().endswith(
+            (".jpg", ".jpeg", ".png", ".webp")
+        ):
+            year = None
+            try:
+                year = int((m.get("release_date") or "")[:4])
+            except (TypeError, ValueError):
+                year = None
+            tmdb_url = tmdb.lookup_poster(m["title"], year=year)
+            if tmdb_url:
+                m["poster_url"] = tmdb_url
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
     return {
         "movies": [{**m, "hidden": m["title"] in hidden} for m in movies],

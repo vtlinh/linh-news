@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/linh_news"
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-opus-4-7"
+    anthropic_model: str = "claude-sonnet-4-6"
 
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -41,6 +41,10 @@ class Settings(BaseSettings):
 
     redis_url: str = ""
     events_refresh_min_seconds: int = 3600  # at most once per hour
+    # The Movie Database — used to fetch real poster URLs for the Movies
+    # admin page. Get a free key at https://www.themoviedb.org/settings/api
+    # and set TMDB_API_KEY. If empty, posters fall back to Claude's guesses.
+    tmdb_api_key: str = ""
 
     weather_coords: str = "41.0223,-74.0635"
     weather_address: str = "15 Hunter Ridge, Woodcliff Lake, NJ 07677"

@@ -49,17 +49,6 @@ MOVIES_SCHEMA = {
                             "Do NOT use search URLs, embeds, or short links."
                         ),
                     },
-                    "poster_url": {
-                        "type": "string",
-                        "description": (
-                            "Direct URL of the movie's poster image. Allowed "
-                            "hosts: upload.wikimedia.org, "
-                            "*.media-amazon.com (IMDb), m.media-amazon.com, "
-                            "image.tmdb.org. Must end in .jpg / .jpeg / .png "
-                            "/ .webp (no html pages). Verify the URL via "
-                            "web_search before including. Omit if unavailable."
-                        ),
-                    },
                 },
                 "required": ["title", "rating", "release_date", "status", "summary"],
                 "additionalProperties": False,
@@ -93,18 +82,12 @@ def fetch_year_movie_list() -> list[dict]:
         f"so include only films a parent would consider watching with that "
         f"age.\n\nFor each movie include: official title, MPAA rating, "
         f"wide-release date (ISO), status, and a 2-3 sentence plot summary. "
-        f"Use web_search to find a real movie poster image URL (poster_url). "
-        f"**Prefer IMDb (m.media-amazon.com) posters first** — IMDb has the "
-        f"most reliable coverage of theatrical releases. Fall back to "
-        f"image.tmdb.org or upload.wikimedia.org only if IMDb has no poster. "
-        f"The URL must end in .jpg/.jpeg/.png/.webp and resolve to an actual "
-        f"image (not a webpage). Also include up to 3 real trailer YouTube "
-        f"watch URLs (trailers; "
-        f"https://www.youtube.com/watch?v=<11-char id>). Verify each "
-        f"poster/trailer URL via web_search before including. Do not invent "
-        f"IDs, do not use search URLs, do not use embed or short-link URLs. "
-        f"If a movie has no verified trailers, return trailers=[]. If no "
-        f"poster, omit poster_url for that movie. Sort by release_date "
+        f"Posters are fetched server-side from TMDB — DO NOT include any "
+        f"poster URL. Also include up to 3 real trailer YouTube watch URLs "
+        f"(trailers; https://www.youtube.com/watch?v=<11-char id>). Verify "
+        f"each trailer via web_search. Do not invent video IDs, do not use "
+        f"search URLs, do not use embed or short-link URLs. If a movie has "
+        f"no verified trailers, return trailers=[]. Sort by release_date "
         f"ascending. When done, call return_movies."
     )
     out = claude_client.call_with_schema(

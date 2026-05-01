@@ -1,12 +1,94 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import re
 import sys
 
 log = logging.getLogger(__name__)
+
+# ── Word-count → fitting-font cache ─────────────────────────────────────
+# A small list of (word_count, font_pt) samples persisted in kv_cache. We
+# linearly interpolate between the two nearest samples to predict the font
+# size that should fit a new render. The cache is bounded so we don't grow
+# without limit.
+_FONT_CACHE_KEY = "linh_news:pdf_font_cache"
+_FONT_CACHE_MAX_SAMPLES = 30
+_FONT_MIN = 5.0
+_FONT_MAX = 24.0
+_FONT_STEP = 0.5  # render fonts at 0.5pt resolution
+_DEFAULT_FONT_GUESS = 12.0
+_BLANK_TARGET = 0.20  # tolerate up to 20% blank space
+
+
+def _round_half(x: float) -> float:
+    return round(x / _FONT_STEP) * _FONT_STEP
+
+
+def _count_words(html: str) -> int:
+    """Word count of the body text only (strip HTML tags first)."""
+    text = re.sub(r"<[^>]+>", " ", html)
+    return len(text.split())
+
+
+def _load_font_samples() -> list[tuple[int, float]]:
+    try:
+        from app import cache
+        raw = cache._get_backend().get(_FONT_CACHE_KEY)  # noqa: SLF001
+        if not raw:
+            return []
+        items = json.loads(raw)
+        out: list[tuple[int, float]] = []
+        for it in items:
+            try:
+                w, f = int(it[0]), float(it[1])
+                if 0 < w and _FONT_MIN <= f <= _FONT_MAX:
+                    out.append((w, f))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return out
+    except Exception:  # noqa: BLE001 — cache read should never block PDF gen
+        log.exception("Could not load PDF font cache; starting from empty")
+        return []
+
+
+def _save_font_sample(word_count: int, font_pt: float) -> None:
+    try:
+        from app import cache
+        samples = _load_font_samples()
+        # Bucket by 100 words: latest sample in each bucket wins. Keeps
+        # entries diverse without unbounded growth.
+        bucket = (word_count // 100) * 100
+        samples = [s for s in samples if (s[0] // 100) * 100 != bucket]
+        samples.append((word_count, font_pt))
+        samples.sort(key=lambda s: s[0])
+        if len(samples) > _FONT_CACHE_MAX_SAMPLES:
+            samples = samples[-_FONT_CACHE_MAX_SAMPLES:]
+        cache._get_backend().set(  # noqa: SLF001
+            _FONT_CACHE_KEY, json.dumps(samples)
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Could not save PDF font cache sample")
+
+
+def _predict_font(word_count: int, samples: list[tuple[int, float]]) -> float:
+    """Linear-interpolate font size from cached samples."""
+    if not samples:
+        return _DEFAULT_FONT_GUESS
+    s = sorted(samples, key=lambda x: x[0])
+    if word_count <= s[0][0]:
+        return s[0][1]
+    if word_count >= s[-1][0]:
+        return s[-1][1]
+    for i in range(len(s) - 1):
+        wa, fa = s[i]
+        wb, fb = s[i + 1]
+        if wa <= word_count <= wb:
+            t = (word_count - wa) / max(wb - wa, 1)
+            return fa + (fb - fa) * t
+    return s[-1][1]
 
 
 def _ensure_dll_path() -> None:
@@ -89,13 +171,24 @@ def _drop_one_section(html: str) -> str | None:
 def html_to_pdf(html: str) -> bytes:
     """Render print-styled HTML to a single-page 12×22 in PDF using WeasyPrint.
 
-    Algorithm:
-    1. Binary-search [5, 14]pt in 0.5pt steps for the LARGEST font that fits
-       one page — this maximises font size, keeping empty space ≤ ~4%.
-    2. If even 5pt overflows, drop the lowest-priority section (per news.pr
-       spec) and retry — repeat until the content fits or nothing remains.
-    3. Falls back to a tiny placeholder PDF if WeasyPrint's native libs aren't
-       installed (typical on a Windows dev box).
+    Smart cache-driven algorithm (typical: 1 render, sometimes 2):
+    1. Count words; look up the (words → font-size) cache and linearly
+       interpolate a predicted font that should fit on one page.
+    2. Render at ``predicted - 0.2pt`` (slightly conservative).
+       - If the result spills to >1 page, fall back to the legacy binary
+         search to find any fitting font.
+    3. Measure how much of the first page is blank.
+       - If blank ≤ 20%, accept this render. Save the sample.
+       - If blank > 20%, estimate how much bigger the font should be
+         (fill ratio scales ≈ font², so new = old / sqrt(1 - blank)),
+         render once more.
+    4. If the second (bigger) render still fits AND has lower blank than
+       the first, use it. Otherwise fall back to the first render.
+    5. If the predicted font overflows AND no smaller font fits either,
+       drop the lowest-priority section (news.pr spec) and retry.
+
+    Falls back to a tiny placeholder PDF if WeasyPrint's native libs aren't
+    installed (typical on a Windows dev box).
     """
     try:
         _ensure_dll_path()
@@ -166,43 +259,158 @@ def html_to_pdf(html: str) -> bytes:
         section, article, header, footer, div {{ margin: 0 0 3pt !important; }}
         """)
 
-    # Font-size candidates: 5.0 → 14.0 in 0.5pt steps (19 values, ~5 renders).
-    # At the top end adjacent steps differ by ~3.6%, so the largest fitting
-    # font leaves ≤ ~4% empty space — well within the 10% requirement.
-    _SIZES = [round(5.0 + i * 0.5, 1) for i in range(19)]  # 5.0 … 14.0
+    # ── render-and-measure helpers ──────────────────────────────────────
+    def _render_and_measure(
+        content: str, font_pt: float
+    ) -> tuple[bytes, int, float]:
+        """Render at ``font_pt`` and return (pdf_bytes, page_count, fill_ratio).
 
-    def _best_fit(content: str) -> tuple[bytes, float] | None:
-        """Binary-search for the largest font in _SIZES that fits one page.
-        Returns (pdf_bytes, font_pt) or None if even the smallest doesn't fit."""
+        ``fill_ratio`` is the fraction of the first page covered by content
+        (0..1). 1.0 means full page; 0.5 means half empty. For >1 page outputs
+        the ratio is reported as 1.0 (overflow == "full and then some").
+        """
+        css = _make_css(font_pt)
+        doc = HTML(string=content, url_fetcher=_url_fetcher).render(stylesheets=[css])
+        pdf_bytes = doc.write_pdf()
+        n_pages = len(doc.pages)
+        if n_pages == 0:
+            return pdf_bytes, 0, 0.0
+        if n_pages > 1:
+            return pdf_bytes, n_pages, 1.0
+        page = doc.pages[0]
+        page_h = float(getattr(page, "height", 0) or 0)
+        if page_h <= 0:
+            return pdf_bytes, n_pages, 0.0
+        # WeasyPrint's `_page_box` is the root box of the page; walking its
+        # children gives every laid-out box's position+height. The deepest
+        # bottom edge is our content extent.
+        root = getattr(page, "_page_box", None)
+        if root is None:
+            return pdf_bytes, n_pages, 0.0
+
+        deepest = 0.0
+
+        def _walk(box: object) -> None:
+            nonlocal deepest
+            try:
+                y = float(getattr(box, "position_y", 0) or 0)
+                h = float(getattr(box, "height", 0) or 0)
+                bottom = y + h
+                if bottom > deepest:
+                    deepest = bottom
+            except (TypeError, ValueError):
+                pass
+            for child in getattr(box, "children", ()) or ():
+                _walk(child)
+
+        _walk(root)
+        return pdf_bytes, n_pages, max(0.0, min(1.0, deepest / page_h))
+
+    def _bump_for_blank(current_pt: float, blank: float) -> float:
+        """How much bigger the font should be to consume the blank space.
+
+        Text area scales ≈ font², so to fill the page we want
+        new/old = sqrt(1/(1-blank)). Clamp so we don't make wild jumps.
+        """
+        if blank <= 0:
+            return 0.0
+        target = current_pt / max(1e-3, (1.0 - blank)) ** 0.5
+        return max(0.5, min(2.5, target - current_pt))
+
+    def _legacy_search(content: str) -> tuple[bytes, float] | None:
+        """Used as fallback only — binary-search [5, 24]pt in 0.5pt steps."""
+        sizes = [round(_FONT_MIN + i * _FONT_STEP, 1)
+                 for i in range(int((_FONT_MAX - _FONT_MIN) / _FONT_STEP) + 1)]
         best_bytes: bytes | None = None
-        best_pt: float = _SIZES[0]
-        lo, hi = 0, len(_SIZES) - 1
+        best_pt: float = sizes[0]
+        lo, hi = 0, len(sizes) - 1
         while lo <= hi:
             mid = (lo + hi) // 2
-            pt = _SIZES[mid]
+            pt = sizes[mid]
             try:
-                pdf_bytes = HTML(string=content, url_fetcher=_url_fetcher).write_pdf(
-                    stylesheets=[_make_css(pt)]
-                )
+                pdf_bytes, n_pages, _ = _render_and_measure(content, pt)
             except Exception as e:  # noqa: BLE001
-                log.exception("WeasyPrint render failed at %.1fpt: %s", pt, e)
+                log.exception("Fallback render failed at %.1fpt: %s", pt, e)
                 return None
-            if page_count(pdf_bytes) <= 1:
+            if n_pages <= 1:
                 best_bytes, best_pt = pdf_bytes, pt
                 lo = mid + 1
             else:
                 hi = mid - 1
         return (best_bytes, best_pt) if best_bytes is not None else None
 
-    # First attempt on full content.
-    result = _best_fit(html)
+    # ── main flow: cache → predict → render → maybe bump ────────────────
+    word_count = _count_words(html)
+    samples = _load_font_samples()
+    predicted = _predict_font(word_count, samples)
+    first_pt = _round_half(max(_FONT_MIN, min(_FONT_MAX, predicted - 0.2)))
+
+    log.info(
+        "PDF font: %d words, %d cached samples → predicted %.2fpt → trying %.1fpt",
+        word_count, len(samples), predicted, first_pt,
+    )
+
+    try:
+        first_bytes, first_pages, first_fill = _render_and_measure(html, first_pt)
+    except Exception:
+        log.exception("First PDF render failed; falling back to binary search")
+        first_bytes, first_pages, first_fill = b"", 99, 0.0
+
+    if first_pages == 1:
+        first_blank = 1.0 - first_fill
+        log.info(
+            "First render: 1 page at %.1fpt, fill=%.1f%% (blank=%.1f%%)",
+            first_pt, first_fill * 100, first_blank * 100,
+        )
+
+        if first_blank <= _BLANK_TARGET:
+            log.info("Within %.0f%% blank target — using first render at %.1fpt",
+                     _BLANK_TARGET * 100, first_pt)
+            _save_font_sample(word_count, first_pt)
+            return first_bytes
+
+        # Try a bigger font to fill the blank space.
+        bump = _bump_for_blank(first_pt, first_blank)
+        second_pt = _round_half(min(_FONT_MAX, first_pt + bump))
+        if second_pt <= first_pt:
+            _save_font_sample(word_count, first_pt)
+            return first_bytes
+
+        log.info("Blank %.1f%% > %.0f%% — bumping %.1f → %.1fpt to fill",
+                 first_blank * 100, _BLANK_TARGET * 100, first_pt, second_pt)
+        try:
+            second_bytes, second_pages, second_fill = _render_and_measure(html, second_pt)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Second render failed (%s); using first.", e)
+            _save_font_sample(word_count, first_pt)
+            return first_bytes
+
+        if second_pages == 1 and second_fill >= first_fill:
+            log.info("Second render at %.1fpt fits (fill=%.1f%%) — using it.",
+                     second_pt, second_fill * 100)
+            _save_font_sample(word_count, second_pt)
+            return second_bytes
+
+        log.info(
+            "Second render at %.1fpt did not improve (pages=%d, fill=%.1f%%) — "
+            "using first render at %.1fpt.",
+            second_pt, second_pages, second_fill * 100, first_pt,
+        )
+        _save_font_sample(word_count, first_pt)
+        return first_bytes
+
+    # First render overflowed → cache lied (or this is a first run with empty
+    # cache and the default guess is too big). Fall back to binary search.
+    log.warning("First render overflowed (%d pages at %.1fpt) — running binary search",
+                first_pages, first_pt)
+    result = _legacy_search(html)
     if result:
         best_bytes, best_pt = result
-        if best_pt != 8.0:
-            log.info("PDF auto-sized to %.1fpt", best_pt)
+        log.info("Fallback search found %.1fpt", best_pt)
+        _save_font_sample(word_count, best_pt)
         return best_bytes
 
-    # Content overflows even at 5pt — drop sections one at a time.
+    # Still doesn't fit at minimum font — drop sections.
     current_html = html
     for attempt in range(10):
         trimmed = _drop_one_section(current_html)
@@ -210,7 +418,7 @@ def html_to_pdf(html: str) -> bytes:
             log.warning("PDF: no more sections to drop — giving up")
             break
         current_html = trimmed
-        result = _best_fit(current_html)
+        result = _legacy_search(current_html)
         if result:
             best_bytes, best_pt = result
             log.info(

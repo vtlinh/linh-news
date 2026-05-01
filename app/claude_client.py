@@ -109,7 +109,10 @@ def call_with_schema(
         break
 
     msg = last_msg
-    text_blocks = [b.text for b in (msg.content if msg else []) if getattr(b, "type", None) == "text"]
+    text_blocks = [
+        b.text for b in (msg.content if msg else [])
+        if getattr(b, "type", None) == "text"
+    ]
     raise ValueError(
         f"Claude did not invoke {schema_name!r}. "
         f"stop_reason={getattr(msg, 'stop_reason', None)}. "

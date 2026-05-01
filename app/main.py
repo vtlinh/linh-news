@@ -140,6 +140,29 @@ def view_date(
     return _render_viewer(request, _parse_date(day), s, email)
 
 
+@app.get("/pdf/latest")
+def pdf_latest(
+    token: str | None = None,
+    s: Session = Depends(get_session),
+):
+    """Return the most recently generated PDF. Authenticated via ?token=
+    (no login required) so it can be bookmarked or used as a home-screen shortcut."""
+    expected = get_settings().pdf_latest_token
+    if not expected or not token or token != expected:
+        raise HTTPException(401, "Invalid or missing token")
+    edition = s.execute(
+        select(Edition).order_by(Edition.date.desc()).limit(1)
+    ).scalar_one_or_none()
+    if not edition:
+        raise HTTPException(404, "No editions available yet")
+    filename = f"linh-times-{edition.date}.pdf"
+    return Response(
+        edition.pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @app.get("/pdf/{day}")
 def view_pdf(
     day: str,

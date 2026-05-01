@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf
+from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf, weather
 from app.db import Edition, session_factory
 from app.settings import get_settings, local_today
 
@@ -103,6 +103,9 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     # PDF calendar: today+tomorrow timed events + important all-day, pure Python.
     pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
 
+    # Current "Now" observation from NWS (empty string → Claude falls back to web_search).
+    now_weather = weather.fetch_current_now(settings.weather_coords)
+
     return {
         "DATE": today.isoformat(),
         "KID_AGE": calendar_oauth.current_kid_age(today),
@@ -111,6 +114,7 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
         "HIDDEN_MOVIES": hidden_movies,
         "WATCHLIST_STOCKS": watchlist,
         "WEATHER_COORDS": settings.weather_coords,
+        "NOW_WEATHER": now_weather,
         "PDF_CALENDAR_HTML": pdf_calendar_html,
         "CUSTOM_TOPICS": "",
     }

@@ -50,9 +50,12 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
 
 **Omit a section entirely if there is no fresh content.**
 
-1. **Weather** — render as a **single one-line strip** at the very top, immediately under the masthead, with NO heading/title and NO sub-paragraphs. Wrap it in `<div class="weather-strip">…</div>` so the page chrome can style it. Always start with **Now**, then today's high/low, then tomorrow. Format example:
-   `Now 12°C 🌤 · Today H 14° / L 7° ☀️ · Tomorrow H 16° / L 9° ☁️ · ⚠ Wind advisory until 6 PM`
-   The current ("Now") temperature is required; pull it from a current-conditions source (e.g. NWS observation, Weather.gov) and clearly label it. Today + tomorrow for **15 Hunter Ridge, Woodcliff Lake, NJ 07677** (coords: `{{WEATHER_COORDS}}`). All temperatures in **degrees Celsius (°C)** — convert from any Fahrenheit source. If there are active alerts or warnings, surface them inline at the end of the strip with a ⚠ glyph; do not split them into a separate section.
+1. **Weather** — render as a **single one-line strip** at the very top, immediately under the masthead, with NO heading/title and NO sub-paragraphs. Wrap it in `<div class="weather-strip">…</div>` so the page chrome can style it. Format:
+   `Now 12°C 🌤 · Wind NW 8 mph · Today H 14° / L 7° ☀️ · Tomorrow H 16° / L 9° ☁️ · ⚠ Wind advisory until 6 PM`
+   - **Now observation (pre-fetched):** `{{NOW_WEATHER}}` — use this verbatim as the "Now …" prefix. If empty, use `web_search` to get the current observation from NWS/Weather.gov and supply it yourself.
+   - **Today & tomorrow forecast:** use `web_search` to get today's high/low and tomorrow's conditions for **15 Hunter Ridge, Woodcliff Lake, NJ 07677** (coords: `{{WEATHER_COORDS}}`).
+   - All temperatures in **°C** — convert from any Fahrenheit source.
+   - Surface any active NWS alerts inline at the end of the strip with a ⚠ glyph; do not split them into a separate section.
 2. **Calendar** — place exactly `<!-- CALENDAR_PLACEHOLDER -->` where the calendar section belongs in the rail (between Stocks and Movies). Do **not** generate any calendar content yourself — the server injects real pre-generated calendar data at render time. Output only the literal comment tag, nothing else at this position.
 3. **Top global political news**
 4. **Top US political news**

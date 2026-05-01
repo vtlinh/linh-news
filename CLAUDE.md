@@ -17,13 +17,20 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 - LLM: Anthropic API (`claude-opus-4-7`) with the `web_search_20250305` tool. Use prompt caching on the static `news.pr` block.
 - PDF: WeasyPrint (system serif fonts, US Letter, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
-- Hosting: Fly.io app + scheduled machines (cron at `0 7 * * *` and `0 19 * * *` — 7 AM and 7 PM, TZ `America/New_York`).
+- Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) at UTC 0, 6, 12, 18 (≈ 8 PM, 2 AM, 8 AM, 2 PM ET).
 
 ## Common commands
 
+**Before starting the local server**, ensure the Fly Postgres proxy is running. Check and start it if needed:
+```bash
+# Check if proxy is already listening on 15432
+netstat -an | grep 15432 || fly proxy 15432:5432 -a linh-news-db &
+```
+The proxy tunnels the Fly DB to `localhost:15432`. Without it the app fails to connect on startup.
+
 ```bash
 uv sync                                  # install / update from uv.lock
-uv run uvicorn app.main:app --reload     # run web server
+uv run uvicorn app.main:app --reload     # run web server (requires proxy above)
 uv run python -m app.generate morning    # one generation cycle (slot: morning|evening|refresh)
 uv run alembic upgrade head              # apply migrations
 uv run alembic revision --autogenerate -m "msg"

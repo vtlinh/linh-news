@@ -7,13 +7,14 @@ def test_news_pr_has_required_placeholders():
     text = (REPO_ROOT / "news.pr").read_text(encoding="utf-8")
     for ph in [
         "{{DATE}}",
-        "{{HIDDEN_MOVIES}}",
-        "{{HIDDEN_CALENDARS_JSON}}",
-        "{{ALL_CALENDARS_JSON}}",
-        "{{CALENDAR_EVENTS_JSON}}",
-        "{{IMPORTANT_EVENTS_JSON}}",
+        "{{WATCHLIST_STOCKS}}",
         "{{WEATHER_COORDS}}",
+        "{{NOW_WEATHER}}",
+        "{{PDF_CALENDAR_HTML}}",
         "{{CUSTOM_TOPICS}}",
+        "<!-- CALENDAR_PLACEHOLDER -->",
+        "<!-- MOVIES_PLACEHOLDER -->",
+        "<!-- PDF_MOVIES_PLACEHOLDER -->",
     ]:
         assert ph in text, f"missing placeholder {ph}"
 

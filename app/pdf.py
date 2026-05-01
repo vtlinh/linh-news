@@ -52,7 +52,7 @@ def _load_font_samples() -> list[tuple[int, float]]:
         for it in items:
             try:
                 w, f = int(it[0]), float(it[1])
-                if 0 < w and _FONT_MIN <= f <= _FONT_MAX:
+                if w > 0 and _FONT_MIN <= f <= _FONT_MAX:
                     out.append((w, f))
             except (TypeError, ValueError, IndexError):
                 continue

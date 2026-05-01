@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     session_secret: str = "dev-only-change-me"
     session_ttl_days: int = 30
+    # Shared secret used by GitHub Actions to authenticate cron pings.
+    cron_secret: str = ""
 
     users_file: Path = REPO_ROOT / "users.txt"
     news_pr_path: Path = REPO_ROOT / "news.pr"

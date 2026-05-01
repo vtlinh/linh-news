@@ -39,7 +39,9 @@
     border: 1px solid var(--rule);
     background: #fff;
     border-radius: 6px;
-    overflow: hidden;
+    /* No overflow:hidden — the Trailers hover popup extends past the tile
+       and absolutely-positioned descendants must remain visible. The poster
+       is clipped by its own border-radius/aspect-ratio. */
     display: flex;
     flex-direction: column;
   }
@@ -49,6 +51,9 @@
     aspect-ratio: 2 / 3;
     background: #eee center / cover no-repeat;
     display: block;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    overflow: hidden;
   }
   .movie-poster.no-image {
     display: flex; align-items: center; justify-content: center;
@@ -81,12 +86,22 @@
   .trailer-btn {
     display: inline-block;
     padding: 6px 10px;
-    border: 1px solid var(--fg); border-radius: 4px;
+    border: 1px solid var(--rule); border-radius: 4px;
     background: #fff; color: var(--fg);
     font: inherit; font-size: 0.85em;
     cursor: pointer; text-decoration: none;
   }
-  .trailer-btn:hover { background: var(--fg); color: #fff; }
+  .trailer-btn:hover {
+    background: #f4f0e8;
+    border-color: var(--fg);
+    color: var(--fg);
+  }
+  /* When the Trailers button is the multi-link form, kill the .sources
+     dotted underline and `cursor: help` so it looks like a button. */
+  span.sources.trailer-btn {
+    border-bottom: 0;
+    cursor: pointer;
+  }
 </style>
 {% endblock %}
 {% block scripts %}

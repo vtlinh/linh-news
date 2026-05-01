@@ -209,6 +209,8 @@
     main.layout > .rail { display: flex; flex-direction: column; gap: 1.4em; }
     @media (min-width: 768px) {
       main.layout > .flow { columns: 2; column-gap: 28px; }
+      /* Legacy editions without a rail wrapper also get multi-column. */
+      main.layout:not(:has(> .rail)) { columns: 2; column-gap: 28px; }
     }
     /* 3 visible columns at desktop: 2-col flow + dedicated rail.
        Uses :has(.rail) so editions that didn't generate the rail wrapper
@@ -260,9 +262,12 @@
     .tooltip-popup:hover,
     .tooltip:focus-within .tooltip-popup { display: block; }
 
-    /* Weather strip: one-line band right below the masthead's separator. */
+    /* Weather strip: one-line band right below the masthead's separator.
+       Spans every column whether the parent is multi-column (column-span:all)
+       or CSS Grid (grid-column: 1/-1). */
     .weather-strip {
       column-span: all;
+      grid-column: 1 / -1;
       padding: 8px 12px; margin: 0 0 1.2em;
       border-bottom: 1px solid var(--rule);
       font-size: 0.95em;

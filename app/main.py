@@ -156,7 +156,7 @@ def view_pdf(
     )
 
 
-def _spawn_refresh_subprocess() -> int:
+def _spawn_generate_subprocess(slot: str) -> int:
     """Launch `python -m app.generate refresh` as a detached subprocess.
 
     Detached means: when the FastAPI process is killed (uvicorn --reload, a
@@ -165,7 +165,7 @@ def _spawn_refresh_subprocess() -> int:
     `finally` block when done. If the worker itself dies, the cache's 12-min
     stale timeout kicks in.
     """
-    cmd = [sys.executable, "-m", "app.generate", "refresh"]
+    cmd = [sys.executable, "-m", "app.generate", slot]
     env = os.environ.copy()
     # Make sure the worker inherits the same .env / repo root.
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
@@ -201,9 +201,26 @@ def refresh(email: str = Depends(auth.require_viewer)):
             status.HTTP_409_CONFLICT,
             "A refresh is already in progress.",
         )
-    pid = _spawn_refresh_subprocess()
+    pid = _spawn_generate_subprocess("refresh")
     cache.set_edition_refresh_pid(pid)
     return {"ok": True, "date": today.isoformat(), "in_progress": True}
+
+
+@app.post("/cron/{slot}", status_code=status.HTTP_202_ACCEPTED)
+def cron_trigger(slot: str, request: Request):
+    """Cron-pinged endpoint. GitHub Actions hits this twice a day with the
+    shared CRON_SECRET in the X-Cron-Token header. Spawns the same detached
+    subprocess that /refresh uses, so this returns immediately."""
+    if slot not in {"morning", "evening"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown slot")
+    expected = get_settings().cron_secret
+    if not expected:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "CRON_SECRET not configured")
+    sent = request.headers.get("x-cron-token", "")
+    if not secrets.compare_digest(sent, expected):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad cron token")
+    pid = _spawn_generate_subprocess(slot)
+    return {"ok": True, "slot": slot, "pid": pid}
 
 
 @app.get("/editions/{day}/freshness")
@@ -482,6 +499,18 @@ def admin_movies_data(
     selected = set(requested) if requested else set(calendar_oauth.allowed_movie_ratings())
     movies = movies_mod.get_or_fetch_movies(force=bool(refresh))
     movies = [m for m in movies if m.get("rating") in selected]
+    # Drop "Currently in theaters" entries that opened more than 3 weeks ago —
+    # those are no longer relevant suggestions.
+    today = local_today()
+    cutoff = today - timedelta(weeks=3)
+    def _still_fresh(m: dict) -> bool:
+        if m.get("status") != "in_theaters":
+            return True
+        try:
+            return _parse_date(m.get("release_date", "")) >= cutoff
+        except Exception:  # noqa: BLE001
+            return True
+    movies = [m for m in movies if _still_fresh(m)]
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
     return {
         "movies": [{**m, "hidden": m["title"] in hidden} for m in movies],

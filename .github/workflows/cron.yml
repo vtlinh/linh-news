@@ -1,0 +1,49 @@
+name: Cron — daily editions
+
+# Schedules are in UTC. We pin to the EST offset (UTC-5) so winter hits
+# exactly 7 AM / 7 PM ET. During EDT (UTC-4) the runs slide one hour later
+# (8 AM / 8 PM ET) — acceptable drift across DST.
+on:
+  schedule:
+    - cron: '0 12 * * *'  # 7 AM ET in winter, 8 AM ET in summer
+    - cron: '0 0 * * *'   # 7 PM ET in winter, 8 PM ET in summer
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Slot to run (morning or evening)"
+        required: true
+        default: morning
+        type: choice
+        options: [morning, evening]
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pick slot from schedule cron
+        id: slot
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "slot=${{ github.event.inputs.slot }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 12 * * *" ]; then
+            echo "slot=morning" >> "$GITHUB_OUTPUT"
+          else
+            echo "slot=evening" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Linh News cron
+        env:
+          BASE_URL: https://linh-news.fly.dev
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          slot="${{ steps.slot.outputs.slot }}"
+          echo "Triggering /cron/$slot on $BASE_URL"
+          status=$(curl -sS -o /tmp/cron.out -w "%{http_code}" \
+            -X POST "$BASE_URL/cron/$slot" \
+            -H "X-Cron-Token: $CRON_SECRET")
+          echo "HTTP $status"
+          cat /tmp/cron.out
+          if [ "$status" != "202" ]; then
+            exit 1
+          fi

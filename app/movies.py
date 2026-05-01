@@ -52,11 +52,12 @@ MOVIES_SCHEMA = {
                     "poster_url": {
                         "type": "string",
                         "description": (
-                            "Public URL of the movie poster image. Prefer "
-                            "Wikimedia Commons "
-                            "(https://upload.wikimedia.org/wikipedia/commons/...) "
-                            "or Wikipedia thumbnails. Omit entirely if no "
-                            "verifiable poster URL is available."
+                            "Direct URL of the movie's poster image. Allowed "
+                            "hosts: upload.wikimedia.org, "
+                            "*.media-amazon.com (IMDb), m.media-amazon.com, "
+                            "image.tmdb.org. Must end in .jpg / .jpeg / .png "
+                            "/ .webp (no html pages). Verify the URL via "
+                            "web_search before including. Omit if unavailable."
                         ),
                     },
                 },
@@ -92,9 +93,13 @@ def fetch_year_movie_list() -> list[dict]:
         f"so include only films a parent would consider watching with that "
         f"age.\n\nFor each movie include: official title, MPAA rating, "
         f"wide-release date (ISO), status, and a 2-3 sentence plot summary. "
-        f"Use web_search to find a real movie poster image URL (poster_url; "
-        f"prefer upload.wikimedia.org/wikipedia/commons/... thumbnails) and "
-        f"up to 3 real trailer YouTube watch URLs (trailers; "
+        f"Use web_search to find a real movie poster image URL (poster_url). "
+        f"**Prefer IMDb (m.media-amazon.com) posters first** — IMDb has the "
+        f"most reliable coverage of theatrical releases. Fall back to "
+        f"image.tmdb.org or upload.wikimedia.org only if IMDb has no poster. "
+        f"The URL must end in .jpg/.jpeg/.png/.webp and resolve to an actual "
+        f"image (not a webpage). Also include up to 3 real trailer YouTube "
+        f"watch URLs (trailers; "
         f"https://www.youtube.com/watch?v=<11-char id>). Verify each "
         f"poster/trailer URL via web_search before including. Do not invent "
         f"IDs, do not use search URLs, do not use embed or short-link URLs. "

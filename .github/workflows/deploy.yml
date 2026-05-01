@@ -1,0 +1,29 @@
+name: Deploy to Fly
+
+# Auto-deploys on every push to main (i.e. when a PR merges). Migrations run
+# automatically as part of `fly deploy` via `release_command` in fly.toml.
+#
+# Requires repo secret `FLY_API_TOKEN` — generate with `fly tokens create deploy`
+# and add it under Settings → Secrets and variables → Actions.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only one deploy at a time per ref. Newer pushes cancel queued deploys but
+# wait for the in-flight one to finish — we never want two `fly deploy` runs
+# overlapping.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

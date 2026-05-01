@@ -239,17 +239,18 @@
 
     /* Generic hover-tooltip pair (used by stocks and any future
        hover-revealed explanation). Same mechanics as .sources but no tiny
-       font / no dotted underline — the trigger is a normal-looking row. */
+       font / no dotted underline — the trigger is a normal-looking row.
+       display:block so each stock sits on its own line. */
     .tooltip {
       position: relative;
-      display: inline-block;
+      display: block;
       cursor: help;
     }
     .tooltip-popup {
       display: none;
       position: absolute;
       bottom: 100%; left: 0;
-      min-width: 260px; max-width: 380px;
+      min-width: 320px; max-width: min(500px, 90vw);
       padding: 10px 12px; margin-bottom: 6px;
       background: #fff;
       border: 1px solid var(--fg);
@@ -258,6 +259,9 @@
       font-size: 13px;
       line-height: 1.4;
     }
+    /* Dynamic placement classes toggled by JS */
+    .tooltip-popup.flip-right { left: auto; right: 0; }
+    .tooltip-popup.flip-down  { bottom: auto; top: 100%; margin-bottom: 0; margin-top: 6px; }
     .tooltip:hover .tooltip-popup,
     .tooltip-popup:hover,
     .tooltip:focus-within .tooltip-popup { display: block; }
@@ -314,6 +318,19 @@
       host.appendChild(el);
       setTimeout(() => { el.remove(); }, 2200);
     };
+
+    // Dynamic tooltip placement: flip popup left/right and up/down so it
+    // never overflows the viewport.
+    document.addEventListener('mouseenter', function(e) {
+      const trigger = e.target.closest('.tooltip');
+      if (!trigger) return;
+      const popup = trigger.querySelector('.tooltip-popup');
+      if (!popup) return;
+      popup.classList.remove('flip-right', 'flip-down');
+      const r = popup.getBoundingClientRect();
+      if (r.right > window.innerWidth - 8) popup.classList.add('flip-right');
+      if (r.top < 8) popup.classList.add('flip-down');
+    }, true);
   </script>
   {% block scripts %}{% endblock %}
 </body>

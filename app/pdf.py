@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -21,9 +22,6 @@ _FONT_MAX = 24.0
 _FONT_STEP = 0.5  # render fonts at 0.5pt resolution
 _DEFAULT_FONT_GUESS = 12.0
 _BLANK_TARGET = 0.20  # tolerate up to 20% blank space
-
-
-import math
 
 
 def _round_half(x: float) -> float:

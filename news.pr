@@ -160,19 +160,27 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
 
 ## PDF (Linh Times) requirements
 - **Single metro format page (12 x 22 inches). This is non-negotiable.** All content must fit on one page — but the page must also be **filled, no blank space at the bottom**.
-- **Density strategy (read this carefully):** Fetch and write **substantially more content than fits**, ordered by priority below. Then trim from the lowest-priority section first, paragraph by paragraph, until everything fits. Never leave whitespace below the last story — extend the previous story or absorb the bottom whitespace into the calendar sidebar / stocks ticker.
-  Priority (1 = most important, 7 = drop first when tight):
+- **Page order (top → bottom):**
+  1. Masthead (`The Linh Times`)
+  2. Date line
+  3. **Weather strip** — full width, single line.
+  4. **Stocks row** — full width, single line, sits **directly under the weather strip** (no longer a footer ticker). Same one-line layout: `GOOG $182.45 +2.3% · SMCI $54.10 -1.1% · NVDA …`. Use the `font-size: 7pt` colour rules below.
+  5. Lead story column (with image) and the rest of the article columns.
+  6. Calendar sidebar (`{{PDF_CALENDAR_HTML}}`).
+  7. Movies (lowest priority — first to drop when tight).
+- **Density strategy:** Fetch and write **substantially more content than fits**, ordered by priority below. If the page would overflow, **remove individual articles** from the lowest-priority section first (one article at a time), keeping that section alive with at least 1 article when possible. **Removing whole sections is a last resort** — drop articles, not sections. Never leave whitespace below the last column; if everything fits with room to spare, lengthen story summaries to fill.
+  Priority (1 = most important, 7 = drop articles first when tight):
   1. Lead story (headline + image + body)
   2. Weather strip
-  3. Today's calendar (from `{{PDF_CALENDAR_HTML}}`)
-  4. Stocks ticker footer
-  5. 3–5 secondary stories (politics, NJ/NY, AI, finance)
+  3. Stocks row (under weather)
+  4. Today's calendar (from `{{PDF_CALENDAR_HTML}}`)
+  5. 3–5 secondary stories (politics, NJ/NY, AI, finance, tech)
   6. Dorchester / school news
-  7. Movies (cut entirely if no room — keep on the HTML version)
+  7. Movies
 - **Aim for 98%+ page fill.** A column that ends 1in early is a defect.
 - **4–6 columns NYT-broadsheet style.** The page is 12×22in, so default to 5–6 columns; drop to 4 only if 5 would create thin awkward fragments. Never use fewer than 4. Wrap the story flow in a container with `style="column-count: N; column-gap: 14pt; column-rule: 0.5pt solid #999;"` (pick N between 4 and 6).
 - Masthead text: **The Linh Times** in bold serif (use a system serif — `"Times New Roman", "Georgia", serif` — so WeasyPrint renders without external assets).
-- Date line, weather strip, **6–10 prioritized stories** (headline + **4–7 sentence summary** so the page is dense like a real newspaper), calendar sidebar, stocks ticker footer.
+- Date line, weather strip, stocks row (directly below weather), then **6–10 prioritized stories** (headline + **4–7 sentence summary** so the page is dense like a real newspaper), with the calendar sidebar in the rail.
 - **Lead story image (REQUIRED — do not skip):** the top story must include a relevant image. Place an `<img>` at the very top of the lead column, before the headline. The renderer sends a real User-Agent so Wikimedia thumbnails will load. Use:
   1. First choice: a **Wikimedia Commons thumbnail** in the form `https://upload.wikimedia.org/wikipedia/commons/thumb/.../640px-File.jpg`. Verify the URL via `web_search` before including.
   2. Fallback: a Wikipedia page's lead image, again in the `upload.wikimedia.org/.../thumb/.../640px-` form.
@@ -188,7 +196,7 @@ Hovering or focusing the `SOURCES` text reveals the popup; each source link is c
 - Section labels (e.g. "WEATHER", "CALENDAR"): `font-size: 7pt; letter-spacing: 0.05em; text-transform: uppercase; border-bottom: 0.5pt solid #000;`
 - Masthead text is exactly **The Linh Times** (no other phrasing). Style: `font-size: 30pt; text-align: center; font-weight: bold;`
 - Date line + weather strip: `font-size: 8pt; padding: 2pt 0;`
-- Stocks ticker footer: `font-size: 7pt;`. **Color the % change green when ≥ 0 and red when < 0.** Wrap the change in `<span style="color:#0a7d1f;">` for non-negative or `<span style="color:#b00020;">` for negative. Use the `+` sign on positive moves (e.g. `+2.3%`).
+- Stocks row (directly below weather strip — full width, NOT a footer): `font-size: 7pt;` `padding: 2pt 0;` separated from neighbouring rows with `border-bottom: 0.5pt solid #999;`. **Color the % change green when ≥ 0 and red when < 0.** Wrap the change in `<span style="color:#0a7d1f;">` for non-negative or `<span style="color:#b00020;">` for negative. Use the `+` sign on positive moves (e.g. `+2.3%`).
 - Paragraph margins: `margin: 0 0 3pt;`
 - Column gutter: 12pt; column-rule: `0.5pt solid #999`.
 - Use `<small>` for any tertiary text (7pt).

@@ -25,15 +25,19 @@ from app import claude_client
 
 log = logging.getLogger(__name__)
 
+# Bumped whenever the per-day prompt format changes — folded into the
+# fingerprint so old DB rows are auto-invalidated and regenerated.
+_PROMPT_VERSION = "v2-single-line"
+
 _DAY_SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
         "html": {
             "type": "string",
             "description": (
-                "Compact HTML for one calendar day. A <div> fragment with a "
-                "bold date heading and the event list beneath it. "
-                "No <section> wrapper — the caller assembles days into the section."
+                "Compact one-line HTML for a single calendar day — a <div> "
+                "containing the bold date and all events on one line, "
+                "separated by ' · '. No <section> wrapper, no <br>."
             ),
         }
     },
@@ -43,7 +47,11 @@ _DAY_SUMMARY_SCHEMA = {
 
 
 def _fingerprint(events: list[dict]) -> str:
-    """sha-256 of the fields that affect rendering, order-independent."""
+    """sha-256 of the fields that affect rendering, order-independent.
+
+    Includes _PROMPT_VERSION so a prompt change auto-invalidates every cached
+    summary on the next run.
+    """
     stable = sorted(
         [
             {
@@ -59,22 +67,38 @@ def _fingerprint(events: list[dict]) -> str:
         ],
         key=lambda x: (x["start"], x["summary"], x["ical_uid"]),
     )
-    payload = json.dumps(stable, sort_keys=True, ensure_ascii=False)
+    payload = json.dumps(
+        {"prompt": _PROMPT_VERSION, "events": stable},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
 _DAY_SYSTEM_PROMPT = (
-    "You produce compact HTML calendar snippets for a daily newspaper. "
-    "Given calendar events for a single day, output clean readable HTML.\n"
-    "Rules:\n"
-    "- Open with a bold date: <strong>Friday, May 2</strong>\n"
-    "- Timed events: show time in 12-hour format then the title.\n"
-    "- All-day events: prefix with a bullet •.\n"
-    "- Wrap the whole thing in a <div> — no <section>.\n"
-    "- No source links, no citations, no external URLs.\n"
-    "- Do NOT mention William or Elizabeth by name unless their name "
-    "appears verbatim in the event title.\n"
-    "- Keep it short and scannable."
+    "You format one calendar day's events as a compact, single-line HTML snippet "
+    "for a daily newspaper.\n"
+    "OUTPUT FORMAT — produce exactly this shape:\n"
+    "  <div><strong>Friday, May 2:</strong> 9:00 AM 📚 Library visit · "
+    "12:00 PM 🍕 Lunch with team · • 🎂 Dad's birthday</div>\n"
+    "RULES:\n"
+    "- All events for the day go on ONE line inside a single <div>. "
+    "Never use <br>, <ul>, <li>, or any vertical separator.\n"
+    "- Separate events with ' · ' (space, middle dot, space).\n"
+    "- Bold the date with <strong>…</strong> and follow it with a colon.\n"
+    "- Timed events: show the time in 12-hour format ('9:00 AM') before the title.\n"
+    "- All-day events: prefix with the bullet '•' (no time).\n"
+    "- Add ONE contextually relevant emoji to each event, placed between the "
+    "time/bullet and the event title (e.g. '9:00 AM 📚 Library visit', "
+    "'• 🎂 Dad's birthday'). Pick the emoji from the event title — birthday → 🎂, "
+    "soccer → ⚽, dance → 💃, school → 🏫, dentist/doctor → 🦷/🩺, dinner → 🍽, "
+    "flight/travel → ✈️, holiday → 🎉, etc. Use 📅 only as a last resort.\n"
+    "- HTML ONLY. NEVER use markdown syntax: do NOT write '**bold**', '*emphasis*', "
+    "'# heading', '- list', or backticks. Use <strong> tags instead of asterisks.\n"
+    "- No source links, no citations, no external URLs, no inline styles.\n"
+    "- Do NOT mention William or Elizabeth by name unless their name appears "
+    "verbatim in the event title.\n"
+    "- Keep it tight — the whole day fits on one line of newsprint."
 )
 _DAY_MODEL = "claude-haiku-4-5-20251001"
 _DAY_MAX_TOKENS = 800
@@ -180,9 +204,9 @@ def _batch_generate_days(
 
 
 def _plain_fallback(day: date, events: list[dict]) -> str:
-    """Pure-Python fallback when Claude is unavailable."""
+    """Pure-Python fallback (one-line, matches the LLM output format)."""
     day_label = f"{day.strftime('%A, %B')} {day.day}"
-    parts = [f"<div><strong>{day_label}</strong>"]
+    pieces: list[str] = []
     for e in sorted(events, key=lambda x: x.get("start", "")):
         start = e.get("start", "")
         title = e.get("summary", "(untitled)")
@@ -191,13 +215,12 @@ def _plain_fallback(day: date, events: list[dict]) -> str:
                 dt = datetime.fromisoformat(start)
                 h = dt.hour % 12 or 12
                 t = f"{h}:{dt.strftime('%M')} {'AM' if dt.hour < 12 else 'PM'}"
-                parts.append(f"<br>{t} {title}")
+                pieces.append(f"{t} {title}")
             except ValueError:
-                parts.append(f"<br>{title}")
+                pieces.append(title)
         else:
-            parts.append(f"<br>• {title}")
-    parts.append("</div>")
-    return "".join(parts)
+            pieces.append(f"• {title}")
+    return f"<div><strong>{day_label}:</strong> " + " · ".join(pieces) + "</div>"
 
 
 def _upsert_day(s: Session, day: date, html: str, fp: str, events_json: str) -> None:

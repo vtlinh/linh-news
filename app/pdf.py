@@ -87,7 +87,7 @@ def _drop_one_section(html: str) -> str | None:
 
 
 def html_to_pdf(html: str) -> bytes:
-    """Render print-styled HTML to a single-page US Letter PDF using WeasyPrint.
+    """Render print-styled HTML to a single-page 12×22 in PDF using WeasyPrint.
 
     Algorithm:
     1. Binary-search [5, 14]pt in 0.5pt steps for the LARGEST font that fits
@@ -130,7 +130,7 @@ def html_to_pdf(html: str) -> bytes:
         # Cap masthead independently so it stays readable even at large body sizes.
         h1_pt = min(base_pt * 3.75, 36.0)
         return CSS(string=f"""
-        @page {{ size: Letter; margin: 0.4in; }}
+        @page {{ size: 12in 22in; margin: 0.4in; }}
         html, body {{ font-family: "Times New Roman", Georgia, serif; }}
         body {{ font-size: {base_pt:.2f}pt !important; line-height: 1.15 !important; }}
         h1 {{ font-size: {h1_pt:.2f}pt !important; margin: 0 0 2pt !important;

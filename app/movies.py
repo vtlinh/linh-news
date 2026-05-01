@@ -38,14 +38,25 @@ MOVIES_SCHEMA = {
                         "type": "string",
                         "description": "1–2 sentence plot summary.",
                     },
-                    "trailer_url": {
+                    "trailers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Up to 3 canonical YouTube watch URLs of "
+                            "real, verified trailers/teasers (in the form "
+                            "https://www.youtube.com/watch?v=XXXXXXXXXXX). "
+                            "Empty array if no trailers are available. "
+                            "Do NOT use search URLs, embeds, or short links."
+                        ),
+                    },
+                    "poster_url": {
                         "type": "string",
                         "description": (
-                            "Canonical YouTube watch URL of the official "
-                            "trailer (https://www.youtube.com/watch?v=XXXXXXXXXXX). "
-                            "Omit this field entirely if you cannot find a "
-                            "real, verified trailer. Do NOT use search URLs, "
-                            "embeds, or short links."
+                            "Public URL of the movie poster image. Prefer "
+                            "Wikimedia Commons "
+                            "(https://upload.wikimedia.org/wikipedia/commons/...) "
+                            "or Wikipedia thumbnails. Omit entirely if no "
+                            "verifiable poster URL is available."
                         ),
                     },
                 },
@@ -80,14 +91,16 @@ def fetch_year_movie_list() -> list[dict]:
         f"Allowed MPAA ratings: {ratings}. The audience is a {age}-year-old, "
         f"so include only films a parent would consider watching with that "
         f"age.\n\nFor each movie include: official title, MPAA rating, "
-        f"wide-release date (ISO), status, and a one or two sentence plot "
-        f"summary. Also include trailer_url when you can find an actual, "
-        f"verified YouTube watch URL of the official trailer "
-        f"(https://www.youtube.com/watch?v=<11-char id>). Use web_search to "
-        f"find the real video — do not invent IDs, do not use search URLs, "
-        f"do not use embed or short-link URLs. If you cannot find a real "
-        f"trailer for a movie, omit the trailer_url field for that movie. "
-        f"Sort by release_date ascending. When done, call return_movies."
+        f"wide-release date (ISO), status, and a 2-3 sentence plot summary. "
+        f"Use web_search to find a real movie poster image URL (poster_url; "
+        f"prefer upload.wikimedia.org/wikipedia/commons/... thumbnails) and "
+        f"up to 3 real trailer YouTube watch URLs (trailers; "
+        f"https://www.youtube.com/watch?v=<11-char id>). Verify each "
+        f"poster/trailer URL via web_search before including. Do not invent "
+        f"IDs, do not use search URLs, do not use embed or short-link URLs. "
+        f"If a movie has no verified trailers, return trailers=[]. If no "
+        f"poster, omit poster_url for that movie. Sort by release_date "
+        f"ascending. When done, call return_movies."
     )
     out = claude_client.call_with_schema(
         system=system,

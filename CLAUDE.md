@@ -62,6 +62,10 @@ Server-side enforcement via `require_viewer` and `require_admin` FastAPI depende
 
 Sources rendering is HTML-only — never include source citations in `pdf_html`.
 
+## Push hygiene
+
+Whenever you push to GitHub, also re-read [README.md](README.md) and update it if it has drifted from reality. Stale README is a real problem — admin pages, deployment commands, and feature lists all change frequently. Keep it current with each push.
+
 ## Verifying generated content
 
 Whenever you trigger a new edition (e.g. `python -m app.generate refresh`, calling `/refresh`, or making a change that affects the prompt or the data assembled into it), **always verify the result before declaring success**:

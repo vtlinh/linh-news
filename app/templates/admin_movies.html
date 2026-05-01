@@ -5,8 +5,9 @@
   <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Movies (next 12 months)</h1>
 </header>
 <main>
-  <p>Tick to hide a movie from the daily edition. Untick to restore. The list
-     covers everything in theaters now plus releases in the next year.</p>
+  <p>Tick the corner of a card to hide that movie from the daily edition.
+     Untick to restore. The list covers everything in theaters now plus
+     releases in the next year.</p>
   <fieldset style="border:1px solid var(--rule); padding:8px 12px; margin-bottom:1em;">
     <legend style="font-weight:600;">MPAA rating</legend>
     <div style="display:flex; gap:14px; flex-wrap:wrap;">
@@ -16,76 +17,205 @@
       {% endfor %}
     </div>
   </fieldset>
-  <table style="width:100%; border-collapse:collapse;">
-    <thead><tr>
-      <th></th>
-      <th align="left" style="white-space: nowrap; padding-right: 32px;">Release</th>
-      <th align="left">Title</th>
-    </tr></thead>
-    <tbody id="movies-tbody"></tbody>
-  </table>
+
+  <div id="movies-grid" class="movies-grid"></div>
   <p id="movies-status" style="text-align:center; padding:8px; color:var(--muted);">
     Loading…
   </p>
 </main>
+
+<style>
+  .movies-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 18px;
+  }
+  /* Force 4-col grid on wide screens like the user asked. */
+  @media (min-width: 1200px) {
+    .movies-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  .movie-tile {
+    position: relative;
+    border: 1px solid var(--rule);
+    background: #fff;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .movie-tile.hidden-state { opacity: 0.5; }
+  .movie-poster {
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    background: #eee center / cover no-repeat;
+    display: block;
+  }
+  .movie-poster.no-image {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 0.85em;
+  }
+  .movie-tile .hide-corner {
+    position: absolute;
+    top: 6px; right: 6px;
+    width: 26px; height: 26px;
+    background: rgba(255,255,255,0.85);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .movie-tile .hide-corner input { margin: 0; cursor: pointer; }
+  .movie-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .movie-title { font-weight: 700; font-size: 1.02em; line-height: 1.25; }
+  .movie-subtitle { font-size: 0.85em; color: var(--muted); }
+  .movie-summary { font-size: 0.9em; line-height: 1.4; }
+  .movie-summary .more-btn {
+    background: none; border: 0; padding: 0 0 0 4px;
+    color: var(--accent); cursor: pointer; font: inherit;
+  }
+  .movie-trailers {
+    margin-top: auto;
+    padding: 8px 12px;
+    border-top: 1px solid var(--rule);
+  }
+  .trailer-btn {
+    display: inline-block;
+    padding: 6px 10px;
+    border: 1px solid var(--fg); border-radius: 4px;
+    background: #fff; color: var(--fg);
+    font: inherit; font-size: 0.85em;
+    cursor: pointer; text-decoration: none;
+  }
+  .trailer-btn:hover { background: var(--fg); color: #fff; }
+</style>
 {% endblock %}
 {% block scripts %}
 <script>
-  const tbody = document.getElementById('movies-tbody');
+  const grid = document.getElementById('movies-grid');
   const statusEl = document.getElementById('movies-status');
-
-  function buildRow(m) {
-    const tr = document.createElement('tr');
-    tr.style.borderTop = '1px solid var(--rule)';
-
-    const tdHide = document.createElement('td');
-    tdHide.setAttribute('align', 'center');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.className = 'movie-toggle';
-    cb.dataset.title = m.title;
-    cb.title = 'Hide from daily edition';
-    if (m.hidden) cb.checked = true;
-    tdHide.appendChild(cb);
-
-    const tdDate = document.createElement('td');
-    tdDate.style.whiteSpace = 'nowrap';
-    tdDate.style.paddingRight = '32px';
-    tdDate.textContent = m.release_date || '';
-
-    const tdTitle = document.createElement('td');
-    const titleSpan = document.createElement('span');
-    titleSpan.textContent = m.title;
-    tdTitle.appendChild(titleSpan);
-    if (m.trailer_url && /^https:\/\/www\.youtube\.com\/watch\?v=/.test(m.trailer_url)) {
-      const a = document.createElement('a');
-      a.href = m.trailer_url;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.textContent = '▶ Trailer';
-      a.style.marginLeft = '10px';
-      a.style.fontSize = '0.85em';
-      a.style.color = 'var(--accent)';
-      a.style.textDecoration = 'none';
-      tdTitle.appendChild(a);
-    }
-    if (m.summary) {
-      const sub = document.createElement('div');
-      sub.style.fontSize = '0.85em';
-      sub.style.color = 'var(--muted)';
-      sub.textContent = m.summary;
-      tdTitle.appendChild(sub);
-    }
-
-    if (m.hidden) tr.style.opacity = '0.55';
-
-    tr.append(tdHide, tdDate, tdTitle);
-    return tr;
-  }
 
   function selectedRatings() {
     return Array.from(document.querySelectorAll('input.rating-filter:checked'))
       .map(cb => cb.value);
+  }
+
+  function isYouTubeWatch(url) {
+    return typeof url === 'string'
+      && /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{8,}/.test(url);
+  }
+
+  function buildSummary(text) {
+    const wrap = document.createElement('div');
+    wrap.className = 'movie-summary';
+    const words = (text || '').trim().split(/\s+/).filter(Boolean);
+    const LIMIT = 50;
+    if (words.length <= LIMIT) {
+      wrap.textContent = text || '';
+      return wrap;
+    }
+    const shortText = words.slice(0, LIMIT).join(' ') + '…';
+    const shortSpan = document.createElement('span');
+    shortSpan.textContent = shortText + ' ';
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'more-btn';
+    moreBtn.textContent = 'More';
+    moreBtn.addEventListener('click', () => {
+      wrap.textContent = text;
+    });
+    wrap.append(shortSpan, moreBtn);
+    return wrap;
+  }
+
+  function buildTrailers(trailers) {
+    const valid = (trailers || []).filter(isYouTubeWatch);
+    if (valid.length === 0) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'movie-trailers';
+    if (valid.length === 1) {
+      const a = document.createElement('a');
+      a.className = 'trailer-btn';
+      a.href = valid[0];
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = '▶ Trailer';
+      wrap.appendChild(a);
+    } else {
+      const span = document.createElement('span');
+      span.className = 'sources trailer-btn';
+      span.tabIndex = 0;
+      span.textContent = '▶ Trailers';
+      // Match sources-popup styles: hover-revealed list of YouTube links.
+      span.style.fontSize = '0.85em';
+      span.style.letterSpacing = 'normal';
+      span.style.color = 'var(--fg)';
+      span.style.borderBottom = '0';
+      const popup = document.createElement('span');
+      popup.className = 'sources-popup';
+      valid.forEach((url, i) => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = i === 0 ? 'Official Trailer' : `Trailer ${i + 1}`;
+        popup.appendChild(a);
+      });
+      span.appendChild(popup);
+      wrap.appendChild(span);
+    }
+    return wrap;
+  }
+
+  function buildTile(m) {
+    const tile = document.createElement('div');
+    tile.className = 'movie-tile';
+    if (m.hidden) tile.classList.add('hidden-state');
+
+    // Poster + corner checkbox.
+    const poster = document.createElement('div');
+    poster.className = 'movie-poster';
+    if (m.poster_url) {
+      poster.style.backgroundImage = `url("${m.poster_url.replace(/"/g, '\\"')}")`;
+    } else {
+      poster.classList.add('no-image');
+      poster.textContent = 'No poster';
+    }
+    const corner = document.createElement('label');
+    corner.className = 'hide-corner';
+    corner.title = 'Hide from daily edition';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'movie-toggle';
+    cb.dataset.title = m.title;
+    if (m.hidden) cb.checked = true;
+    corner.appendChild(cb);
+    poster.appendChild(corner);
+    tile.appendChild(poster);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'movie-body';
+    const title = document.createElement('div');
+    title.className = 'movie-title';
+    title.textContent = m.title;
+    body.appendChild(title);
+
+    if (m.release_date) {
+      const sub = document.createElement('div');
+      sub.className = 'movie-subtitle';
+      sub.textContent = m.status === 'in_theaters'
+        ? `In theaters since ${m.release_date}`
+        : `Opens ${m.release_date}`;
+      body.appendChild(sub);
+    }
+
+    body.appendChild(buildSummary(m.summary));
+    tile.appendChild(body);
+
+    const trailers = buildTrailers(m.trailers);
+    if (trailers) tile.appendChild(trailers);
+
+    return tile;
   }
 
   async function load(force) {
@@ -97,23 +227,21 @@
       const r = await fetch('/admin/movies/data?' + params.toString());
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
-      tbody.replaceChildren();
-      for (const m of data.movies) tbody.appendChild(buildRow(m));
-      const ageMin = data.cache_age_seconds == null
-        ? 'just now' : `${Math.round(data.cache_age_seconds / 60)} min ago`;
-      statusEl.textContent = `${data.movies.length} movies · cache updated ${ageMin}`;
+      grid.replaceChildren();
+      for (const m of data.movies) grid.appendChild(buildTile(m));
+      statusEl.textContent = `${data.movies.length} movies`;
     } catch (e) {
       statusEl.textContent = 'Failed to load.';
       window.toast('Load failed', true);
     }
   }
 
-  tbody.addEventListener('change', async (ev) => {
+  grid.addEventListener('change', async (ev) => {
     const cb = ev.target.closest('input.movie-toggle');
     if (!cb) return;
     const title = cb.dataset.title;
     const hidden = cb.checked;
-    const tr = cb.closest('tr');
+    const tile = cb.closest('.movie-tile');
     cb.disabled = true;
     try {
       const r = await fetch('/admin/movies/toggle', {
@@ -122,7 +250,7 @@
         body: JSON.stringify({title, hidden})
       });
       if (!r.ok) throw new Error(await r.text());
-      tr.style.opacity = hidden ? '0.55' : '';
+      tile.classList.toggle('hidden-state', hidden);
       window.toast(hidden ? `Hidden: ${title}` : `Restored: ${title}`);
     } catch (e) {
       cb.checked = !hidden;

@@ -33,6 +33,7 @@ def run(slot: Slot, today: date | None = None) -> date:
 
     response = claude_client.generate_edition(template, ctx)
     response["html"] = _strip_document_wrapper(response["html"])
+    response["pdf_html"] = _inject_lead_image(response["pdf_html"], today)
     response["pdf_html"] = _ensure_lead_image(response["pdf_html"])
     pdf_bytes = pdf.html_to_pdf(response["pdf_html"])
 
@@ -169,6 +170,90 @@ def _url_alive(url: str, timeout: float = 8.0) -> bool:
             return 200 <= r.status < 300 and ctype.startswith("image/")
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
         return False
+
+
+_H2_RE = re.compile(r"<h2[^>]*>(.*?)</h2\s*>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+_LEAD_IMAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "image_url": {
+            "type": "string",
+            "description": (
+                "Direct URL to a real, publicly accessible image for the headline. "
+                "Prefer Wikimedia Commons thumbnails: "
+                "https://upload.wikimedia.org/wikipedia/commons/thumb/.../NNNpx-file.jpg. "
+                "Must be a working image URL — verify via web_search before returning."
+            ),
+        },
+        "alt_text": {"type": "string", "description": "Brief alt text for the image."},
+    },
+    "required": ["image_url", "alt_text"],
+    "additionalProperties": False,
+}
+
+
+def _extract_lead_headline(pdf_html: str) -> str | None:
+    """Return the text of the first <h2> in the PDF HTML (the lead story)."""
+    m = _H2_RE.search(pdf_html)
+    if not m:
+        return None
+    return _TAG_RE.sub("", m.group(1)).strip() or None
+
+
+def _inject_lead_image(pdf_html: str, today: date) -> str:
+    """Ask Claude (with web_search) for a real image matching the lead headline,
+    then replace/inject an <img> at the top of the PDF HTML."""
+    headline = _extract_lead_headline(pdf_html)
+    if not headline:
+        log.warning("Could not extract lead headline — skipping image lookup")
+        return pdf_html
+
+    log.info("Fetching lead image for headline: %r", headline[:120])
+    try:
+        result = claude_client.call_with_schema(
+            system=(
+                "You are finding a single real image for a newspaper PDF. "
+                "Use web_search to locate a publicly accessible, directly embeddable "
+                "image URL. Prefer Wikimedia Commons thumbnails. "
+                "Never invent URLs."
+            ),
+            user=(
+                f"Date: {today.isoformat()}\n"
+                f"Lead headline: {headline}\n\n"
+                "Search for the most appropriate real image for this story. "
+                "Return a working direct image URL (not a page URL, not a search URL). "
+                "Verify the URL is reachable via web_search before calling return_image."
+            ),
+            schema=_LEAD_IMAGE_SCHEMA,
+            schema_name="return_image",
+            schema_description="Return the verified image URL for the lead story.",
+            extra_tools=[claude_client.WEB_SEARCH_TOOL],
+            max_tokens=4000,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("Lead-image lookup failed: %s", e)
+        return pdf_html
+
+    image_url = (result.get("image_url") or "").strip()
+    alt_text = (result.get("alt_text") or headline[:80]).strip()
+
+    if not image_url:
+        log.warning("Claude returned no image_url for headline %r", headline[:80])
+        return pdf_html
+
+    log.info("Lead image URL: %s", image_url)
+
+    img_tag = (
+        f'<img src="{image_url}" alt="{alt_text}" '
+        f'style="width:100%; max-height:1.6in; object-fit:cover; margin:0 0 4pt;">'
+    )
+    # Replace any existing <img> tag(s) that appear before the first <h2>,
+    # then inject our verified image immediately before the lead headline.
+    before_h2 = _H2_RE.split(pdf_html)[0]
+    stripped = _IMG_TAG_RE.sub("", before_h2)  # remove old lead images
+    return stripped + img_tag + pdf_html[len(before_h2):]
 
 
 def _ensure_lead_image(pdf_html: str) -> str:

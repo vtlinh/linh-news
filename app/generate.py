@@ -95,7 +95,6 @@ def run(slot: Slot, today: date | None = None) -> date:
 def _build_context(s: Session, today: date, slot: Slot) -> dict:
     settings = get_settings()
     horizon = today + timedelta(days=30)
-    tomorrow = today + timedelta(days=1)
 
     with _step("overlays (hidden movies + watchlist)"):
         hidden_movies = overlays.active_hidden_movie_titles(s, today)

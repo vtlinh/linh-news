@@ -26,9 +26,9 @@ EDITION_SCHEMA: dict[str, Any] = {
         "pdf_html": {
             "type": "string",
             "description": (
-                "Print-styled one-page HTML for WeasyPrint, NYT-front-page "
-                "aesthetic. NO source citations, NO interactive buttons. "
-                "Must fit on exactly one US Letter page."
+                "Print-styled one-page HTML for WeasyPrint, NYT-broadsheet "
+                "aesthetic on a 12×22 in page. NO source citations, NO "
+                "interactive buttons. Must fit on exactly one page."
             ),
         },
     },

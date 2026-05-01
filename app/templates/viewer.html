@@ -32,7 +32,12 @@
     {{ edition_html | safe }}
   {% else %}
     <section><h2>No edition for {{ edition_date }} yet.</h2>
-      <p>Click <strong>Refresh</strong> to generate today's edition.</p></section>
+      {% if is_admin %}
+        <p>Click <strong>Refresh</strong> to generate today's edition.</p>
+      {% else %}
+        <p>The next edition will appear here once it's generated.</p>
+      {% endif %}
+    </section>
   {% endif %}
 </main>
 {% endblock %}

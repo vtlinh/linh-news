@@ -23,8 +23,18 @@ _DEFAULT_FONT_GUESS = 12.0
 _BLANK_TARGET = 0.20  # tolerate up to 20% blank space
 
 
+import math
+
+
 def _round_half(x: float) -> float:
+    """Round to nearest 0.5pt (used for the bumped/fallback attempts)."""
     return round(x / _FONT_STEP) * _FONT_STEP
+
+
+def _floor_half(x: float) -> float:
+    """Round DOWN to nearest 0.5pt — used for the first attempt so the
+    'predicted - 0.2pt' conservative margin isn't lost to rounding."""
+    return math.floor(x / _FONT_STEP) * _FONT_STEP
 
 
 def _count_words(html: str) -> int:
@@ -343,7 +353,7 @@ def html_to_pdf(html: str) -> bytes:
     word_count = _count_words(html)
     samples = _load_font_samples()
     predicted = _predict_font(word_count, samples)
-    first_pt = _round_half(max(_FONT_MIN, min(_FONT_MAX, predicted - 0.2)))
+    first_pt = _floor_half(max(_FONT_MIN, min(_FONT_MAX, predicted - 0.2)))
 
     log.info(
         "PDF font: %d words, %d cached samples → predicted %.2fpt → trying %.1fpt",

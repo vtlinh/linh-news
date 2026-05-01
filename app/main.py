@@ -183,7 +183,10 @@ def pdf_latest(
     if not expected or not token or token != expected:
         raise HTTPException(401, "Invalid or missing token")
     edition = s.execute(
-        select(Edition).order_by(Edition.date.desc()).limit(1)
+        select(Edition)
+        .order_by(Edition.date.desc())
+        .options(defer(Edition.html), defer(Edition.pdf_html))
+        .limit(1)
     ).scalar_one_or_none()
     if not edition:
         raise HTTPException(404, "No editions available yet")
@@ -201,7 +204,11 @@ def view_pdf(
     s: Session = Depends(get_session),
     email: str = Depends(auth.require_viewer),
 ):
-    edition = s.get(Edition, _parse_date(day))
+    edition = s.execute(
+        select(Edition)
+        .where(Edition.date == _parse_date(day))
+        .options(defer(Edition.html), defer(Edition.pdf_html))
+    ).scalar_one_or_none()
     if not edition:
         raise HTTPException(404, "No edition for that date")
     return Response(
@@ -303,9 +310,12 @@ def edition_freshness(
     s: Session = Depends(get_session),
     email: str = Depends(auth.require_viewer),
 ):
-    edition = s.get(Edition, _parse_date(day))
+    # Only need generated_at — skip the multi-MB pdf / pdf_html / html columns.
+    row = s.execute(
+        select(Edition.generated_at).where(Edition.date == _parse_date(day))
+    ).scalar_one_or_none()
     return {
-        "generated_at": edition.generated_at.isoformat() if edition else None,
+        "generated_at": row.isoformat() if row else None,
         "refresh_in_progress": cache.edition_refresh_in_progress(),
         "last_error": cache.get_recent_edition_refresh_error(),
         "expected_seconds": cache.expected_refresh_seconds(),

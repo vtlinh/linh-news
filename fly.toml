@@ -12,6 +12,7 @@ force_https = true
 auto_stop_machines = true
 auto_start_machines = true
 min_machines_running = 0
+processes = ["app"]
 
 [[http_service.checks]]
 grace_period = "10s"
@@ -30,9 +31,7 @@ release_command = "uv run alembic upgrade head"
 [processes]
 app = "uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
-[[mounts]]
-source = "linh_news_data"
-destination = "/data"
+# No persistent volume needed — Postgres holds all state.
 
 # Scheduled machines (cron) — run the same image with a different command.
 # Times are evaluated in TZ=America/New_York (set in [env] above).

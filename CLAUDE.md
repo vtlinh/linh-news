@@ -17,14 +17,14 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 - LLM: Anthropic API (`claude-opus-4-7`) with the `web_search_20250305` tool. Use prompt caching on the static `news.pr` block.
 - PDF: WeasyPrint (system serif fonts, US Letter, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
-- Hosting: Fly.io app + scheduled machines (cron at `0 0 * * *` and `0 12 * * *`, TZ `America/New_York`).
+- Hosting: Fly.io app + scheduled machines (cron at `0 7 * * *` and `0 19 * * *` — 7 AM and 7 PM, TZ `America/New_York`).
 
 ## Common commands
 
 ```bash
 uv sync                                  # install / update from uv.lock
 uv run uvicorn app.main:app --reload     # run web server
-uv run python -m app.generate noon       # one generation cycle (slot: midnight|noon|refresh)
+uv run python -m app.generate morning    # one generation cycle (slot: morning|evening|refresh)
 uv run alembic upgrade head              # apply migrations
 uv run alembic revision --autogenerate -m "msg"
 uv run pytest                            # all tests
@@ -38,7 +38,7 @@ fly deploy                               # deploy app + scheduled machines
 
 Two entry points share the same generation pipeline:
 
-1. **Cron** (`0 0` and `0 12`) → Fly scheduled machine runs `python -m app.generate <slot>`.
+1. **Cron** (`0 7` and `0 19` in `America/New_York`) → Fly scheduled machine runs `python -m app.generate <slot>`.
 2. **POST /refresh** (any authorized viewer) → server runs the same `app.generate` flow inline.
 
 Pipeline (`app/generate.py`):
@@ -47,7 +47,7 @@ Pipeline (`app/generate.py`):
 3. Live-list Google calendars (so newly subscribed ones appear automatically) and fetch events for `[today, today+30d]` from non-hidden calendars; drop past events.
 4. Substitute `{{...}}` placeholders into `news.pr` and call Claude with `web_search`.
 5. Parse the strict-JSON response into `html` + `pdf_html`. Render `pdf_html` through WeasyPrint.
-6. **Latest-wins upsert** into `editions` keyed by `date` — no `slot` column. Noon overwrites midnight; a manual refresh after noon overwrites that.
+6. **Latest-wins upsert** into `editions` keyed by `date` — no `slot` column. The 7 PM run overwrites the 7 AM run; a manual refresh after that overwrites that.
 
 ## Auth model (two tiers)
 
@@ -61,6 +61,23 @@ Server-side enforcement via `require_viewer` and `require_admin` FastAPI depende
 `news.pr` at the repo root is the prompt template, with `{{...}}` placeholders filled at generation time. The fenced `<!-- CUSTOM_TOPICS_BEGIN --> ... <!-- CUSTOM_TOPICS_END -->` block is a freeform area the user edits to add new topic instructions; everything inside it is forwarded verbatim into the prompt. Keep the fence intact when editing.
 
 Sources rendering is HTML-only — never include source citations in `pdf_html`.
+
+## Verifying generated content
+
+Whenever you trigger a new edition (e.g. `python -m app.generate refresh`, calling `/refresh`, or making a change that affects the prompt or the data assembled into it), **always verify the result before declaring success**:
+
+1. **HTML loaded into the DB**: query the `editions` row for that date and confirm `html` is non-empty and `pdf` starts with `%PDF`.
+2. **Sections present and sensible**:
+   - Each requested section (politics, NJ/NY, Dorchester, finance, AI, stocks, movies, weather, calendar) appears only if it has fresh, dated content.
+   - News items end with a `Sources:` line; tooltips hold the URL.
+   - Stocks: a "why it moved" blurb appears **only** when the daily move is > ±5%.
+   - Movies: hidden titles are absent; early-access vs. wide-release dedupe is correct; old re-releases (>1 year old) skipped.
+   - Weather is for Woodcliff Lake 07677.
+   - Calendar: no past events, hidden calendars excluded, important all-day events surface with appropriate lead time.
+3. **PDF**: open it (or call `app.pdf.page_count`) and confirm one US Letter page, NYT-style masthead, no source citations, no Hide buttons.
+4. **Sanity-check the *content*, not just the structure**: spot-check a couple of facts. If a section has stale or invented information, treat the run as failed and re-trigger after fixing the prompt or input data — don't ship plausible-looking garbage.
+
+If any of the above fails, fix the underlying issue (prompt, overlays, calendar fetch, etc.) and re-generate. Never report a generation as successful purely because the run exited 0.
 
 ## Things to be careful about
 

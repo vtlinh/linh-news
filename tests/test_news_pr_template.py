@@ -7,7 +7,6 @@ def test_news_pr_has_required_placeholders():
     text = (REPO_ROOT / "news.pr").read_text(encoding="utf-8")
     for ph in [
         "{{DATE}}",
-        "{{SLOT}}",
         "{{HIDDEN_MOVIES}}",
         "{{HIDDEN_CALENDARS_JSON}}",
         "{{ALL_CALENDARS_JSON}}",

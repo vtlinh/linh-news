@@ -21,6 +21,10 @@ from app.settings import get_settings
 
 CALENDAR_SCOPE = ["https://www.googleapis.com/auth/calendar.readonly"]
 
+# Fixed local port so the redirect URI is stable. Register
+# http://localhost:8765/ as an Authorized redirect URI on the OAuth client.
+OAUTH_LOCAL_PORT = 53129
+
 
 def main() -> None:
     s = get_settings()
@@ -33,11 +37,11 @@ def main() -> None:
             "client_secret": s.google_client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost"],
+            "redirect_uris": [f"http://localhost:{OAUTH_LOCAL_PORT}/"],
         }
     }
     flow = InstalledAppFlow.from_client_config(client_config, CALENDAR_SCOPE)
-    creds = flow.run_local_server(port=0, prompt="consent", access_type="offline")
+    creds = flow.run_local_server(port=OAUTH_LOCAL_PORT, prompt="consent", access_type="offline")
     if not creds.refresh_token:
         raise SystemExit("No refresh token returned. Re-run with prompt=consent.")
 

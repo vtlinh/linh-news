@@ -1,31 +1,242 @@
 {% extends "base.html" %}
-{% block title %}Admin · Calendars{% endblock %}
+{% block title %}Admin · Calendars & Events{% endblock %}
 {% block body %}
-<header class="site"><h1>Calendars</h1>
-  <div class="spacer"></div><div class="actions"><a href="/">← Back</a></div>
+<header class="site admin">
+  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Calendars &amp; Events</h1>
 </header>
 <main>
-  <p>All Google calendars subscribed by Linh. Hidden calendars are excluded
-     from event fetching during generation.</p>
-  <form method="post" action="/admin/calendars">
-    <table style="width:100%; border-collapse:collapse;">
-      <thead><tr><th align="left">Calendar</th><th>Hidden?</th></tr></thead>
+  <details class="collapsible">
+    <summary>
+      <span style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <strong><span class="chev">▶</span>Calendars ({{ calendars|length }})</strong>
+        <strong class="hidden-col-label">Hidden?</strong>
+      </span>
+    </summary>
+    <table style="width:100%; border-collapse:collapse; margin-top:8px;">
       <tbody>
       {% for cal in calendars %}
         <tr style="border-top:1px solid var(--rule);">
           <td>{{ cal.name }}{% if cal.primary %} <small>(primary)</small>{% endif %}
               <br><small style="color:var(--muted);">{{ cal.id }}</small></td>
-          <td align="center">
-            <input type="checkbox" name="hidden" value="{{ cal.id }}"
+          <td align="center" style="width:80px;">
+            <input type="checkbox" class="calendar-toggle" data-cal-id="{{ cal.id }}"
                    {% if cal.id in hidden_ids %}checked{% endif %} />
           </td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
-    <button type="submit" class="actions" style="margin-top:12px; padding:10px 16px;">
-      Save
-    </button>
-  </form>
+  </details>
+
+  <h2 style="margin-top:1.5em;">Events</h2>
+  <table style="width:100%; border-collapse:collapse;">
+    <thead><tr>
+      <th title="Mark as important">⭐</th>
+      <th title="Hide from edition">🚫</th>
+      <th align="left">Date</th><th align="left">Event</th><th align="left">Calendar</th>
+    </tr></thead>
+    <tbody id="events-tbody"></tbody>
+  </table>
+  <div id="events-sentinel" style="height:32px; text-align:center; padding:8px; color:var(--muted);">
+    Loading...
+  </div>
 </main>
+{% endblock %}
+{% block scripts %}
+<script>
+  // ── Calendar toggles ───────────────────────────────────────────────
+  document.querySelectorAll('input.calendar-toggle').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const calendar_id = cb.dataset.calId;
+      const hidden = cb.checked;
+      cb.disabled = true;
+      try {
+        const r = await fetch('/admin/calendars/toggle', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({calendar_id, hidden})
+        });
+        if (!r.ok) throw new Error(await r.text());
+        if (hidden) {
+          // Hide instantly in-place: drop any rendered rows that belong to
+          // this calendar's name. (Server already filters at read time, but
+          // we keep what's already on screen tidy.)
+          const calName = cb.closest('tr').querySelector('td').firstChild.textContent.trim();
+          tbody.querySelectorAll('tr').forEach(tr => {
+            const cell = tr.querySelector('td:nth-child(5) small');
+            if (cell && cell.textContent.trim() === calName) tr.remove();
+          });
+          window.toast('Calendar hidden');
+        } else {
+          // Un-hide: cache was invalidated server-side. Pull a fresh page
+          // (which will trigger a Google re-fetch including this calendar).
+          tbody.replaceChildren();
+          offset = 0; hasMore = true; loading = false;
+          sentinel.textContent = 'Fetching…';
+          await loadPage();
+          window.toast('Calendar shown — events refreshed');
+        }
+      } catch (e) {
+        cb.checked = !hidden;
+        window.toast('Save failed', true);
+      } finally {
+        cb.disabled = false;
+      }
+    });
+  });
+
+  // ── Events list (infinite scroll, instant-save toggles) ────────────
+  const tbody = document.getElementById('events-tbody');
+  const sentinel = document.getElementById('events-sentinel');
+  const PAGE = 50;
+  let offset = 0, hasMore = true, loading = false;
+
+  function makeCell(text, opts) {
+    const td = document.createElement('td');
+    if (opts && opts.align) td.setAttribute('align', opts.align);
+    if (text != null) td.textContent = text;
+    return td;
+  }
+
+  function buildRow(ev) {
+    const tr = document.createElement('tr');
+    tr.style.borderTop = '1px solid var(--rule)';
+
+    const tdImp = makeCell(null, {align: 'center'});
+    const cbImp = document.createElement('input');
+    cbImp.type = 'checkbox';
+    cbImp.className = 'event-toggle';
+    cbImp.dataset.icalUid = ev.ical_uid;
+    if (ev.important) cbImp.checked = true;
+    if (ev.locked) {
+      cbImp.disabled = true;
+      cbImp.title = 'Auto-marked by rule (always important).';
+    }
+    if (ev.suppressed) cbImp.disabled = true;
+    tdImp.appendChild(cbImp);
+
+    const tdSup = makeCell(null, {align: 'center'});
+    const cbSup = document.createElement('input');
+    cbSup.type = 'checkbox';
+    cbSup.className = 'event-suppress';
+    cbSup.dataset.icalUid = ev.ical_uid;
+    cbSup.title = 'Hide from HTML and PDF';
+    if (ev.suppressed) cbSup.checked = true;
+    if (ev.locked) {
+      cbSup.disabled = true;
+      cbSup.title = 'Auto-marked rules cannot be suppressed.';
+    }
+    tdSup.appendChild(cbSup);
+
+    const tdDate = document.createElement('td');
+    tdDate.textContent = ev.date;
+    if (ev.recurring) {
+      const small = document.createElement('small');
+      small.textContent = ' (repeats)';
+      tdDate.appendChild(small);
+    }
+
+    const tdTitle = makeCell(ev.title);
+
+    const tdCal = document.createElement('td');
+    const small = document.createElement('small');
+    small.style.color = 'var(--muted)';
+    small.textContent = ev.calendar_name || '';
+    tdCal.appendChild(small);
+
+    if (ev.suppressed) tr.style.opacity = '0.55';
+    tr.append(tdImp, tdSup, tdDate, tdTitle, tdCal);
+    return tr;
+  }
+
+  async function loadPage() {
+    if (loading || !hasMore) return;
+    loading = true;
+    try {
+      const r = await fetch(`/admin/events/data?offset=${offset}&limit=${PAGE}`);
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      for (const ev of data.events) tbody.appendChild(buildRow(ev));
+      offset += data.events.length;
+      hasMore = data.has_more;
+      if (!hasMore) sentinel.textContent = `${data.total} events.`;
+    } catch (e) {
+      sentinel.textContent = 'Failed to load.';
+      window.toast('Load failed', true);
+    } finally {
+      loading = false;
+    }
+  }
+
+  const io = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadPage();
+  }, {rootMargin: '200px'});
+  io.observe(sentinel);
+
+  async function postToggle(url, payload, undo) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return true;
+    } catch (e) {
+      if (undo) undo();
+      window.toast('Save failed', true);
+      return false;
+    }
+  }
+
+  tbody.addEventListener('change', async (ev) => {
+    const t = ev.target;
+    if (t.matches('input.event-toggle')) {
+      const ical_uid = t.dataset.icalUid;
+      const important = t.checked;
+      t.disabled = true;
+      const ok = await postToggle('/admin/events/toggle',
+        {ical_uid, important}, () => { t.checked = !important; });
+      if (ok) window.toast(important ? 'Marked as important' : 'Removed');
+      t.disabled = false;
+    } else if (t.matches('input.event-suppress')) {
+      const ical_uid = t.dataset.icalUid;
+      const suppressed = t.checked;
+      t.disabled = true;
+      const row = t.closest('tr');
+      const impCb = row.querySelector('input.event-toggle');
+      const ok = await postToggle('/admin/events/suppress',
+        {ical_uid, suppressed}, () => { t.checked = !suppressed; });
+      if (ok) {
+        window.toast(suppressed ? 'Hidden from edition' : 'Restored');
+        if (impCb) {
+          if (suppressed) { impCb.checked = false; impCb.disabled = true; }
+          else { impCb.disabled = false; }
+        }
+        row.style.opacity = suppressed ? '0.55' : '';
+      }
+      t.disabled = false;
+    }
+  });
+
+  loadPage();
+
+  // Poll cache freshness; reload when a background refresh produced new data.
+  let initialFreshness = null;
+  async function checkFreshness() {
+    try {
+      const r = await fetch('/admin/events/freshness');
+      if (!r.ok) return;
+      const {updated_at} = await r.json();
+      if (initialFreshness === null) {
+        initialFreshness = updated_at;
+      } else if (updated_at > initialFreshness) {
+        window.toast('Calendar data refreshed — reloading…');
+        setTimeout(() => location.reload(), 600);
+      }
+    } catch {}
+  }
+  setInterval(checkFreshness, 5000);
+  checkFreshness();
+</script>
 {% endblock %}

@@ -1,36 +1,180 @@
 {% extends "base.html" %}
 {% block title %}Admin · Important Events{% endblock %}
 {% block body %}
-<header class="site"><h1>Important Events</h1>
-  <div class="spacer"></div>
-  <div class="actions"><a href="/">← Back</a></div>
+<header class="site admin">
+  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Important Events</h1>
 </header>
 <main>
-  <form method="post" action="/admin/events" style="display:grid; gap:8px; max-width:540px;">
-    <label>Title <input name="title" required /></label>
-    <label>Date <input type="date" name="event_date" required /></label>
-    <label>Importance (1–10) <input type="number" name="importance" value="5" min="1" max="10" /></label>
-    <label>Notes <textarea name="notes" rows="2"></textarea></label>
-    <button type="submit" class="actions" style="padding:10px 16px;">Add event</button>
-  </form>
-
-  <h2>Upcoming</h2>
   <table style="width:100%; border-collapse:collapse;">
-    <thead><tr><th align="left">Date</th><th align="left">Title</th><th>Imp.</th><th></th></tr></thead>
-    <tbody>
-    {% for ev in events %}
-      <tr style="border-top:1px solid var(--rule);">
-        <td>{{ ev.event_date }}</td>
-        <td>{{ ev.title }}{% if ev.notes %} <small>({{ ev.notes }})</small>{% endif %}</td>
-        <td align="center">{{ ev.importance }}</td>
-        <td><form method="post" action="/admin/events/{{ ev.id }}/delete"
-                  onsubmit="return confirm('Delete this event?');">
-              <button type="submit">Delete</button></form></td>
-      </tr>
-    {% else %}
-      <tr><td colspan="4"><em>None.</em></td></tr>
-    {% endfor %}
-    </tbody>
+    <thead><tr>
+      <th title="Mark as important">⭐</th>
+      <th title="Hide from edition">🚫</th>
+      <th align="left">Date</th><th align="left">Event</th><th align="left">Calendar</th>
+    </tr></thead>
+    <tbody id="events-tbody"></tbody>
   </table>
+  <div id="events-sentinel" style="height:32px; text-align:center; padding:8px; color:var(--muted);">
+    Loading...
+  </div>
 </main>
+{% endblock %}
+{% block scripts %}
+<script>
+  const tbody = document.getElementById('events-tbody');
+  const sentinel = document.getElementById('events-sentinel');
+  const PAGE = 50;
+  let offset = 0, hasMore = true, loading = false;
+
+  function makeCell(text, opts) {
+    const td = document.createElement('td');
+    if (opts && opts.align) td.setAttribute('align', opts.align);
+    if (text != null) td.textContent = text;
+    return td;
+  }
+
+  function buildRow(ev) {
+    const tr = document.createElement('tr');
+    tr.style.borderTop = '1px solid var(--rule)';
+
+    const tdImp = makeCell(null, {align: 'center'});
+    const cbImp = document.createElement('input');
+    cbImp.type = 'checkbox';
+    cbImp.className = 'event-toggle';
+    cbImp.dataset.icalUid = ev.ical_uid;
+    if (ev.important) cbImp.checked = true;
+    if (ev.locked) {
+      cbImp.disabled = true;
+      cbImp.title = 'Auto-marked by rule (always important).';
+    }
+    if (ev.suppressed) cbImp.disabled = true;
+    tdImp.appendChild(cbImp);
+
+    const tdSup = makeCell(null, {align: 'center'});
+    const cbSup = document.createElement('input');
+    cbSup.type = 'checkbox';
+    cbSup.className = 'event-suppress';
+    cbSup.dataset.icalUid = ev.ical_uid;
+    cbSup.title = 'Hide from HTML and PDF';
+    if (ev.suppressed) cbSup.checked = true;
+    if (ev.locked) {
+      cbSup.disabled = true;
+      cbSup.title = 'Auto-marked rules cannot be suppressed.';
+    }
+    tdSup.appendChild(cbSup);
+
+    const tdDate = document.createElement('td');
+    tdDate.textContent = ev.date;
+    if (ev.recurring) {
+      const small = document.createElement('small');
+      small.textContent = ' (repeats)';
+      tdDate.appendChild(small);
+    }
+
+    const tdTitle = makeCell(ev.title);
+
+    const tdCal = document.createElement('td');
+    const small = document.createElement('small');
+    small.style.color = 'var(--muted)';
+    small.textContent = ev.calendar_name || '';
+    tdCal.appendChild(small);
+
+    if (ev.suppressed) tr.style.opacity = '0.55';
+
+    tr.append(tdImp, tdSup, tdDate, tdTitle, tdCal);
+    return tr;
+  }
+
+  async function loadPage() {
+    if (loading || !hasMore) return;
+    loading = true;
+    try {
+      const r = await fetch(`/admin/events/data?offset=${offset}&limit=${PAGE}`);
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      for (const ev of data.events) tbody.appendChild(buildRow(ev));
+      offset += data.events.length;
+      hasMore = data.has_more;
+      if (!hasMore) sentinel.textContent = `${data.total} events.`;
+    } catch (e) {
+      sentinel.textContent = 'Failed to load.';
+      window.toast('Load failed', true);
+    } finally {
+      loading = false;
+    }
+  }
+
+  const io = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadPage();
+  }, {rootMargin: '200px'});
+  io.observe(sentinel);
+
+  async function postToggle(url, payload, optimisticUndo) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return true;
+    } catch (e) {
+      if (optimisticUndo) optimisticUndo();
+      window.toast('Save failed', true);
+      return false;
+    }
+  }
+
+  tbody.addEventListener('change', async (ev) => {
+    const target = ev.target;
+    if (target.matches('input.event-toggle')) {
+      const ical_uid = target.dataset.icalUid;
+      const important = target.checked;
+      target.disabled = true;
+      const ok = await postToggle('/admin/events/toggle',
+        {ical_uid, important},
+        () => { target.checked = !important; });
+      if (ok) window.toast(important ? 'Marked as important' : 'Removed');
+      target.disabled = false;
+    } else if (target.matches('input.event-suppress')) {
+      const ical_uid = target.dataset.icalUid;
+      const suppressed = target.checked;
+      target.disabled = true;
+      // The "important" checkbox in the same row is mutually exclusive.
+      const row = target.closest('tr');
+      const impCb = row.querySelector('input.event-toggle');
+      const ok = await postToggle('/admin/events/suppress',
+        {ical_uid, suppressed},
+        () => { target.checked = !suppressed; });
+      if (ok) {
+        window.toast(suppressed ? 'Hidden from edition' : 'Restored');
+        if (impCb && !impCb.disabled || (impCb && suppressed)) {
+          impCb.checked = false;
+          impCb.disabled = suppressed;
+        }
+        row.style.opacity = suppressed ? '0.55' : '';
+      }
+      target.disabled = false;
+    }
+  });
+
+  loadPage();
+
+  // Poll cache freshness; if a background refresh produced new data, reload.
+  let initialFreshness = null;
+  async function checkFreshness() {
+    try {
+      const r = await fetch('/admin/events/freshness');
+      if (!r.ok) return;
+      const {updated_at} = await r.json();
+      if (initialFreshness === null) {
+        initialFreshness = updated_at;
+      } else if (updated_at > initialFreshness) {
+        window.toast('Calendar data refreshed — reloading…');
+        setTimeout(() => location.reload(), 600);
+      }
+    } catch {}
+  }
+  setInterval(checkFreshness, 5000);
+  checkFreshness();
+</script>
 {% endblock %}

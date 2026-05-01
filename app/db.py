@@ -34,9 +34,34 @@ class HiddenCalendar(Base):
     calendar_name: Mapped[str] = mapped_column(String, nullable=False)
 
 
+class SuppressedEvent(Base):
+    """Events explicitly marked unimportant — excluded from both HTML and
+    PDF generation, keyed by iCalUID."""
+    __tablename__ = "suppressed_events"
+    ical_uid: Mapped[str] = mapped_column(String, primary_key=True)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class WatchlistStock(Base):
+    """Stocks the user wants tracked in the daily edition's stocks section."""
+    __tablename__ = "watchlist_stocks"
+    symbol: Mapped[str] = mapped_column(String, primary_key=True)
+
+
+class KvCache(Base):
+    """Generic key/value persistence used by app.cache as the local fallback
+    when Redis is not configured. Key is the cache key; value is JSON text."""
+    __tablename__ = "kv_cache"
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class ImportantEvent(Base):
     __tablename__ = "important_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Stable identifier for calendar-sourced events. None for manual entries.
+    # Survives recurring instances + edits to title/date/location.
+    ical_uid: Mapped[str | None] = mapped_column(String, nullable=True, index=True, unique=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
     importance: Mapped[int] = mapped_column(Integer, nullable=False, default=5)

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Admin · Movies{% endblock %}
+{% block body %}
+<header class="site admin">
+  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Movies (next 12 months)</h1>
+</header>
+<main>
+  <p>Tick to hide a movie from the daily edition. Untick to restore. The list
+     covers everything in theaters now plus releases in the next year.</p>
+  <fieldset style="border:1px solid var(--rule); padding:8px 12px; margin-bottom:1em;">
+    <legend style="font-weight:600;">MPAA rating</legend>
+    <div style="display:flex; gap:14px; flex-wrap:wrap;">
+      {% for r in all_ratings %}
+        <label><input type="checkbox" class="rating-filter" value="{{ r }}"
+          {% if r in default_ratings %}checked{% endif %}> {{ r }}</label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <table style="width:100%; border-collapse:collapse;">
+    <thead><tr>
+      <th></th>
+      <th align="left" style="white-space: nowrap; padding-right: 32px;">Release</th>
+      <th align="left">Title</th>
+    </tr></thead>
+    <tbody id="movies-tbody"></tbody>
+  </table>
+  <p id="movies-status" style="text-align:center; padding:8px; color:var(--muted);">
+    Loading…
+  </p>
+</main>
+{% endblock %}
+{% block scripts %}
+<script>
+  const tbody = document.getElementById('movies-tbody');
+  const statusEl = document.getElementById('movies-status');
+
+  function buildRow(m) {
+    const tr = document.createElement('tr');
+    tr.style.borderTop = '1px solid var(--rule)';
+
+    const tdHide = document.createElement('td');
+    tdHide.setAttribute('align', 'center');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'movie-toggle';
+    cb.dataset.title = m.title;
+    cb.title = 'Hide from daily edition';
+    if (m.hidden) cb.checked = true;
+    tdHide.appendChild(cb);
+
+    const tdDate = document.createElement('td');
+    tdDate.style.whiteSpace = 'nowrap';
+    tdDate.style.paddingRight = '32px';
+    tdDate.textContent = m.release_date || '';
+
+    const tdTitle = document.createElement('td');
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = m.title;
+    tdTitle.appendChild(titleSpan);
+    if (m.trailer_url && /^https:\/\/www\.youtube\.com\/watch\?v=/.test(m.trailer_url)) {
+      const a = document.createElement('a');
+      a.href = m.trailer_url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = '▶ Trailer';
+      a.style.marginLeft = '10px';
+      a.style.fontSize = '0.85em';
+      a.style.color = 'var(--accent)';
+      a.style.textDecoration = 'none';
+      tdTitle.appendChild(a);
+    }
+    if (m.summary) {
+      const sub = document.createElement('div');
+      sub.style.fontSize = '0.85em';
+      sub.style.color = 'var(--muted)';
+      sub.textContent = m.summary;
+      tdTitle.appendChild(sub);
+    }
+
+    if (m.hidden) tr.style.opacity = '0.55';
+
+    tr.append(tdHide, tdDate, tdTitle);
+    return tr;
+  }
+
+  function selectedRatings() {
+    return Array.from(document.querySelectorAll('input.rating-filter:checked'))
+      .map(cb => cb.value);
+  }
+
+  async function load(force) {
+    statusEl.textContent = force ? 'Refreshing…' : 'Loading…';
+    try {
+      const params = new URLSearchParams();
+      if (force) params.set('refresh', '1');
+      for (const r of selectedRatings()) params.append('ratings', r);
+      const r = await fetch('/admin/movies/data?' + params.toString());
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      tbody.replaceChildren();
+      for (const m of data.movies) tbody.appendChild(buildRow(m));
+      const ageMin = data.cache_age_seconds == null
+        ? 'just now' : `${Math.round(data.cache_age_seconds / 60)} min ago`;
+      statusEl.textContent = `${data.movies.length} movies · cache updated ${ageMin}`;
+    } catch (e) {
+      statusEl.textContent = 'Failed to load.';
+      window.toast('Load failed', true);
+    }
+  }
+
+  tbody.addEventListener('change', async (ev) => {
+    const cb = ev.target.closest('input.movie-toggle');
+    if (!cb) return;
+    const title = cb.dataset.title;
+    const hidden = cb.checked;
+    const tr = cb.closest('tr');
+    cb.disabled = true;
+    try {
+      const r = await fetch('/admin/movies/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title, hidden})
+      });
+      if (!r.ok) throw new Error(await r.text());
+      tr.style.opacity = hidden ? '0.55' : '';
+      window.toast(hidden ? `Hidden: ${title}` : `Restored: ${title}`);
+    } catch (e) {
+      cb.checked = !hidden;
+      window.toast('Save failed', true);
+    } finally {
+      cb.disabled = false;
+    }
+  });
+
+  document.querySelectorAll('input.rating-filter').forEach(cb => {
+    cb.addEventListener('change', () => load(false));
+  });
+
+  load(false);
+</script>
+{% endblock %}

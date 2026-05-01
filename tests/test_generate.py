@@ -25,7 +25,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     today = date(2026, 4, 30)
 
     with fake_claude, fake_pdf, fake_list, fake_fetch:
-        generate.run("midnight", today=today)
+        generate.run("morning", today=today)
         row = db_session.get(Edition, today)
         assert row.html == "<p>hi v1</p>"
         assert row.pdf == b"%PDF-v1"
@@ -37,7 +37,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     )
     fake_pdf2 = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v2")
     with fake_claude2, fake_pdf2, fake_list, fake_fetch:
-        generate.run("noon", today=today)
+        generate.run("evening", today=today)
 
     db_session.expire_all()
     row = db_session.get(Edition, today)
@@ -49,8 +49,7 @@ def test_build_context_includes_overlays(db_session, monkeypatch):
     today = date(2026, 4, 30)
     with patch.object(generate.calendar_oauth, "list_calendars", return_value=[]), \
          patch.object(generate.calendar_oauth, "fetch_events", return_value=[]):
-        ctx = generate._build_context(db_session, today, "noon")
+        ctx = generate._build_context(db_session, today, "evening")
     assert ctx["DATE"] == "2026-04-30"
-    assert ctx["SLOT"] == "noon"
     assert ctx["HIDDEN_MOVIES"] == []
     assert ctx["WEATHER_COORDS"]

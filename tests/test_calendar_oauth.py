@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
 
 from app import calendar_oauth
@@ -47,6 +47,43 @@ def test_fetch_events_drops_past_and_cancelled(monkeypatch, db_session):
         db_session, ["primary"], now.date(), now.date().replace(day=15), now=now,
     )
     assert [e["summary"] for e in out] == ["Future"]
+
+
+def test_current_kid_grade_advances_in_august():
+    # April of academic year 2025–2026 → still 2nd grade.
+    assert calendar_oauth.current_kid_grade(date(2026, 4, 30)) == 2
+    assert calendar_oauth.current_kid_grade(date(2026, 7, 31)) == 2
+    # August 1 2026 starts academic year 2026–2027 → 3rd grade.
+    assert calendar_oauth.current_kid_grade(date(2026, 8, 1)) == 3
+    assert calendar_oauth.current_kid_grade(date(2027, 5, 15)) == 3
+    # Future years keep advancing.
+    assert calendar_oauth.current_kid_grade(date(2028, 9, 1)) == 5
+
+
+def test_allowed_movie_ratings_tiers(monkeypatch):
+    # Grade 2 → age 8 → G, PG only
+    monkeypatch.setattr(calendar_oauth, "current_kid_grade", lambda *a, **k: 2)
+    assert calendar_oauth.allowed_movie_ratings() == ["G", "PG"]
+    # Grade 5 → age 11 → adds PG-13
+    monkeypatch.setattr(calendar_oauth, "current_kid_grade", lambda *a, **k: 5)
+    assert calendar_oauth.allowed_movie_ratings() == ["G", "PG", "PG-13"]
+    # Grade 9 → age 15 → adds R, NC-17
+    monkeypatch.setattr(calendar_oauth, "current_kid_grade", lambda *a, **k: 9)
+    assert calendar_oauth.allowed_movie_ratings() == ["G", "PG", "PG-13", "R", "NC-17"]
+
+
+def test_dorchester_filters_other_grades(monkeypatch):
+    monkeypatch.setattr(calendar_oauth, "current_kid_grade", lambda *a, **k: 2)
+    cn = "Dorchester Parent Calendar"
+    assert calendar_oauth._is_filtered(cn, "3rd Grade Field Trip") is True
+    assert calendar_oauth._is_filtered(cn, "Grade 5 Music Recital") is True
+    assert calendar_oauth._is_filtered(cn, "Kindergarten Pickup Drill") is True
+    # Same-grade and grade-less events pass through.
+    assert calendar_oauth._is_filtered(cn, "2nd Grade Read-Aloud") is False
+    assert calendar_oauth._is_filtered(cn, "Grade 2 Art Show") is False
+    assert calendar_oauth._is_filtered(cn, "Spirit Week") is False
+    # Other calendars are unaffected by the grade filter.
+    assert calendar_oauth._is_filtered("Linh calendar", "3rd Grade Field Trip") is False
 
 
 def test_list_calendars_returns_normalized(monkeypatch, db_session):

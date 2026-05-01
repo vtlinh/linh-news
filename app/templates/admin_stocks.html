@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Admin · Stocks{% endblock %}
+{% block body %}
+<header class="site admin">
+  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Stocks Watchlist</h1>
+</header>
+<main>
+  <form id="add-form" style="display:flex; gap:8px; margin-bottom:1.4em;">
+    <input type="text" id="symbol-input" name="symbol" placeholder="Add ticker (e.g. AAPL)"
+           autocapitalize="characters" autocomplete="off" maxlength="8"
+           style="padding:8px 10px; min-width:180px; font: inherit;" />
+    <button type="submit" class="actions" style="padding:10px 16px;">Add</button>
+  </form>
+
+  <table style="width:100%; border-collapse:collapse;">
+    <thead><tr><th align="left">Symbol</th><th></th></tr></thead>
+    <tbody id="stocks-tbody">
+    {% for sym in symbols %}
+      <tr data-symbol="{{ sym }}" style="border-top:1px solid var(--rule);">
+        <td>{{ sym }}</td>
+        <td align="right">
+          <button class="remove-btn" data-symbol="{{ sym }}"
+                  style="padding:6px 10px;">Remove</button>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="2"><em>Watchlist is empty — the stocks section will be omitted from the edition until you add at least one ticker.</em></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</main>
+{% endblock %}
+{% block scripts %}
+<script>
+  const tbody = document.getElementById('stocks-tbody');
+  const addForm = document.getElementById('add-form');
+  const input = document.getElementById('symbol-input');
+
+  function rowFor(symbol) {
+    const tr = document.createElement('tr');
+    tr.dataset.symbol = symbol;
+    tr.style.borderTop = '1px solid var(--rule)';
+    const td1 = document.createElement('td');
+    td1.textContent = symbol;
+    const td2 = document.createElement('td');
+    td2.setAttribute('align', 'right');
+    const btn = document.createElement('button');
+    btn.className = 'remove-btn';
+    btn.dataset.symbol = symbol;
+    btn.style.padding = '6px 10px';
+    btn.textContent = 'Remove';
+    td2.appendChild(btn);
+    tr.append(td1, td2);
+    return tr;
+  }
+
+  addForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const symbol = input.value.trim().toUpperCase();
+    if (!symbol) return;
+    try {
+      const r = await fetch('/admin/stocks/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({symbol})
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      // Drop the empty-state row if present, append the new row.
+      if (tbody.querySelector('em')) tbody.replaceChildren();
+      if (!tbody.querySelector(`tr[data-symbol="${data.symbol}"]`)) {
+        tbody.appendChild(rowFor(data.symbol));
+      }
+      input.value = '';
+      window.toast(`Added ${data.symbol}`);
+    } catch (err) {
+      window.toast(String(err.message || err) || 'Add failed', true);
+    }
+  });
+
+  tbody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button.remove-btn');
+    if (!btn) return;
+    const symbol = btn.dataset.symbol;
+    btn.disabled = true;
+    try {
+      const r = await fetch('/admin/stocks/remove', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({symbol})
+      });
+      if (!r.ok) throw new Error(await r.text());
+      btn.closest('tr').remove();
+      window.toast(`Removed ${symbol}`);
+    } catch (err) {
+      btn.disabled = false;
+      window.toast('Remove failed', true);
+    }
+  });
+</script>
+{% endblock %}

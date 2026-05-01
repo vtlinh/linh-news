@@ -21,39 +21,284 @@
       font-size: clamp(15px, 2.4vw, 17px);
       line-height: 1.55;
     }
+    /* Consistent section headings, regardless of emoji/flag prefixes Claude uses. */
+    main h2, main section > h2 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(18px, 2.6vw, 22px);
+      font-weight: 700;
+      margin: 0 0 0.5em;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--rule);
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+    main h3 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(16px, 2.2vw, 18px);
+      font-weight: 700;
+      margin: 1em 0 0.3em;
+    }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     header.site {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--rule);
-      display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+      padding: 14px 16px 8px;
+      border-bottom: 2px solid var(--fg);
+      display: flex; flex-direction: column; align-items: stretch; gap: 8px;
       background: #fff;
       position: sticky; top: 0; z-index: 5;
     }
-    header.site h1 { margin: 0; font-size: clamp(20px, 4vw, 28px); }
-    header.site .spacer { flex: 1; }
+    header.site.admin {
+      flex-direction: row; align-items: center;
+      padding: 12px 16px;
+    }
+    header.site.admin h1 {
+      margin: 0; font-size: clamp(20px, 3.5vw, 26px);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .back-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px;
+      border: 1px solid var(--fg); border-radius: 4px;
+      color: var(--fg); text-decoration: none;
+      font-size: 18px; line-height: 1;
+    }
+    .back-link:hover { background: var(--fg); color: #fff; text-decoration: none; }
+
+    header.site h1.masthead {
+      margin: 0;
+      text-align: center;
+      font-family: "Times New Roman", Georgia, serif;
+      font-weight: 900;
+      letter-spacing: -0.01em;
+      font-size: clamp(28px, 6vw, 56px);
+    }
+    header.site .datepicker {
+      display: flex; gap: 6px; align-items: center;
+      justify-content: center;
+    }
+    header.site .toolbar {
+      display: flex; flex-wrap: wrap; align-items: center;
+      gap: 12px; justify-content: center;
+    }
     header.site .actions button, header.site .actions a {
       min-height: 44px; padding: 8px 14px;
       border: 1px solid var(--fg); background: #fff; color: var(--fg);
-      font: inherit; border-radius: 4px; cursor: pointer;
+      font: inherit; border-radius: 4px; cursor: pointer; text-decoration: none;
     }
     header.site .actions .primary { background: var(--fg); color: #fff; }
-    main { padding: 16px; max-width: 1280px; margin: 0 auto; }
-    .src { font-size: 0.8em; }
-    .src a { padding: 0 2px; }
-    button.hide-movie { min-height: 44px; }
+    main { padding: 16px; max-width: 1600px; margin: 0 auto; }
+    /* Movie card with corner ✕ close button. */
+    .movie-card {
+      position: relative;
+      padding: 8px 28px 8px 8px;
+      margin: 0 0 1em;
+    }
+    button.hide-movie {
+      position: absolute;
+      top: 4px; right: 4px;
+      width: 28px; height: 28px; min-height: 28px;
+      padding: 0;
+      border: 1px solid var(--rule);
+      background: transparent; color: var(--muted);
+      border-radius: 50%;
+      font-size: 16px; line-height: 1;
+      cursor: pointer;
+      opacity: 0; transition: opacity 0.15s;
+    }
+    .movie-card:hover button.hide-movie,
+    button.hide-movie:focus { opacity: 1; }
+    button.hide-movie:hover {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
+
+    details.collapsible {
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      padding: 8px 12px;
+      margin-bottom: 0.5em;
+      background: #fff;
+    }
+    details.collapsible > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 4px 0;
+    }
+    details.collapsible > summary::-webkit-details-marker { display: none; }
+    /* The chevron is an inline span inside the summary so it sits on the
+       LEFT of the title text on the same row, rather than wrapping above it. */
+    details.collapsible .chev {
+      display: inline-block;
+      width: 1em;
+      margin-right: 6px;
+      transition: transform 0.15s ease;
+    }
+    details.collapsible[open] .chev { transform: rotate(90deg); }
+    /* The "Hidden?" label sits at the row level — only show when the
+       collapsible is open so it lines up with the actual checkboxes. */
+    details.collapsible:not([open]) .hidden-col-label { display: none; }
+
+    /* Hover-revealed Sources popup OR direct anchor when there is exactly
+       one source. Both forms use the same `.sources` class so they look
+       identical inline. */
+    .sources, a.sources {
+      position: relative;
+      display: inline-block;
+      margin-left: 4px;
+      cursor: help;
+      font-size: 0.78em; letter-spacing: 0.06em;
+      color: var(--muted);
+      border-bottom: 1px dotted var(--muted);
+      text-decoration: none;
+    }
+    a.sources { cursor: pointer; }
+    a.sources:hover { color: var(--accent); border-bottom-color: var(--accent); }
+    .sources-popup {
+      display: none;
+      position: absolute;
+      bottom: 100%; left: 0;
+      min-width: 260px; max-width: 380px;
+      padding: 8px 10px; margin-bottom: 4px;
+      background: #fff;
+      border: 1px solid var(--fg);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+      z-index: 20;
+      cursor: auto;
+    }
+    .sources-popup a {
+      display: block;
+      padding: 4px 0;
+      font-size: 13px;
+      letter-spacing: normal;
+      color: var(--accent);
+      border-bottom: 1px solid var(--rule);
+    }
+    .sources-popup a:last-child { border-bottom: 0; }
+    .sources:hover .sources-popup,
+    .sources-popup:hover,
+    .sources:focus-within .sources-popup { display: block; }
 
     @media (min-width: 768px) {
       main.cols { columns: 2; column-gap: 28px; }
-      main.cols > section { break-inside: avoid; margin-bottom: 1.4em; }
     }
-    @media (min-width: 1200px) {
-      main.cols { columns: 3; }
+    /* No section, article, or hover-popup may be split across columns. */
+    main.cols > section,
+    main.cols article,
+    main.cols .sources,
+    main.cols .sources-popup,
+    main.cols .tooltip,
+    main.cols .tooltip-popup {
+      break-inside: avoid;
+      page-break-inside: avoid;
+      -webkit-column-break-inside: avoid;
+    }
+    main.cols > section { margin-bottom: 1.4em; }
+
+    /* Newspaper layout: flow + right rail. The rail is placed below the
+       flow on small screens; on very wide screens (≥ 1920px, i.e. 24" and
+       up) we use CSS Grid to pin it as the right-most column. */
+    main.layout > .flow > section,
+    main.layout > .rail > section,
+    main.layout .sources, main.layout .sources-popup,
+    main.layout .tooltip, main.layout .tooltip-popup {
+      break-inside: avoid;
+      page-break-inside: avoid;
+      -webkit-column-break-inside: avoid;
+    }
+    main.layout > .flow > section,
+    main.layout > .rail > section { margin-bottom: 1.4em; }
+    main.layout > .rail { display: flex; flex-direction: column; gap: 1.4em; }
+    @media (min-width: 768px) {
+      main.layout > .flow { columns: 2; column-gap: 28px; }
+    }
+    /* 3 visible columns at desktop: 2-col flow + dedicated rail.
+       Uses :has(.rail) so editions that didn't generate the rail wrapper
+       don't get an empty grid track. */
+    @media (min-width: 1100px) {
+      main.layout:has(> .rail) {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        column-gap: 32px;
+      }
+      main.layout:has(> .rail) > .flow { columns: 2; column-gap: 32px; }
+      /* Fallback for legacy editions without a rail: stay 3-col multi-col. */
+      main.layout:not(:has(> .rail)) { columns: 3; column-gap: 32px; }
+      main.cols:not(.layout) { columns: 3; column-gap: 32px; }
+    }
+    /* 4 visible columns on a 24"+ monitor: 3-col flow + dedicated rail. */
+    @media (min-width: 1920px) {
+      main.layout:has(> .rail) {
+        grid-template-columns: 3fr 1fr;
+        column-gap: 36px;
+      }
+      main.layout:has(> .rail) > .flow { columns: 3; column-gap: 32px; }
+      main.layout:not(:has(> .rail)) { columns: 4; column-gap: 36px; }
+      main.cols:not(.layout) { columns: 4; column-gap: 36px; }
+    }
+
+    /* Generic hover-tooltip pair (used by stocks and any future
+       hover-revealed explanation). Same mechanics as .sources but no tiny
+       font / no dotted underline — the trigger is a normal-looking row. */
+    .tooltip {
+      position: relative;
+      display: inline-block;
+      cursor: help;
+    }
+    .tooltip-popup {
+      display: none;
+      position: absolute;
+      bottom: 100%; left: 0;
+      min-width: 260px; max-width: 380px;
+      padding: 10px 12px; margin-bottom: 6px;
+      background: #fff;
+      border: 1px solid var(--fg);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+      z-index: 20;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .tooltip:hover .tooltip-popup,
+    .tooltip-popup:hover,
+    .tooltip:focus-within .tooltip-popup { display: block; }
+
+    /* Weather strip: one-line band right below the masthead's separator. */
+    .weather-strip {
+      column-span: all;
+      padding: 8px 12px; margin: 0 0 1.2em;
+      border-bottom: 1px solid var(--rule);
+      font-size: 0.95em;
+      white-space: nowrap; overflow-x: auto;
+    }
+    .weather-strip h1, .weather-strip h2, .weather-strip h3 { display: none; }
+    .toast-host {
+      position: fixed; left: 0; right: 0; bottom: 16px;
+      display: flex; flex-direction: column; align-items: center;
+      gap: 8px; pointer-events: none; z-index: 100;
+    }
+    .toast {
+      background: #222; color: #fff; padding: 10px 16px; border-radius: 6px;
+      font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      animation: toast-in 0.2s ease-out;
+    }
+    .toast.error { background: var(--accent); }
+    @keyframes toast-in {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
     }
   </style>
 </head>
 <body>
   {% block body %}{% endblock %}
+  <div class="toast-host" id="toast-host" aria-live="polite"></div>
+  <script>
+    window.toast = function(msg, isError) {
+      const host = document.getElementById('toast-host');
+      const el = document.createElement('div');
+      el.className = 'toast' + (isError ? ' error' : '');
+      el.textContent = msg;
+      host.appendChild(el);
+      setTimeout(() => { el.remove(); }, 2200);
+    };
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

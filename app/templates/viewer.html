@@ -2,25 +2,32 @@
 {% block title %}Linh News — {{ edition_date }}{% endblock %}
 {% block body %}
 <header class="site">
-  <h1>Linh News</h1>
-  <form method="get" action="/d/" style="display:flex; gap:6px; align-items:center;"
+  <h1 class="masthead">The Linh News</h1>
+  <form class="datepicker" method="get" action="/d/"
         onsubmit="event.preventDefault(); window.location='/d/'+this.d.value;">
     <a href="/d/{{ prev_date }}" class="actions" aria-label="Previous day">←</a>
-    <input type="date" name="d" value="{{ edition_date }}" />
-    <a href="/d/{{ next_date }}" class="actions" aria-label="Next day">→</a>
-  </form>
-  <div class="spacer"></div>
-  <div class="actions" style="display:flex; gap:8px; flex-wrap:wrap;">
-    <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
-    <button id="refresh-btn" type="button">Refresh</button>
-    {% if is_admin %}
-      <a href="/admin/events">Events</a>
-      <a href="/admin/calendars">Calendars</a>
+    <input type="date" name="d" value="{{ edition_date }}" max="{{ today_str }}" />
+    {% if next_date_allowed %}
+      <a href="/d/{{ next_date }}" class="actions" aria-label="Next day">→</a>
+    {% else %}
+      <span class="actions" aria-disabled="true" style="opacity:0.4; pointer-events:none;">→</span>
     {% endif %}
-    <a href="/logout">Logout</a>
+  </form>
+  <div class="toolbar">
+    <div class="actions" style="display:flex; gap:8px; flex-wrap:wrap;">
+      <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
+      <button id="refresh-btn" type="button"
+              {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
+      {% if is_admin %}
+        <a href="/admin/calendars">Calendars</a>
+        <a href="/admin/movies">Movies</a>
+        <a href="/admin/stocks">Stocks</a>
+      {% endif %}
+      <a href="/logout">Logout</a>
+    </div>
   </div>
 </header>
-<main class="cols" id="content">
+<main class="layout cols" id="content">
   {% if edition_html %}
     {{ edition_html | safe }}
   {% else %}
@@ -33,13 +40,81 @@
 <script>
   const isAdmin = {{ 'true' if is_admin else 'false' }};
   const refreshBtn = document.getElementById('refresh-btn');
-  refreshBtn.addEventListener('click', async () => {
+  const editionDate = "{{ edition_date }}";
+  const serverInProgress = {{ 'true' if refresh_in_progress else 'false' }};
+  let initialGeneratedAt = {{ ('"' + edition_generated_at + '"') if edition_generated_at else 'null' }};
+
+  async function fetchFreshness() {
+    try {
+      const r = await fetch(`/editions/${editionDate}/freshness`);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
+
+  function formatDuration(seconds) {
+    if (!seconds || seconds <= 0) return null;
+    const mins = seconds / 60;
+    if (mins < 1) return `~${Math.round(seconds)} seconds`;
+    if (mins < 1.5) return `about a minute`;
+    return `~${Math.round(mins)} minutes`;
+  }
+
+  async function pollUntilFresh() {
     refreshBtn.disabled = true;
     refreshBtn.textContent = 'Refreshing...';
-    const r = await fetch('/refresh', {method: 'POST'});
-    if (r.ok) location.reload();
-    else { refreshBtn.disabled = false; refreshBtn.textContent = 'Refresh'; alert('Refresh failed'); }
+    // Show an estimate on the way in.
+    try {
+      const f = await fetchFreshness();
+      const eta = formatDuration(f?.expected_seconds);
+      window.toast(eta ? `Refresh in progress... It may take ${eta}.` : 'Refresh in progress...');
+    } catch {}
+    while (true) {
+      await new Promise(r => setTimeout(r, 4000));
+      const f = await fetchFreshness();
+      if (!f) continue;
+      if (f.generated_at && f.generated_at !== initialGeneratedAt) {
+        window.toast('New edition ready — reloading…');
+        setTimeout(() => location.reload(), 600);
+        return;
+      }
+      if (!f.refresh_in_progress) {
+        // Lock released without a new edition — refresh failed.
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh';
+        window.toast(f.last_error || 'Refresh did not produce a new edition.', true);
+        return;
+      }
+    }
+  }
+
+  refreshBtn.addEventListener('click', async () => {
+    console.log('[refresh] click');
+    try {
+      const f0 = await fetchFreshness();
+      initialGeneratedAt = f0?.generated_at ?? null;
+      if (f0?.refresh_in_progress) {
+        pollUntilFresh();
+        return;
+      }
+      const r = await fetch('/refresh', {method: 'POST'});
+      console.log('[refresh] /refresh =>', r.status);
+      if (r.status === 202 || r.status === 409) {
+        pollUntilFresh();
+      } else {
+        const body = await r.text().catch(() => '');
+        window.toast(`Refresh failed (${r.status}): ${body || 'no body'}`, true);
+      }
+    } catch (e) {
+      console.error('[refresh] handler error', e);
+      window.toast('Refresh handler error: ' + (e?.message || e), true);
+    }
   });
+
+  // If the user lands on the page while a refresh is mid-flight, surface that
+  // immediately. The server already rendered the button in its disabled state
+  // (no flash), and we kick the polling loop.
+  if (serverInProgress) pollUntilFresh();
   if (isAdmin) {
     document.querySelectorAll('button.hide-movie').forEach(btn => {
       btn.addEventListener('click', async () => {

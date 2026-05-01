@@ -61,10 +61,22 @@ def test_admin_pages_blocked_for_viewer(client, login_as):
     assert client.get("/admin/events").status_code == 403
 
 
-def test_refresh_runs_pipeline(client, login_as):
+def test_refresh_spawns_detached_subprocess(client, login_as):
     login_as("friend@example.com")
-    today = date.today()
-    with patch("app.main.generate.run", return_value=today) as run:
+    with patch("app.main.subprocess.Popen") as popen:
         r = client.post("/refresh")
-    assert r.status_code == 200
-    run.assert_called_once()
+    assert r.status_code == 202
+    assert r.json()["in_progress"] is True
+    popen.assert_called_once()
+    args, kwargs = popen.call_args
+    cmd = args[0]
+    assert cmd[-2:] == ["app.generate", "refresh"]
+
+
+def test_refresh_returns_409_when_lock_held(client, login_as):
+    login_as("friend@example.com")
+    with patch("app.main.cache.begin_edition_refresh", return_value=False), \
+         patch("app.main.subprocess.Popen") as popen:
+        r = client.post("/refresh")
+    assert r.status_code == 409
+    popen.assert_not_called()

@@ -35,6 +35,7 @@ source = "linh_news_data"
 destination = "/data"
 
 # Scheduled machines (cron) — run the same image with a different command.
-# Configure via `fly machine run --schedule daily ...` after first deploy:
-#   fly machine run --schedule "0 0 * * *" -e SLOT=midnight ... -- python -m app.generate midnight
-#   fly machine run --schedule "0 12 * * *" -e SLOT=noon    ... -- python -m app.generate noon
+# Times are evaluated in TZ=America/New_York (set in [env] above).
+# Configure via `fly machine run --schedule ...` after first deploy:
+#   fly machine run --schedule "0 7 * * *"  -- python -m app.generate morning
+#   fly machine run --schedule "0 19 * * *" -- python -m app.generate evening

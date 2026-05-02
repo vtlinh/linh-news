@@ -44,11 +44,6 @@ EDITION_FUTURE_WINDOW = timedelta(days=60)
 # Refresh policy: at most once per week.
 _REFRESH_MIN_SECONDS = 7 * 24 * 60 * 60
 
-# Discover window for TMDB: same past cushion as the edition window, plus a
-# full year of upcoming releases for the admin's planning page.
-_DISCOVER_PAST = timedelta(weeks=3)
-_DISCOVER_FUTURE = timedelta(days=365)
-
 _VALID_TRAILER_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[\w-]{8,}")
 
 
@@ -60,12 +55,9 @@ def fetch_year_movie_list() -> list[dict]:
     so service-time filters can include or exclude any rating without a
     refetch."""
     today = date.today()
-    earliest = today - _DISCOVER_PAST
-    latest = today + _DISCOVER_FUTURE
-
-    candidates = tmdb.discover_movies(earliest=earliest, latest=latest)
+    candidates = tmdb.now_playing_and_upcoming()
     if not candidates:
-        log.warning("TMDB discover returned no results — table left untouched.")
+        log.warning("TMDB feeds returned no results — table left untouched.")
         return _read_all_as_dicts()
 
     ids = [int(c["id"]) for c in candidates if c.get("id") is not None]

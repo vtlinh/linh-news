@@ -177,7 +177,7 @@ def test_fetch_year_movie_list_populates_table(db_session):
         ),
     }
 
-    with patch.object(movies.tmdb, "discover_movies", return_value=candidates), \
+    with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],
@@ -211,7 +211,7 @@ def test_filter_for_edition_excludes_disallowed_rating_from_db_rows(db_session):
             rd=today + timedelta(days=15),
         ),
     }
-    with patch.object(movies.tmdb, "discover_movies", return_value=candidates), \
+    with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],
@@ -237,7 +237,7 @@ def test_hidden_title_filtered_without_touching_table(db_session):
             rd=today + timedelta(days=10),
         ),
     }
-    with patch.object(movies.tmdb, "discover_movies", return_value=candidates), \
+    with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],

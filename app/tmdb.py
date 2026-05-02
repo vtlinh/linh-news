@@ -6,12 +6,12 @@ release dates, US MPAA certifications, plot summaries, YouTube trailer keys,
 and poster paths through a simple JSON API. Set ``TMDB_API_KEY`` in the
 environment.
 
-Two public helpers:
+Public helpers:
 
-* :func:`discover_movies` — paginated ``/discover/movie`` query for movies
-  whose original theatrical primary release falls in a given date range.
-  Excludes re-releases structurally (old films have an old
-  ``primary_release_date`` and won't appear in a forward-looking window).
+* :func:`now_playing_and_upcoming` — paginated ``/movie/now_playing`` +
+  ``/movie/upcoming`` (US region). These are TMDB's curated US theatrical
+  release feeds — mainstream entries only, every one with US certification
+  data. Results merged and de-duped by id.
 * :func:`fetch_movie_detail` — ``/movie/{id}?append_to_response=videos,
   release_dates`` for one movie, returning the fields we store.
 """
@@ -40,41 +40,40 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=15.0, limits=httpx.Limits(max_connections=10))
 
 
-def discover_movies(
-    *,
-    earliest: date,
-    latest: date,
-    max_pages: int = 5,
-) -> list[dict]:
-    """Return TMDB ``/discover/movie`` results (raw page items merged) for US
-    theatrical movies whose original primary release date is in
-    ``[earliest, latest]``. Returns ``[]`` if ``TMDB_API_KEY`` is unset."""
+def now_playing_and_upcoming(*, max_pages: int = 5) -> list[dict]:
+    """Return merged ``/movie/now_playing`` + ``/movie/upcoming`` results
+    (US region), de-duped by id. These are TMDB's curated US theatrical
+    feeds — mainstream Hollywood + studio releases only, every entry with
+    US certification data. Returns ``[]`` if ``TMDB_API_KEY`` is unset."""
     key = get_settings().tmdb_api_key
     if not key:
-        log.warning("TMDB_API_KEY not set — discover_movies returns empty.")
+        log.warning("TMDB_API_KEY not set — TMDB feeds return empty.")
         return []
+    seen: set[int] = set()
     out: list[dict] = []
     with _client() as c:
-        for page in range(1, max_pages + 1):
-            params = {
-                "api_key": key,
-                "region": "US",
-                "with_release_type": "2|3",
-                "primary_release_date.gte": earliest.isoformat(),
-                "primary_release_date.lte": latest.isoformat(),
-                "sort_by": "primary_release_date.asc",
-                "include_adult": "false",
-                "page": str(page),
-            }
-            r = c.get(f"{_BASE}/discover/movie", params=params)
-            if r.status_code != 200:
-                log.warning("TMDB discover page %s -> %s", page, r.status_code)
-                break
-            body = r.json()
-            results = body.get("results") or []
-            out.extend(results)
-            if page >= int(body.get("total_pages") or 0):
-                break
+        for endpoint in ("now_playing", "upcoming"):
+            for page in range(1, max_pages + 1):
+                r = c.get(
+                    f"{_BASE}/movie/{endpoint}",
+                    params={
+                        "api_key": key,
+                        "region": "US",
+                        "page": str(page),
+                    },
+                )
+                if r.status_code != 200:
+                    log.warning("TMDB %s page %s -> %s", endpoint, page, r.status_code)
+                    break
+                body = r.json()
+                for m in body.get("results") or []:
+                    mid = m.get("id")
+                    if mid is None or mid in seen:
+                        continue
+                    seen.add(int(mid))
+                    out.append(m)
+                if page >= int(body.get("total_pages") or 0):
+                    break
     return out
 
 

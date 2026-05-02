@@ -590,7 +590,12 @@ def admin_calendars_get(
     )
 
 
-_ALL_MOVIE_RATINGS = ["G", "PG", "PG-13", "R", "NC-17"]
+_ALL_MOVIE_RATINGS = ["G", "PG", "PG-13", "R", "NC-17", "Unrated"]
+# "Unrated" is a synthetic checkbox covering rows whose rating field is
+# empty (TMDB hasn't filled in the MPAA yet — typical for announced
+# pre-release sequels like Angry Birds 3) or explicitly "NR". Off by
+# default in the kid-friendly view; toggle it on to surface those rows.
+_UNRATED_CERTS = {"", "NR"}
 
 
 @app.get("/admin/movies", response_class=HTMLResponse)
@@ -617,8 +622,16 @@ def admin_movies_data(
 ):
     requested = [r for r in request.query_params.getlist("ratings") if r in _ALL_MOVIE_RATINGS]
     selected = set(requested) if requested else set(prefs.get_allowed_ratings())
+    include_unrated = "Unrated" in selected
     movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
-    movies = [m for m in movies if m.get("rating") in selected]
+
+    def _matches(m: dict) -> bool:
+        rating = (m.get("rating") or "").strip()
+        if rating in selected:
+            return True
+        return include_unrated and rating in _UNRATED_CERTS
+
+    movies = [m for m in movies if _matches(m)]
     # Drop "Currently in theaters" entries that opened more than 3 weeks ago —
     # those are no longer relevant suggestions.
     today = local_today()

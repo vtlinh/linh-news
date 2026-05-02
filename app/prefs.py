@@ -21,7 +21,12 @@ from app import cache
 
 log = logging.getLogger(__name__)
 
-_VALID_RATINGS = {"G", "PG", "PG-13", "R", "NC-17"}
+# "Unrated" is a synthetic value the admin Movies page uses to surface rows
+# whose MPAA cert is empty or "NR" (typical for announced pre-release sequels
+# whose MPAA cert TMDB hasn't filled in yet). Persisted alongside real ratings
+# so the checkbox state survives reloads. It never matches an actual movie's
+# rating field, so including it in the daily-edition filter set is a no-op.
+_VALID_RATINGS = {"G", "PG", "PG-13", "R", "NC-17", "Unrated"}
 _RATINGS_KEY = "linh_news:allowed_ratings"
 
 

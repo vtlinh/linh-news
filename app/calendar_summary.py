@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 
@@ -133,13 +134,164 @@ _EMOJI_SYSTEM = (
 _EMOJI_MODEL = "claude-haiku-4-5-20251001"
 
 
-def emojis_for_titles(s: Session, titles: list[str]) -> dict[str, str]:
+# Schema used by the per-title BATCH path: each batch entry returns one
+# emoji directly (no need to echo the title — we key by custom_id instead).
+_EMOJI_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "emoji": {
+            "type": "string",
+            "description": (
+                "A single emoji glyph that best represents the calendar "
+                "event. Use 📅 only as a last resort."
+            ),
+        },
+    },
+    "required": ["emoji"],
+    "additionalProperties": False,
+}
+
+
+def _emoji_lookup_single_call(missing: list[str]) -> dict[str, str]:
+    """Low-latency path: one Haiku call returning all emojis at once.
+
+    Used for user-triggered /refresh runs where wall-clock matters more
+    than cost. Returns ``{title: emoji}`` for whatever titles the model
+    answered — the caller fills gaps with the keyword fallback.
+    """
+    out = claude_client.call_with_schema(
+        system=_EMOJI_SYSTEM,
+        user=(
+            "Return one representative emoji for each of these calendar "
+            "event titles. Output via the `return_emojis` tool with one "
+            "entry per title, in the same order:\n\n"
+            + "\n".join(f"- {t}" for t in missing)
+        ),
+        schema=_EMOJI_SCHEMA,
+        schema_name="return_emojis",
+        schema_description="Map of calendar event titles to a single emoji.",
+        max_tokens=1500,
+        model=_EMOJI_MODEL,
+    )
+    by_norm = {_normalize_title(t): t for t in missing}
+    result: dict[str, str] = {}
+    for entry in out.get("emojis", []):
+        title = (entry.get("title") or "").strip()
+        emoji = (entry.get("emoji") or "").strip()
+        if not title or not emoji:
+            continue
+        original = by_norm.get(_normalize_title(title))
+        if original is not None:
+            result[original] = emoji
+    return result
+
+
+def _emoji_lookup_batch(missing: list[str]) -> dict[str, str]:
+    """Cost-optimised path: one Anthropic Batch with one entry per title.
+
+    Used by cron runs (morning/evening) where the 5+ min batch latency is
+    fine but the 50% cost discount and server-side fan-out matter. Each
+    request asks for a single emoji; the title is encoded into ``custom_id``
+    so we don't need the model to echo it.
+    """
+    from app.claude_client import _client
+
+    client = _client()
+    # custom_id must match ``^[a-zA-Z0-9_-]{1,64}$`` per Anthropic; hash the
+    # title to a short stable id and keep a side-table back to the original.
+    id_for: dict[str, str] = {}
+    title_for: dict[str, str] = {}
+    requests = []
+    for t in missing:
+        cid = "e_" + hashlib.sha256(t.encode("utf-8")).hexdigest()[:32]
+        id_for[t] = cid
+        title_for[cid] = t
+        requests.append({
+            "custom_id": cid,
+            "params": {
+                "model": _EMOJI_MODEL,
+                "max_tokens": 50,
+                "system": _EMOJI_SYSTEM,
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        f"Calendar event title: {t}\n\n"
+                        "Call the return_emoji tool with one representative "
+                        "emoji for this title."
+                    ),
+                }],
+                "tools": [{
+                    "name": "return_emoji",
+                    "description": "Return one emoji for the calendar event.",
+                    "input_schema": _EMOJI_ITEM_SCHEMA,
+                }],
+                "tool_choice": {"type": "tool", "name": "return_emoji"},
+            },
+        })
+
+    batch = client.messages.batches.create(requests=requests)
+    log.info("Emoji batch %s submitted (%d titles), polling…",
+             batch.id, len(missing))
+
+    deadline = time.monotonic() + 1800  # 30-min cap (Anthropic typically <10m)
+    while True:
+        if time.monotonic() > deadline:
+            log.warning("Emoji batch %s exceeded 30-min cap; cancelling",
+                        batch.id)
+            try:
+                client.messages.batches.cancel(batch.id)
+            except Exception:  # noqa: BLE001
+                pass
+            raise TimeoutError(f"emoji batch {batch.id} timed out")
+        batch = client.messages.batches.retrieve(batch.id)
+        if batch.processing_status == "ended":
+            break
+        log.info("Emoji batch %s status=%s — sleeping 10s",
+                 batch.id, batch.processing_status)
+        time.sleep(10)
+
+    log.info("Emoji batch %s ended, reading results", batch.id)
+
+    out: dict[str, str] = {}
+    for entry in client.messages.batches.results(batch.id):
+        original = title_for.get(entry.custom_id)
+        if original is None:
+            continue
+        if getattr(entry.result, "type", None) != "succeeded":
+            log.warning("Emoji batch entry for %r: %s",
+                        original[:60], getattr(entry.result, "type", None))
+            continue
+        msg = entry.result.message
+        for block in msg.content:
+            if (getattr(block, "type", None) == "tool_use"
+                    and block.name == "return_emoji"):
+                emoji = ((block.input or {}).get("emoji") or "").strip()
+                if emoji:
+                    out[original] = emoji
+                break
+
+    log.info("Emoji batch %s: %d/%d titles produced an emoji",
+             batch.id, len(out), len(missing))
+    return out
+
+
+def emojis_for_titles(
+    s: Session, titles: list[str], *, use_batch: bool = False,
+) -> dict[str, str]:
     """Return ``{title: emoji}`` for every distinct title.
 
-    DB cache first; one Haiku call covers any titles missing from the table,
-    and results are persisted so future runs skip the LLM entirely. On LLM
-    failure we use a small built-in keyword fallback rather than blocking
-    edition generation.
+    DB cache first; new titles are looked up via Claude (Haiku). The lookup
+    path depends on ``use_batch``:
+
+    * ``use_batch=True`` — Anthropic Batch API (one entry per title). ~50%
+      cheaper but adds 5+ min of latency. Use for cron-triggered runs.
+    * ``use_batch=False`` — single consolidated Messages call. ~10s latency,
+      full price. Use for user-triggered ``/refresh`` so the spinner doesn't
+      run for half an hour.
+
+    Either way, results are persisted to ``event_emojis`` so the next run
+    is a pure cache hit. On any LLM failure we fall back to a small built-in
+    keyword map rather than blocking edition generation.
     """
     from app.db import EventEmoji
 
@@ -160,37 +312,20 @@ def emojis_for_titles(s: Session, titles: list[str]) -> dict[str, str]:
     if not missing:
         return {t: cached[norm_for[t]] for t in distinct}
 
-    # 2. One Haiku call for everything still missing.
+    # 2. LLM lookup — batched for cron, single-shot for refresh.
     llm_map: dict[str, str] = {}
     try:
-        out = claude_client.call_with_schema(
-            system=_EMOJI_SYSTEM,
-            user=(
-                "Return one representative emoji for each of these calendar "
-                "event titles. Output via the `return_emojis` tool with one "
-                "entry per title, in the same order:\n\n"
-                + "\n".join(f"- {t}" for t in missing)
-            ),
-            schema=_EMOJI_SCHEMA,
-            schema_name="return_emojis",
-            schema_description="Map of calendar event titles to a single emoji.",
-            max_tokens=1500,
-            model=_EMOJI_MODEL,
-        )
-        by_norm = {_normalize_title(t): t for t in missing}
-        for entry in out.get("emojis", []):
-            title = (entry.get("title") or "").strip()
-            emoji = (entry.get("emoji") or "").strip()
-            if not title or not emoji:
-                continue
-            # Match by normalized title so trivial differences (case /
-            # whitespace) in the model's echoed title don't break the lookup.
-            original = by_norm.get(_normalize_title(title))
-            if original is not None:
-                llm_map[original] = emoji
+        if use_batch:
+            log.info("Emoji lookup: %d missing titles via Batch API", len(missing))
+            llm_map = _emoji_lookup_batch(missing)
+        else:
+            log.info("Emoji lookup: %d missing titles via single call", len(missing))
+            llm_map = _emoji_lookup_single_call(missing)
     except Exception:  # noqa: BLE001 — never fail edition generation on emoji lookup
-        log.exception("Emoji LLM lookup failed; using fallback for %d titles",
-                      len(missing))
+        log.exception(
+            "Emoji LLM lookup failed (use_batch=%s); using fallback for %d titles",
+            use_batch, len(missing),
+        )
 
     # 3. Apply (LLM result | keyword fallback) and persist.
     now = datetime.now(UTC)
@@ -290,13 +425,18 @@ def _upsert_day(s: Session, day: date, html: str, fp: str, events_json: str) -> 
 
 
 def get_or_generate_summaries(
-    s: Session, events_by_day: dict[date, list[dict]]
+    s: Session,
+    events_by_day: dict[date, list[dict]],
+    *,
+    use_batch: bool = False,
 ) -> dict[date, str]:
     """Return ``{day: html}`` for all days with events.
 
     Cache hits return immediately. Misses are rendered in pure Python using a
-    DB-backed emoji map; the only LLM call needed is a single Haiku request
-    that backfills any titles whose emoji we haven't seen before.
+    DB-backed emoji map; titles whose emoji we haven't seen before are
+    backfilled via Claude — through the Batch API when ``use_batch=True``
+    (cron) or via a single Messages call when ``use_batch=False`` (user
+    /refresh, where wall-clock latency matters).
     """
     from app.db import CalendarDaySummary
 
@@ -326,7 +466,7 @@ def get_or_generate_summaries(
             t = (ev.get("summary") or "").strip()
             if t:
                 titles.append(t)
-    emoji_for = emojis_for_titles(s, titles)
+    emoji_for = emojis_for_titles(s, titles, use_batch=use_batch)
 
     for day, events, fp in to_generate:
         html = render_day_html(day, events, emoji_for)

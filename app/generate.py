@@ -153,8 +153,15 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
                 events_by_day.setdefault(d, []).append(ev)
             except ValueError:
                 pass
-        with _step(f"calendar_summary ({len(events_by_day)} days)"):
-            calendar_summary.get_or_generate_summaries(s, events_by_day)
+        # Cron runs (morning/evening) take the cheaper Batch-API emoji path
+        # at the cost of ~5+ min of extra latency. User /refresh runs take
+        # the single-call path so the spinner stays under ~10 s for emojis.
+        emoji_use_batch = slot != "refresh"
+        with _step(f"calendar_summary ({len(events_by_day)} days, "
+                   f"emoji_batch={emoji_use_batch})"):
+            calendar_summary.get_or_generate_summaries(
+                s, events_by_day, use_batch=emoji_use_batch,
+            )
 
     except Exception as e:  # noqa: BLE001 — never let calendar break generation
         log.warning("Calendar unavailable: %s", e)

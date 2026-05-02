@@ -35,36 +35,6 @@ log = logging.getLogger(__name__)
 # fingerprint so cached rows are auto-invalidated and re-rendered.
 _PROMPT_VERSION = "v4-python-bullet"
 
-_FALLBACK_EMOJI_RULES: list[tuple[tuple[str, ...], str]] = [
-    (("birthday",), "🎂"),
-    (("anniversary",), "💞"),
-    (("soccer",), "⚽"),
-    (("dance",), "💃"),
-    (("school", "elementary", "dorchester"), "🏫"),
-    (("dentist",), "🦷"),
-    (("doctor", "appointment", "checkup"), "🩺"),
-    (("dinner",), "🍽"),
-    (("lunch",), "🍱"),
-    (("breakfast",), "🥐"),
-    (("flight", "travel", "trip"), "✈️"),
-    (("holiday", "labor day", "memorial day", "thanksgiving", "christmas",
-      "new year", "easter"), "🎉"),
-    (("water",), "💧"),
-    (("delivery",), "📦"),
-    (("photo",), "📷"),
-    (("library",), "📚"),
-]
-
-
-def _fallback_emoji(title: str) -> str:
-    """Last-resort emoji when the LLM is unavailable."""
-    t = (title or "").lower()
-    for keywords, emoji in _FALLBACK_EMOJI_RULES:
-        if any(kw in t for kw in keywords):
-            return emoji
-    return "📅"
-
-
 def _normalize_title(title: str) -> str:
     """Collapse whitespace + lowercase so trivial variants share one emoji."""
     return re.sub(r"\s+", " ", (title or "").strip().lower())
@@ -312,7 +282,10 @@ def emojis_for_titles(
     if not missing:
         return {t: cached[norm_for[t]] for t in distinct}
 
-    # 2. LLM lookup — batched for cron, single-shot for refresh.
+    # 2. LLM lookup — batched for cron, single-shot for refresh. ANY failure
+    #    here is non-fatal: titles whose emoji we can't get just render without
+    #    an emoji, and we DON'T persist a guess — so the next refresh gets
+    #    another chance to look them up properly.
     llm_map: dict[str, str] = {}
     try:
         if use_batch:
@@ -323,15 +296,20 @@ def emojis_for_titles(
             llm_map = _emoji_lookup_single_call(missing)
     except Exception:  # noqa: BLE001 — never fail edition generation on emoji lookup
         log.exception(
-            "Emoji LLM lookup failed (use_batch=%s); using fallback for %d titles",
+            "Emoji LLM lookup failed (use_batch=%s); %d titles will render "
+            "without an emoji this run.",
             use_batch, len(missing),
         )
 
-    # 3. Apply (LLM result | keyword fallback) and persist.
+    # 3. Persist ONLY successful lookups. Titles the LLM didn't answer are
+    #    left uncached so they'll be re-attempted on the next refresh.
     now = datetime.now(UTC)
+    persisted = 0
     for t in missing:
+        emoji = (llm_map.get(t) or "").strip()
+        if not emoji:
+            continue  # leave uncached → render without emoji, retry next run
         tn = norm_for[t]
-        emoji = (llm_map.get(t) or "").strip() or _fallback_emoji(t)
         cached[tn] = emoji
         existing = s.get(EventEmoji, tn)
         if existing:
@@ -341,9 +319,19 @@ def emojis_for_titles(
             s.add(EventEmoji(
                 title_norm=tn, emoji=emoji, generated_at=now,
             ))
-    s.commit()
+        persisted += 1
+    if persisted:
+        s.commit()
+    if persisted < len(missing):
+        log.info(
+            "Emoji lookup: %d/%d new titles got an emoji this run "
+            "(%d will retry next time).",
+            persisted, len(missing), len(missing) - persisted,
+        )
 
-    return {t: cached[norm_for[t]] for t in distinct}
+    # Titles still missing from `cached` will simply be absent from the
+    # returned dict — `render_day_html` handles that by skipping the emoji.
+    return {t: cached[norm_for[t]] for t in distinct if norm_for[t] in cached}
 
 
 # ───────────────────────── HTML rendering ───────────────────────────
@@ -364,19 +352,24 @@ def _format_time(start: str) -> str | None:
 def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) -> str:
     """Return the one-line ``<div>…</div>`` for a single calendar day.
 
-    Format: ``Day, Month D: time {emoji} title • {emoji} title``.
+    Format: ``Day, Month D: time {emoji} title • {emoji} title`` — when an
+    emoji is known. If a title's emoji isn't in ``emoji_for`` (LLM lookup
+    failed or hasn't happened yet), the event renders without an emoji
+    rather than blocking edition generation.
+
     Events are sorted by start time; all-day events sort to the front.
     """
     day_label = f"{day.strftime('%A, %B')} {day.day}"
     pieces: list[str] = []
     for ev in sorted(events, key=lambda x: x.get("start", "")):
         title = (ev.get("summary") or "(untitled)").strip() or "(untitled)"
-        emoji = emoji_for.get(title) or _fallback_emoji(title)
+        emoji = (emoji_for.get(title) or "").strip()
         time_str = _format_time(ev.get("start", ""))
-        if time_str:
-            pieces.append(f"{time_str} {emoji} {title}")
+        prefix = f"{time_str} " if time_str else ""
+        if emoji:
+            pieces.append(f"{prefix}{emoji} {title}")
         else:
-            pieces.append(f"{emoji} {title}")
+            pieces.append(f"{prefix}{title}".strip())
     return f"<div><strong>{day_label}:</strong> " + " • ".join(pieces) + "</div>"
 
 

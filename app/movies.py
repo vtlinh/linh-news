@@ -2,12 +2,18 @@
 
 The full unfiltered watchlist (all MPAA ratings) lives in the ``movies`` DB
 table. :func:`fetch_year_movie_list` calls TMDB once a week to refresh the
-table:
+table, merging two candidate sources:
 
-* ``GET /discover/movie`` for movies whose original US theatrical primary
-  release falls in ``[today - 21 days, today + 365 days]``,
-* ``GET /movie/{id}?append_to_response=videos,release_dates`` per candidate
-  to extract MPAA cert, plot summary, YouTube trailer URLs, and poster URL.
+* ``GET /movie/now_playing`` + ``GET /movie/upcoming`` — TMDB's curated US
+  theatrical feeds (mainstream Hollywood, ~3-month forward horizon).
+* ``GET /discover/movie`` restricted to US wide-theatrical releases with
+  US certification data and a minimum vote count, for primary releases in
+  ``[today - 21 days, today + 365 days]`` — catches mainstream titles
+  further out than the curated feeds reach.
+
+Then ``GET /movie/{id}?append_to_response=videos,release_dates`` per
+candidate to extract MPAA cert, plot summary, YouTube trailer URLs, and
+poster URL.
 
 Filtering (allowed MPAA ratings + admin-hidden titles + edition window) is
 applied at service time:
@@ -44,6 +50,11 @@ EDITION_FUTURE_WINDOW = timedelta(days=60)
 # Refresh policy: at most once per week.
 _REFRESH_MIN_SECONDS = 7 * 24 * 60 * 60
 
+# Discover window — extends past the ~3-month horizon of TMDB's curated
+# now_playing / upcoming feeds.
+_DISCOVER_PAST = timedelta(weeks=3)
+_DISCOVER_FUTURE = timedelta(days=365)
+
 _VALID_TRAILER_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[\w-]{8,}")
 
 
@@ -55,10 +66,28 @@ def fetch_year_movie_list() -> list[dict]:
     so service-time filters can include or exclude any rating without a
     refetch."""
     today = date.today()
-    candidates = tmdb.now_playing_and_upcoming()
+    feed = tmdb.now_playing_and_upcoming()
+    discover = tmdb.discover_us_theatrical(
+        earliest=today - _DISCOVER_PAST,
+        latest=today + _DISCOVER_FUTURE,
+    )
+    # Merge & de-dupe by id, preserving feed entries first (they're the
+    # mainstream curated set).
+    seen: set[int] = set()
+    candidates: list[dict] = []
+    for m in feed + discover:
+        mid = m.get("id")
+        if mid is None or int(mid) in seen:
+            continue
+        seen.add(int(mid))
+        candidates.append(m)
     if not candidates:
         log.warning("TMDB feeds returned no results — table left untouched.")
         return _read_all_as_dicts()
+    log.info(
+        "TMDB candidates: %d from now_playing+upcoming, %d from discover, "
+        "%d unique after merge.", len(feed), len(discover), len(candidates),
+    )
 
     ids = [int(c["id"]) for c in candidates if c.get("id") is not None]
 

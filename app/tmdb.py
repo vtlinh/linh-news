@@ -12,6 +12,11 @@ Public helpers:
   ``/movie/upcoming`` (US region). These are TMDB's curated US theatrical
   release feeds — mainstream entries only, every one with US certification
   data. Results merged and de-duped by id.
+* :func:`discover_us_theatrical` — paginated ``/discover/movie`` restricted
+  to US wide-theatrical releases with US certification data and a minimum
+  vote count, for movies whose primary release falls in a date window.
+  Catches mainstream titles further out than the curated feeds reach
+  (those typically only span ~3 months).
 * :func:`fetch_movie_detail` — ``/movie/{id}?append_to_response=videos,
   release_dates`` for one movie, returning the fields we store.
 """
@@ -74,6 +79,63 @@ def now_playing_and_upcoming(*, max_pages: int = 5) -> list[dict]:
                     out.append(m)
                 if page >= int(body.get("total_pages") or 0):
                     break
+    return out
+
+
+def discover_us_theatrical(
+    *,
+    earliest: date,
+    latest: date,
+    max_pages: int = 10,
+    min_votes: int = 20,
+) -> list[dict]:
+    """Paginate ``/discover/movie`` restricted to US wide-theatrical releases
+    with US certifications and a minimum vote count. ``primary_release_date``
+    is constrained to ``[earliest, latest]``.
+
+    The vote-count and certification filters drop the long tail of festival
+    shorts, foreign indies, and self-published entries that ``with_release_type``
+    alone doesn't filter out — the certification filter is *not* a rating
+    filter (it allows every cert from G to NC-17), it just requires that
+    the movie has a US cert, which correlates almost perfectly with "real
+    US wide release".
+    """
+    key = get_settings().tmdb_api_key
+    if not key:
+        log.warning("TMDB_API_KEY not set — discover returns empty.")
+        return []
+    out: list[dict] = []
+    seen: set[int] = set()
+    with _client() as c:
+        for page in range(1, max_pages + 1):
+            r = c.get(
+                f"{_BASE}/discover/movie",
+                params={
+                    "api_key": key,
+                    "region": "US",
+                    "with_release_type": "3",
+                    "certification_country": "US",
+                    "certification.lte": "NC-17",
+                    "vote_count.gte": str(min_votes),
+                    "primary_release_date.gte": earliest.isoformat(),
+                    "primary_release_date.lte": latest.isoformat(),
+                    "sort_by": "primary_release_date.asc",
+                    "include_adult": "false",
+                    "page": str(page),
+                },
+            )
+            if r.status_code != 200:
+                log.warning("TMDB discover page %s -> %s", page, r.status_code)
+                break
+            body = r.json()
+            for m in body.get("results") or []:
+                mid = m.get("id")
+                if mid is None or mid in seen:
+                    continue
+                seen.add(int(mid))
+                out.append(m)
+            if page >= int(body.get("total_pages") or 0):
+                break
     return out
 
 

@@ -23,12 +23,12 @@ All facts must be dated within 1–2 days of {{DATE}}. Use the `web_search` tool
 
 The HTML is split into a **main flow** and a **right-rail sidebar**.
 
-**The weather strip MUST be the very first element**, before the flow and before the rail. It always appears above every other section, including the calendar (which lives in the rail). Do not move it inside the rail or the flow.
+**The weather placeholder MUST be the very first element**, before the flow and before the rail. The server injects the real weather strip at render time.
 
 Render exactly:
 
 ```html
-<div class="weather-strip">…</div>
+<!-- WEATHER_PLACEHOLDER -->
 <div class="flow">
   <section>…politics…</section>
   <section>…NJ/NY…</section>
@@ -50,19 +50,19 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
 
 **Omit a section entirely if there is no fresh content.**
 
-1. **Weather** — render as a **single one-line strip** at the very top, immediately under the masthead, with NO heading/title and NO sub-paragraphs. Wrap it in `<div class="weather-strip">…</div>` so the page chrome can style it. Format:
-   `Now 12°C 🌤 · Wind NW 8 mph · Today H 14° / L 7° ☀️ · Tomorrow H 16° / L 9° ☁️ · ⚠ Wind advisory until 6 PM`
-   - **Now observation (pre-fetched):** `{{NOW_WEATHER}}` — use this verbatim as the "Now …" prefix. If empty, use `web_search` to get the current observation from NWS/Weather.gov and supply it yourself.
-   - **Today & tomorrow forecast:** use `web_search` to get today's high/low and tomorrow's conditions for **15 Hunter Ridge, Woodcliff Lake, NJ 07677** (coords: `{{WEATHER_COORDS}}`).
-   - All temperatures in **°C** — convert from any Fahrenheit source.
-   - Surface any active NWS alerts inline at the end of the strip with a ⚠ glyph; do not split them into a separate section.
+1. **Weather** — place exactly `<!-- WEATHER_PLACEHOLDER -->` as the very first element of the body (before the flow and the rail). Do **not** generate any weather content yourself — the server injects a pre-rendered weather strip at render time using NWS data. Output only the literal comment tag, nothing else at this position.
 2. **Calendar** — place exactly `<!-- CALENDAR_PLACEHOLDER -->` where the calendar section belongs in the rail (between Stocks and Movies). Do **not** generate any calendar content yourself — the server injects real pre-generated calendar data at render time. Output only the literal comment tag, nothing else at this position.
 3. **Top global political news**
 4. **Top US political news**
 5. **Top NJ / NY news**
 6. **Top Dorchester Elementary School news + upcoming events**
    - In addition to general web searches, **always check `https://www.wclpfa.com/WlL/index.cfm`** (the Woodcliff Lake PFA / Dorchester family page) for fresh announcements, events, and deadlines. Use `web_search` and/or fetch the page directly. Surface anything dated within the next 4 weeks; flag deadlines (registration cutoffs, sign-ups, payment due dates) prominently.
-   - Avoid duplicating school events that are already on the family calendar; mention the PFA URL as a source on each item.
+   - **Authoritative upcoming school events from the family Dorchester Parent Calendar — use these dates verbatim, do not invent event dates:**
+     ```
+     {{DORCHESTER_CALENDAR_EVENTS}}
+     ```
+     Surface anything within the next 4 weeks; flag deadlines.
+   - Mention the PFA URL as a source on each item.
 7. **Top financial news**
 8. **Top tech news** — major developments in the tech industry: product launches, acquisitions, regulatory actions, platform changes, hardware releases. Exclude AI-specific stories (those go in the next section) and financial/earnings coverage (that goes in financial news).
 9. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)

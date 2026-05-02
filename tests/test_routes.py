@@ -31,6 +31,36 @@ def test_home_works_for_viewer(client, login_as):
     assert "Refresh" in r.text
 
 
+def test_home_substitutes_weather_placeholder(client, login_as, db_session):
+    """The view-time `_inject_weather` injector must replace the placeholder
+    using the per-edition forecast/alerts JSON and the cached 'Now' string."""
+    from app import weather
+    db_session.add(
+        Edition(
+            date=date(2026, 5, 2),
+            html='<!-- WEATHER_PLACEHOLDER --><div>x</div>',
+            pdf=b"%PDF-1.4 fake",
+            generated_at=datetime.now(UTC),
+            weather_forecast_json={
+                "today_h": 14, "today_l": 7, "today_em": "☀️",
+                "tomorrow_h": 16, "tomorrow_l": 9, "tomorrow_em": "☁️",
+            },
+            weather_alerts_json=["Wind Advisory until 6 PM"],
+        )
+    )
+    db_session.commit()
+
+    login_as("friend@example.com")
+    with patch("app.settings.local_today", return_value=date(2026, 5, 2)), \
+            patch.object(weather, "get_now_cached", return_value="12°C ⛅"):
+        r = client.get("/d/2026-05-02")
+    assert r.status_code == 200
+    assert "<!-- WEATHER_PLACEHOLDER -->" not in r.text
+    assert "Now 12°C ⛅" in r.text
+    assert "Today H 14° / L 7° ☀️" in r.text
+    assert "⚠ Wind Advisory until 6 PM" in r.text
+
+
 def test_pdf_404_when_missing(client, login_as):
     login_as("vtlinh87@gmail.com")
     r = client.get("/pdf/2026-04-30")

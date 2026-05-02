@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 _CAL_PLACEHOLDER = "<!-- CALENDAR_PLACEHOLDER -->"
 _MOV_PLACEHOLDER = "<!-- MOVIES_PLACEHOLDER -->"
+_WEATHER_PLACEHOLDER = "<!-- WEATHER_PLACEHOLDER -->"
 
 _INTERACTIVE_TAGS = ("button", "script", "form", "input", "select", "textarea")
 _STRIP_CLASSES = (
@@ -84,16 +85,19 @@ def build(
     pdf_calendar_html: str,
     pdf_movies_html: str,
     today: date,
+    weather_strip_html: str = "",
 ) -> str:
     """Build the print-styled HTML document for WeasyPrint.
 
     ``body_html`` is the LLM's screen-HTML body (post-``_strip_document_wrapper``).
-    ``pdf_calendar_html`` and ``pdf_movies_html`` are server-rendered blocks
-    that replace the literal placeholder comments inside the body.
+    ``pdf_calendar_html``, ``pdf_movies_html`` and ``weather_strip_html`` are
+    server-rendered blocks that replace the literal placeholder comments
+    inside the body.
     """
     # 1. Substitute placeholders before parsing (they live in HTML comments).
     body_html = body_html.replace(_CAL_PLACEHOLDER, pdf_calendar_html or "")
     body_html = body_html.replace(_MOV_PLACEHOLDER, pdf_movies_html or "")
+    body_html = body_html.replace(_WEATHER_PLACEHOLDER, weather_strip_html or "")
 
     soup = BeautifulSoup(body_html, "html.parser")
     _strip_interactive(soup)

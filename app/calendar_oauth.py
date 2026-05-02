@@ -22,7 +22,7 @@ EVENT_TITLE_FILTERS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
-def _is_filtered(calendar_name: str, title: str) -> bool:
+def is_filtered(calendar_name: str, title: str) -> bool:
     cn = (calendar_name or "").lower()
     for needle, pattern in EVENT_TITLE_FILTERS:
         if needle in cn and pattern.search(title or ""):
@@ -190,7 +190,7 @@ def fetch_events(
                 if ev.get("status") == "cancelled":
                     continue
                 summary = ev.get("summary", "(no title)")
-                if _is_filtered(cal_name, summary):
+                if is_filtered(cal_name, summary):
                     continue
                 start_d, all_day = _event_start(ev)
                 end_d = _event_end(ev)

@@ -28,9 +28,13 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     # Lead-image lookup / preflight reach Claude + the network — stub them.
     fake_lead = patch.object(generate, "_inject_lead_image", side_effect=lambda h, _d: h)
     fake_ensure = patch.object(generate, "_ensure_lead_image", side_effect=lambda h: h)
+    fake_forecast = patch.object(generate.weather, "fetch_forecast", return_value={})
+    fake_alerts = patch.object(generate.weather, "fetch_alerts", return_value=[])
+    fake_now = patch.object(generate.weather, "get_now_cached", return_value="")
     today = date(2026, 4, 30)
 
-    with fake_claude, fake_pdf, fake_list, fake_fetch, fake_movies, fake_lead, fake_ensure:
+    with fake_claude, fake_pdf, fake_list, fake_fetch, fake_movies, fake_lead, fake_ensure, \
+            fake_forecast, fake_alerts, fake_now:
         generate.run("morning", today=today)
         row = db_session.get(Edition, today)
         assert row.html == "<p>hi v1</p>"
@@ -42,7 +46,8 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         return_value={"html": "<p>hi v2</p>", "pdf_html": "<p>pdf v2</p>"},
     )
     fake_pdf2 = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v2")
-    with fake_claude2, fake_pdf2, fake_list, fake_fetch, fake_movies, fake_lead, fake_ensure:
+    with fake_claude2, fake_pdf2, fake_list, fake_fetch, fake_movies, fake_lead, fake_ensure, \
+            fake_forecast, fake_alerts, fake_now:
         generate.run("evening", today=today)
 
     db_session.expire_all()
@@ -57,8 +62,65 @@ def test_build_context_includes_overlays(db_session, monkeypatch):
          patch.object(generate.calendar_oauth, "fetch_events", return_value=[]), \
          patch.object(
              generate.movies_mod, "get_movies", return_value=[],
-         ):
+         ), \
+         patch.object(generate.weather, "fetch_forecast", return_value={}), \
+         patch.object(generate.weather, "fetch_alerts", return_value=[]):
         ctx = generate._build_context(db_session, today, "evening")
     assert ctx["DATE"] == "2026-04-30"
     assert ctx["WATCHLIST_STOCKS"] == []
-    assert ctx["WEATHER_COORDS"]
+    # Weather + calendar are rendered natively; nothing about them should
+    # leak into the LLM-bound public context.
+    assert "WEATHER_COORDS" not in ctx
+    assert "NOW_WEATHER" not in ctx
+    assert "PDF_CALENDAR_HTML" not in ctx
+    # Dorchester Parent Calendar is the lone exception — passed in so the
+    # LLM can ground the school news section in real upcoming events.
+    assert ctx["DORCHESTER_CALENDAR_EVENTS"] == "(none)"
+    # Private keys are present here but get popped before the LLM call.
+    assert "_pdf_calendar_html" in ctx
+    assert "_pdf_movies_html" in ctx
+    assert "_weather_forecast" in ctx
+    assert "_weather_alerts" in ctx
+
+
+def test_build_context_dorchester_passthrough(db_session, monkeypatch):
+    today = date(2026, 4, 30)
+    cals = [
+        {"id": "dor", "name": "Dorchester Parent Calendar"},
+        {"id": "fam", "name": "Family"},
+    ]
+    events = [
+        {
+            "calendar_id": "dor",
+            "ical_uid": "u1",
+            "summary": "Spring concert",
+            "start": "2026-05-08T09:00:00",
+        },
+        {
+            "calendar_id": "dor",
+            "ical_uid": "u2",
+            "summary": "Field day",
+            "start": "2026-05-15",
+        },
+        {
+            "calendar_id": "fam",
+            "ical_uid": "u3",
+            "summary": "Dentist",
+            "start": "2026-05-03T14:00:00",
+        },
+    ]
+    with patch.object(generate.calendar_oauth, "list_calendars", return_value=cals), \
+         patch.object(generate.calendar_oauth, "fetch_events", return_value=events), \
+         patch.object(generate.calendar_summary, "get_or_generate_summaries", return_value={}), \
+         patch.object(generate.movies_mod, "get_movies", return_value=[]), \
+         patch.object(generate.weather, "fetch_forecast", return_value={}), \
+         patch.object(generate.weather, "fetch_alerts", return_value=[]):
+        ctx = generate._build_context(db_session, today, "evening")
+    txt = ctx["DORCHESTER_CALENDAR_EVENTS"]
+    assert "Spring concert" in txt
+    assert "Field day" in txt
+    # Dentist is on the Family calendar — must NOT leak in.
+    assert "Dentist" not in txt
+    # Time formatting smoke check.
+    assert "9:00 AM" in txt
+    assert "all-day" in txt

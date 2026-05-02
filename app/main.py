@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session, defer
 
-from app import auth, cache, calendar_oauth, calendar_summary, overlays, prefs
+from app import auth, cache, calendar_oauth, calendar_summary, overlays, prefs, weather
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, get_session
@@ -107,6 +107,22 @@ def logout(request: Request, s: Session = Depends(get_session)):
 
 # ──────────────────────── Viewer ────────────────────────
 
+def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
+    """Replace ``<!-- WEATHER_PLACEHOLDER -->`` with a freshly assembled
+    weather strip. The 'Now' observation comes through the 1-hour DB cache
+    in ``weather.get_now_cached``; forecast and alerts are read off the
+    Edition row (captured at generation time).
+    """
+    if "<!-- WEATHER_PLACEHOLDER -->" not in html:
+        return html
+    coords = get_settings().weather_coords
+    now = weather.get_now_cached(s, coords)
+    forecast = (edition.weather_forecast_json if edition else None) or {}
+    alerts = (edition.weather_alerts_json if edition else None) or []
+    strip = weather.build_weather_strip(now, forecast, alerts)
+    return html.replace("<!-- WEATHER_PLACEHOLDER -->", strip, 1)
+
+
 def _inject_calendar(html: str, s: Session, today: date) -> str:
     """Replace <!-- CALENDAR_PLACEHOLDER --> with live calendar from DB."""
     if "<!-- CALENDAR_PLACEHOLDER -->" not in html:
@@ -157,6 +173,7 @@ def _render_viewer(
     next_date = day + timedelta(days=1)
     edition_html = edition.html if edition else None
     if edition_html:
+        edition_html = _inject_weather(edition_html, s, edition)
         edition_html = _inject_calendar(edition_html, s, today)
         edition_html = _inject_movies(edition_html, s, today)
     return templates.TemplateResponse(

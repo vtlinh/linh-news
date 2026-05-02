@@ -8,9 +8,9 @@ def test_news_pr_has_required_placeholders():
     for ph in [
         "{{DATE}}",
         "{{WATCHLIST_STOCKS}}",
-        "{{WEATHER_COORDS}}",
-        "{{NOW_WEATHER}}",
+        "{{DORCHESTER_CALENDAR_EVENTS}}",
         "{{CUSTOM_TOPICS}}",
+        "<!-- WEATHER_PLACEHOLDER -->",
         "<!-- CALENDAR_PLACEHOLDER -->",
         "<!-- MOVIES_PLACEHOLDER -->",
     ]:

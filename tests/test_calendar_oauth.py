@@ -75,15 +75,15 @@ def test_allowed_movie_ratings_tiers(monkeypatch):
 def test_dorchester_filters_other_grades(monkeypatch):
     monkeypatch.setattr(calendar_oauth, "current_kid_grade", lambda *a, **k: 2)
     cn = "Dorchester Parent Calendar"
-    assert calendar_oauth._is_filtered(cn, "3rd Grade Field Trip") is True
-    assert calendar_oauth._is_filtered(cn, "Grade 5 Music Recital") is True
-    assert calendar_oauth._is_filtered(cn, "Kindergarten Pickup Drill") is True
+    assert calendar_oauth.is_filtered(cn, "3rd Grade Field Trip") is True
+    assert calendar_oauth.is_filtered(cn, "Grade 5 Music Recital") is True
+    assert calendar_oauth.is_filtered(cn, "Kindergarten Pickup Drill") is True
     # Same-grade and grade-less events pass through.
-    assert calendar_oauth._is_filtered(cn, "2nd Grade Read-Aloud") is False
-    assert calendar_oauth._is_filtered(cn, "Grade 2 Art Show") is False
-    assert calendar_oauth._is_filtered(cn, "Spirit Week") is False
+    assert calendar_oauth.is_filtered(cn, "2nd Grade Read-Aloud") is False
+    assert calendar_oauth.is_filtered(cn, "Grade 2 Art Show") is False
+    assert calendar_oauth.is_filtered(cn, "Spirit Week") is False
     # Other calendars are unaffected by the grade filter.
-    assert calendar_oauth._is_filtered("Linh calendar", "3rd Grade Field Trip") is False
+    assert calendar_oauth.is_filtered("Linh calendar", "3rd Grade Field Trip") is False
 
 
 def test_list_calendars_returns_normalized(monkeypatch, db_session):

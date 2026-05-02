@@ -5,7 +5,7 @@ from datetime import date
 from app import pdf_html_builder
 
 SAMPLE_BODY = """
-<div class="weather-strip">Now 12°C 🌤 · Today H 14° / L 7°</div>
+<!-- WEATHER_PLACEHOLDER -->
 <div class="flow">
   <section><h2>🇺🇸 US Politics</h2>
     <article>Story one with a <span class="sources" tabindex="0">SOURCES</span> popup.</article>
@@ -30,8 +30,12 @@ def test_builder_assembles_print_document():
         SAMPLE_BODY,
         pdf_calendar_html='<section><h2>📅 Calendar</h2><p>Today</p></section>',
         pdf_movies_html='<section><h2>🎬 Movies</h2><p>A film</p></section>',
+        weather_strip_html='<div class="weather-strip">Now 12°C 🌤 · Today H 14° / L 7°</div>',
         today=date(2026, 5, 2),
     )
+    # Weather placeholder is substituted before the rest of the build.
+    assert "<!-- WEATHER_PLACEHOLDER -->" not in out
+    assert "Now 12°C" in out
     assert out.startswith("<!DOCTYPE html>")
     # Masthead + dateline
     assert "The Linh Times" in out

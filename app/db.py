@@ -24,6 +24,12 @@ class Edition(Base):
     pdf_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Weather forecast + alerts captured at generation time so view-time
+    # injection can render the weather strip without re-querying NWS for
+    # the slowly-changing parts. The 'Now' observation is refreshed
+    # separately on each view via the weather_now cache.
+    weather_forecast_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    weather_alerts_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class HiddenMovie(Base):
@@ -126,6 +132,18 @@ class CalendarDaySummary(Base):
     event_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     events_json: Mapped[str] = mapped_column(Text, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WeatherNow(Base):
+    """Cached NWS 'Now' observation, keyed by coordinates. Refreshed on view
+    when older than 1 hour so the page never blocks on NWS in the common
+    case but the displayed temperature stays current."""
+    __tablename__ = "weather_now"
+    coords: Mapped[str] = mapped_column(String, primary_key=True)
+    now_text: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
 
 
 class EventEmoji(Base):

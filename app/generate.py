@@ -58,16 +58,28 @@ def run(slot: Slot, today: date | None = None) -> date:
     with _step("build_context"), Maker() as s:
         ctx = _build_context(s, today, slot)
     pdf_movies_html = ctx.pop("_pdf_movies_html", "")
+    pdf_calendar_html = ctx.pop("_pdf_calendar_html", "")
+    weather_forecast = ctx.pop("_weather_forecast", {})
+    weather_alerts = ctx.pop("_weather_alerts", [])
 
     with _step("claude_generate_edition"):
         response = claude_client.generate_edition(template, ctx)
     with _step("strip_document_wrapper"):
         response["html"] = _strip_document_wrapper(response["html"])
+    # Build the weather strip used in the PDF (baked at generation time;
+    # the screen page substitutes its own at view time so 'Now' stays
+    # within the 1-hour cache window).
+    with _step("build_pdf_weather_strip"), Maker() as s:
+        pdf_now = weather.get_now_cached(s, settings.weather_coords)
+    pdf_weather_strip = weather.build_weather_strip(
+        pdf_now, weather_forecast, weather_alerts,
+    )
     with _step("build_pdf_html"):
         pdf_html = pdf_html_builder.build(
             response["html"],
-            pdf_calendar_html=ctx.get("PDF_CALENDAR_HTML", ""),
+            pdf_calendar_html=pdf_calendar_html,
             pdf_movies_html=pdf_movies_html,
+            weather_strip_html=pdf_weather_strip,
             today=today,
         )
     with _step("inject_lead_image"):
@@ -91,7 +103,11 @@ def run(slot: Slot, today: date | None = None) -> date:
         pdf_bytes = pdf.html_to_pdf(pdf_html)
 
     with _step("upsert_edition"), Maker() as s:
-        _upsert_edition(s, today, response["html"], pdf_bytes, pdf_html)
+        _upsert_edition(
+            s, today, response["html"], pdf_bytes, pdf_html,
+            weather_forecast=weather_forecast,
+            weather_alerts=weather_alerts,
+        )
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
     log.info("⏱  ── refresh pipeline end (total %.2fs) ──",
@@ -183,24 +199,32 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     # PDF calendar: today+tomorrow timed events + important all-day, pure Python.
     pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
 
-    # Current "Now" observation from NWS (empty string → Claude falls back to web_search).
-    with _step("NWS fetch_current_now"):
-        now_weather = weather.fetch_current_now(settings.weather_coords)
+    # Dorchester Parent Calendar — the only calendar that's allowed into the
+    # LLM's user message, so Claude can fold concrete upcoming school events
+    # into the Dorchester news section without inventing dates.
+    dorchester_text = calendar_summary.build_dorchester_event_list(events, cal_names)
+
+    # NWS forecast + active alerts — fetched at generation time and persisted
+    # on the Edition row so view-time injection doesn't re-query NWS for the
+    # slowly-changing parts. The 'Now' observation has its own 1-hour cache.
+    with _step("NWS fetch_forecast"):
+        weather_forecast = weather.fetch_forecast(settings.weather_coords)
+    with _step("NWS fetch_alerts"):
+        weather_alerts = weather.fetch_alerts(settings.weather_coords)
 
     return {
         "DATE": today.isoformat(),
         "KID_AGE": calendar_oauth.current_kid_age(today),
         "KID_GRADE": calendar_oauth.current_kid_grade(today),
         "WATCHLIST_STOCKS": watchlist,
-        "WEATHER_COORDS": settings.weather_coords,
-        "NOW_WEATHER": now_weather,
-        "PDF_CALENDAR_HTML": pdf_calendar_html,
+        "DORCHESTER_CALENDAR_EVENTS": dorchester_text,
         "CUSTOM_TOPICS": "",
-        # The PDF movie block is server-rendered and substituted into
-        # ``pdf_html`` after Claude returns (see ``_inject_pdf_movies``).
-        # Held as a private context key so it doesn't leak into the user
-        # message sent to the LLM.
+        # Private context keys (leading underscore). Popped before the LLM
+        # call in run() so they never leak into the user message.
         "_pdf_movies_html": pdf_movies_html,
+        "_pdf_calendar_html": pdf_calendar_html,
+        "_weather_forecast": weather_forecast,
+        "_weather_alerts": weather_alerts,
     }
 
 
@@ -410,12 +434,15 @@ def _strip_document_wrapper(html: str) -> str:
 
 
 def _upsert_edition(
-    s: Session, day: date, html: str, pdf_bytes: bytes, pdf_html: str | None = None
+    s: Session, day: date, html: str, pdf_bytes: bytes, pdf_html: str | None = None,
+    *, weather_forecast: dict | None = None, weather_alerts: list | None = None,
 ) -> None:
     now = datetime.now(UTC)
     if s.bind.dialect.name == "postgresql":
         stmt = pg_insert(Edition).values(
-            date=day, html=html, pdf_html=pdf_html, pdf=pdf_bytes, generated_at=now
+            date=day, html=html, pdf_html=pdf_html, pdf=pdf_bytes, generated_at=now,
+            weather_forecast_json=weather_forecast or None,
+            weather_alerts_json=weather_alerts or None,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[Edition.date],
@@ -424,6 +451,8 @@ def _upsert_edition(
                 "pdf_html": stmt.excluded.pdf_html,
                 "pdf": stmt.excluded.pdf,
                 "generated_at": stmt.excluded.generated_at,
+                "weather_forecast_json": stmt.excluded.weather_forecast_json,
+                "weather_alerts_json": stmt.excluded.weather_alerts_json,
             },
         )
         s.execute(stmt)
@@ -432,6 +461,8 @@ def _upsert_edition(
         s.execute(text("DELETE FROM editions WHERE date = :d"), {"d": day})
         s.add(Edition(
             date=day, html=html, pdf_html=pdf_html, pdf=pdf_bytes, generated_at=now,
+            weather_forecast_json=weather_forecast or None,
+            weather_alerts_json=weather_alerts or None,
         ))
     s.commit()
 

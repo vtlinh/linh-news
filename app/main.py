@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session, defer
 
-from app import auth, cache, calendar_oauth, calendar_summary, overlays
+from app import auth, cache, calendar_oauth, calendar_summary, overlays, prefs
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, get_session
@@ -132,7 +132,7 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
     if not cached:
         return html.replace("<!-- MOVIES_PLACEHOLDER -->", "", 1)
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
-    allowed = set(calendar_oauth.allowed_movie_ratings(today))
+    allowed = set(prefs.get_allowed_ratings(today))
     section = movies_mod.render_html_section(
         cached, today, hidden_titles=hidden, allowed_ratings=allowed,
     )
@@ -603,7 +603,7 @@ def admin_movies_get(
         "admin_movies.html",
         {
             "all_ratings": _ALL_MOVIE_RATINGS,
-            "default_ratings": calendar_oauth.allowed_movie_ratings(),
+            "default_ratings": prefs.get_allowed_ratings(),
         },
     )
 
@@ -616,7 +616,7 @@ def admin_movies_data(
     s: Session = Depends(get_session),
 ):
     requested = [r for r in request.query_params.getlist("ratings") if r in _ALL_MOVIE_RATINGS]
-    selected = set(requested) if requested else set(calendar_oauth.allowed_movie_ratings())
+    selected = set(requested) if requested else set(prefs.get_allowed_ratings())
     movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
     movies = [m for m in movies if m.get("rating") in selected]
     # Drop "Currently in theaters" entries that opened more than 3 weeks ago —
@@ -636,6 +636,21 @@ def admin_movies_data(
         "movies": [{**m, "hidden": m["title"] in hidden} for m in movies],
         "cache_age_seconds": movies_mod.movies_cache_age_seconds(),
     }
+
+
+@app.post("/admin/movies/ratings")
+async def admin_movies_ratings(
+    request: Request,
+    email: str = Depends(auth.require_admin),
+):
+    """Persist the admin's MPAA-rating selection. Used by both the daily
+    HTML edition's Movies section and the printed Linh Times PDF."""
+    body = await request.json()
+    raw = body.get("ratings") or []
+    if not isinstance(raw, list):
+        raise HTTPException(400, "ratings must be a list")
+    saved = prefs.set_allowed_ratings([str(r) for r in raw])
+    return {"ratings": saved}
 
 
 @app.post("/admin/movies/toggle")

@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf, weather
+from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf, prefs, weather
 from app import movies as movies_mod
 from app.db import Edition, session_factory
 from app.settings import get_settings, local_today
@@ -100,7 +100,7 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     # generation cycle and render its PDF block server-side. The HTML page
     # block is rendered at view-time (see ``main._inject_movies``) so admin
     # hides apply immediately without waiting for the next refresh.
-    allowed_ratings = set(calendar_oauth.allowed_movie_ratings(today))
+    allowed_ratings = set(prefs.get_allowed_ratings(today))
     hidden_set = set(hidden_movies)
     pdf_movies_html = ""
     try:

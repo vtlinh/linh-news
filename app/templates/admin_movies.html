@@ -276,10 +276,30 @@
     }
   });
 
+  async function saveRatings(sel) {
+    try {
+      const r = await fetch('/admin/movies/ratings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ratings: sel})
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return true;
+    } catch (e) {
+      window.toast('Failed to save rating filter', true);
+      return false;
+    }
+  }
+
   document.querySelectorAll('input.rating-filter').forEach(cb => {
-    cb.addEventListener('change', () => {
+    cb.addEventListener('change', async () => {
+      const sel = selectedRatings();
+      const ok = await saveRatings(sel);
       load(false);
-      window.toast('Rating filter changed — refresh the newspaper on the home page to apply the new recommendations.');
+      if (ok) {
+        const label = sel.length ? sel.join(', ') : 'none';
+        window.toast(`Saved: ${label}. Daily edition + PDF will use these on next refresh.`);
+      }
     });
   });
 

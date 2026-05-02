@@ -66,16 +66,17 @@ def fetch_year_movie_list() -> list[dict]:
     so service-time filters can include or exclude any rating without a
     refetch."""
     today = date.today()
+    earliest = today - _DISCOVER_PAST
+    latest = today + _DISCOVER_FUTURE
     feed = tmdb.now_playing_and_upcoming()
-    discover = tmdb.discover_us_theatrical(
-        earliest=today - _DISCOVER_PAST,
-        latest=today + _DISCOVER_FUTURE,
-    )
+    discover = tmdb.discover_us_theatrical(earliest=earliest, latest=latest)
+    popular = tmdb.discover_popular_upcoming(earliest=earliest, latest=latest)
     # Merge & de-dupe by id, preserving feed entries first (they're the
-    # mainstream curated set).
+    # mainstream curated set), then the cert-gated discover pass, then
+    # the popularity-sorted pre-release pass.
     seen: set[int] = set()
     candidates: list[dict] = []
-    for m in feed + discover:
+    for m in feed + discover + popular:
         mid = m.get("id")
         if mid is None or int(mid) in seen:
             continue
@@ -85,8 +86,9 @@ def fetch_year_movie_list() -> list[dict]:
         log.warning("TMDB feeds returned no results — table left untouched.")
         return _read_all_as_dicts()
     log.info(
-        "TMDB candidates: %d from now_playing+upcoming, %d from discover, "
-        "%d unique after merge.", len(feed), len(discover), len(candidates),
+        "TMDB candidates: %d from now_playing+upcoming, %d from cert-gated "
+        "discover, %d from popularity-sorted discover, %d unique after merge.",
+        len(feed), len(discover), len(popular), len(candidates),
     )
 
     ids = [int(c["id"]) for c in candidates if c.get("id") is not None]

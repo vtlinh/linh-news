@@ -17,6 +17,10 @@ Public helpers:
   vote count, for movies whose primary release falls in a date window.
   Catches mainstream titles further out than the curated feeds reach
   (those typically only span ~3 months).
+* :func:`discover_popular_upcoming` — popularity-sorted ``/discover/movie``
+  with no vote/cert filter, capped to a few pages. Catches announced
+  mainstream sequels that don't yet have TMDB votes or an MPAA cert because
+  they're months pre-release.
 * :func:`fetch_movie_detail` — ``/movie/{id}?append_to_response=videos,
   release_dates`` for one movie, returning the fields we store.
 """
@@ -126,6 +130,58 @@ def discover_us_theatrical(
             )
             if r.status_code != 200:
                 log.warning("TMDB discover page %s -> %s", page, r.status_code)
+                break
+            body = r.json()
+            for m in body.get("results") or []:
+                mid = m.get("id")
+                if mid is None or mid in seen:
+                    continue
+                seen.add(int(mid))
+                out.append(m)
+            if page >= int(body.get("total_pages") or 0):
+                break
+    return out
+
+
+def discover_popular_upcoming(
+    *,
+    earliest: date,
+    latest: date,
+    max_pages: int = 3,
+) -> list[dict]:
+    """Paginate ``/discover/movie`` sorted by popularity descending — no
+    vote_count or certification filter. Catches announced mainstream
+    sequels (e.g. The Angry Birds Movie 3) that don't yet have TMDB votes
+    or an MPAA cert because they're months pre-release.
+
+    The page cap prevents the long tail of festival / foreign indies from
+    leaking back in: TMDB's popularity score puts mainstream Hollywood and
+    major-studio releases at the top, and three pages (~60 results) covers
+    that ceiling while staying well clear of the noise floor."""
+    key = get_settings().tmdb_api_key
+    if not key:
+        return []
+    out: list[dict] = []
+    seen: set[int] = set()
+    with _client() as c:
+        for page in range(1, max_pages + 1):
+            r = c.get(
+                f"{_BASE}/discover/movie",
+                params={
+                    "api_key": key,
+                    "region": "US",
+                    "with_release_type": "3",
+                    "primary_release_date.gte": earliest.isoformat(),
+                    "primary_release_date.lte": latest.isoformat(),
+                    "sort_by": "popularity.desc",
+                    "include_adult": "false",
+                    "page": str(page),
+                },
+            )
+            if r.status_code != 200:
+                log.warning(
+                    "TMDB discover-popular page %s -> %s", page, r.status_code,
+                )
                 break
             body = r.json()
             for m in body.get("results") or []:

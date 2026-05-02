@@ -179,6 +179,7 @@ def test_fetch_year_movie_list_populates_table(db_session):
 
     with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
          patch.object(movies.tmdb, "discover_us_theatrical", return_value=[]), \
+         patch.object(movies.tmdb, "discover_popular_upcoming", return_value=[]), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],
@@ -210,6 +211,7 @@ def test_fetch_merges_feeds_and_discover_dedup(db_session):
     }
     with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=feed), \
          patch.object(movies.tmdb, "discover_us_theatrical", return_value=discover), \
+         patch.object(movies.tmdb, "discover_popular_upcoming", return_value=[]), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],
@@ -218,6 +220,30 @@ def test_fetch_merges_feeds_and_discover_dedup(db_session):
 
     titles = {m["title"] for m in out}
     assert titles == {"Feed Only", "In Both", "Discover Only"}
+
+
+def test_fetch_includes_popular_upcoming_pass(db_session):
+    """Pre-release sequels with no votes/cert (e.g. Angry Birds 3) must
+    arrive via the popularity-sorted discover pass."""
+    today = date.today()
+    feed: list[dict] = []
+    discover: list[dict] = []  # cert-gated pass excludes pre-release sequels
+    popular = [{"id": 1300926}]  # Angry Birds 3 stand-in
+    details = {
+        1300926: _fake_detail(
+            tmdb_id=1300926, title="The Angry Birds Movie 3", rating="",
+            rd=today + timedelta(days=200),
+        ),
+    }
+    with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=feed), \
+         patch.object(movies.tmdb, "discover_us_theatrical", return_value=discover), \
+         patch.object(movies.tmdb, "discover_popular_upcoming", return_value=popular), \
+         patch.object(
+             movies.tmdb, "fetch_movie_detail",
+             side_effect=lambda i, client=None: details[i],
+         ):
+        out = movies.fetch_year_movie_list()
+    assert any(m["title"] == "The Angry Birds Movie 3" for m in out)
 
 
 def test_filter_for_edition_excludes_disallowed_rating_from_db_rows(db_session):
@@ -235,6 +261,7 @@ def test_filter_for_edition_excludes_disallowed_rating_from_db_rows(db_session):
     }
     with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
          patch.object(movies.tmdb, "discover_us_theatrical", return_value=[]), \
+         patch.object(movies.tmdb, "discover_popular_upcoming", return_value=[]), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],
@@ -262,6 +289,7 @@ def test_hidden_title_filtered_without_touching_table(db_session):
     }
     with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
          patch.object(movies.tmdb, "discover_us_theatrical", return_value=[]), \
+         patch.object(movies.tmdb, "discover_popular_upcoming", return_value=[]), \
          patch.object(
              movies.tmdb, "fetch_movie_detail",
              side_effect=lambda i, client=None: details[i],

@@ -69,14 +69,21 @@
   .movie-tile .hide-corner {
     position: absolute;
     top: 6px; right: 6px;
-    width: 26px; height: 26px;
-    background: rgba(255,255,255,0.85);
+    width: 30px; height: 30px;
+    padding: 0;
+    background: rgba(255,255,255,0.9);
     border: 1px solid var(--rule);
     border-radius: 4px;
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
+    color: var(--fg);
   }
-  .movie-tile .hide-corner input { margin: 0; cursor: pointer; }
+  .movie-tile .hide-corner:hover {
+    background: #fff;
+    border-color: var(--fg);
+  }
+  .movie-tile .hide-corner svg { width: 18px; height: 18px; display: block; }
+  .movie-tile.hidden-state .hide-corner { color: var(--accent, #b00); }
   .movie-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .movie-title { font-weight: 700; font-size: 1.02em; line-height: 1.25; }
   .movie-subtitle { font-size: 0.85em; color: var(--muted); }
@@ -121,6 +128,32 @@
   function selectedRatings() {
     return Array.from(document.querySelectorAll('input.rating-filter:checked'))
       .map(cb => cb.value);
+  }
+
+  // Heroicons-style outline eye / eye-slash, built via DOM APIs so we
+  // never need innerHTML for SVG markup.
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const EYE_PATH =
+    'M2.25 12c0 0 3.75-7.5 9.75-7.5s9.75 7.5 9.75 7.5-3.75 7.5-9.75 ' +
+    '7.5S2.25 12 2.25 12z M12 15a3 3 0 100-6 3 3 0 000 6z';
+  const EYE_SLASH_PATH =
+    'M3.98 8.223A10.477 10.477 0 002.25 12s3.75 7.5 9.75 7.5a9.75 9.75 0 ' +
+    '004.522-1.103M6.228 6.228A9.75 9.75 0 0112 4.5c6 0 9.75 7.5 9.75 ' +
+    '7.5a13.13 13.13 0 01-1.67 2.397m-3.36 3.36a3 3 0 11-4.243-4.243m4.242 ' +
+    '4.243L6.228 6.228m11.314 11.314L3 3';
+  function buildEyeIcon(slashed) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.8');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', slashed ? EYE_SLASH_PATH : EYE_PATH);
+    svg.appendChild(path);
+    return svg;
   }
 
   function isYouTubeWatch(url) {
@@ -205,15 +238,16 @@
       poster.classList.add('no-image');
       poster.textContent = 'No poster';
     }
-    const corner = document.createElement('label');
-    corner.className = 'hide-corner';
-    corner.title = 'Hide from daily edition';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.className = 'movie-toggle';
-    cb.dataset.title = m.title;
-    if (m.hidden) cb.checked = true;
-    corner.appendChild(cb);
+    const corner = document.createElement('button');
+    corner.type = 'button';
+    corner.className = 'hide-corner movie-toggle';
+    corner.dataset.title = m.title;
+    corner.dataset.hidden = m.hidden ? '1' : '0';
+    corner.setAttribute(
+      'aria-label', m.hidden ? 'Restore movie' : 'Hide movie',
+    );
+    corner.title = m.hidden ? 'Restore movie' : 'Hide from daily edition';
+    corner.appendChild(buildEyeIcon(m.hidden));
     poster.appendChild(corner);
     tile.appendChild(poster);
 
@@ -269,11 +303,12 @@
   }
 
   async function onToggleHide(ev) {
-    const cb = ev.target.closest('input.movie-toggle');
-    if (!cb) return;
-    const title = cb.dataset.title;
-    const hidden = cb.checked;
-    cb.disabled = true;
+    const btn = ev.target.closest('button.movie-toggle');
+    if (!btn) return;
+    const title = btn.dataset.title;
+    const wasHidden = btn.dataset.hidden === '1';
+    const hidden = !wasHidden;
+    btn.disabled = true;
     try {
       const r = await fetch('/admin/movies/toggle', {
         method: 'POST',
@@ -284,14 +319,13 @@
       window.toast(hidden ? `Hidden: ${title}` : `Restored: ${title}`);
       await load(false);
     } catch (e) {
-      cb.checked = !hidden;
       window.toast('Save failed', true);
-      cb.disabled = false;
+      btn.disabled = false;
     }
   }
 
-  grid.addEventListener('change', onToggleHide);
-  hiddenGrid.addEventListener('change', onToggleHide);
+  grid.addEventListener('click', onToggleHide);
+  hiddenGrid.addEventListener('click', onToggleHide);
 
   async function saveRatings(sel) {
     try {

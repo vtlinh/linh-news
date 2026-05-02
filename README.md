@@ -12,7 +12,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 - **Calendar** combines Google Calendar events from all subscribed calendars; auto-marks important categories (school closures, kids' events, anniversaries) and lets you add custom ones. The per-day summary line is rendered in pure Python; per-event emojis come from a DB-cached title→emoji map (`event_emojis`) — Claude (Haiku) is consulted only the first time a new title appears, never on cached titles.
 - **Stocks** with hover-revealed "why it moved" tooltip backed by ≥5 trust-sorted sources.
 - **Movies** filtered by MPAA rating tied to the kids' age (auto-advances on August 1 each year). The admin **Movies** page holds the year-out outlook; the daily edition (HTML and PDF) reuses that cached list — no extra LLM call — and shows only films with a wide-release date in `[today − 3 weeks, today + 2 months]`. Posters, summaries, real YouTube trailers.
-- **Linh Times PDF** — single-page New-York-Times-style print with masthead, lead-story photo, dense columns, color-coded stocks ticker.
+- **Linh Times PDF** — single-page New-York-Times-style print with masthead, lead-story photo, dense columns, color-coded stocks ticker. The print HTML is built deterministically in Python (`app/pdf_html_builder.py`) from the screen HTML the LLM produced; WeasyPrint then binary-searches font size in [7, 14] pt to fit one 12×22 in page with ≤10 % blank, only dropping articles/sections when even the floor overflows.
 
 ## Admin pages (only `vtlinh87@gmail.com`)
 

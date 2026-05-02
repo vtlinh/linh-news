@@ -8,13 +8,12 @@ All facts must be dated within 1–2 days of {{DATE}}. Use the `web_search` tool
 - **Do not print** "Refresh Edition", "Noon Edition", "Midnight Edition", or any reference to which slot triggered the run. The reader does not care.
 - **Do not include** any "Linh News" / "The Linh News" text anywhere in the rendered HTML — not as an `<h1>`, not in a sidebar, not in a left/right rail column, not in a header strip, not in the footer. The page chrome already supplies the masthead. Any column or div whose only purpose is to repeat the publication name must be omitted.
 - **Do not include** any decorative left or right rail columns whose content is the publication name, an issue number, an edition tag, or other branding. Use the available width for actual content only.
-- **Do not mention William or Elizabeth by name anywhere in the rendered HTML or PDF**, with the single exception of calendar events whose original event title contains the kid's name (in which case render the title verbatim). No "for William, age 8" tags, no "appropriate for William's age band" headlines, no "tailored to William and Elizabeth" descriptors. The newspaper is for Linh; the audience tailoring is invisible to the reader.
+- **Do not mention William or Elizabeth by name anywhere in the rendered HTML**, with the single exception of calendar events whose original event title contains the kid's name (in which case render the title verbatim). No "for William, age 8" tags, no "appropriate for William's age band" headlines, no "tailored to William and Elizabeth" descriptors. The newspaper is for Linh; the audience tailoring is invisible to the reader.
 
 ## Output (return STRICT JSON, no prose outside the JSON)
 ```json
 {
-  "html": "<just the body content — see warning below>",
-  "pdf_html": "<print-styled one-page HTML for WeasyPrint, NYT-front-page aesthetic>"
+  "html": "<just the body content — see warning below>"
 }
 ```
 
@@ -118,52 +117,7 @@ When the item has two or more sources, use the hover popup form below. **Do NOT 
 </span></span>
 ```
 
-Hovering or focusing the `SOURCES` text reveals the popup; each source link is clickable and opens in a new tab. Sort sources by relevance, most relevant first. (Use the single-source shortcut above when there is exactly one source.) **Do not include sources at all in `pdf_html`.**
-
-## PDF (Linh Times) requirements
-- **Single metro format page (12 x 22 inches). This is non-negotiable.** All content must fit on one page — but the page must also be **filled, no blank space at the bottom**.
-- **Page order (top → bottom):**
-  1. Masthead (`The Linh Times`)
-  2. Date line
-  3. **Weather strip** — full width, single line.
-  4. **Stocks row** — full width, single line, sits **directly under the weather strip** (no longer a footer ticker). Same one-line layout: `GOOG $182.45 +2.3% · SMCI $54.10 -1.1% · NVDA …`. Use the `font-size: 7pt` colour rules below.
-  5. Lead story column (with image) and the rest of the article columns.
-  6. Calendar sidebar (`{{PDF_CALENDAR_HTML}}`).
-  7. Movies sidebar (`<!-- PDF_MOVIES_PLACEHOLDER -->` — server-injected; treat as a fixed-size block).
-- **Density strategy:** Fetch and write **substantially more content than fits**, ordered by priority below. If the page would overflow, **remove individual articles** from the lowest-priority section first (one article at a time), keeping that section alive with at least 1 article when possible. **Removing whole sections is a last resort** — drop articles, not sections. Never leave whitespace below the last column; if everything fits with room to spare, lengthen story summaries to fill.
-  Priority (1 = most important, 7 = drop articles first when tight):
-  1. Lead story (headline + image + body)
-  2. Weather strip
-  3. Stocks row (under weather)
-  4. Today's calendar (from `{{PDF_CALENDAR_HTML}}`)
-  5. 3–5 secondary stories (politics, NJ/NY, AI, finance, tech)
-  6. Dorchester / school news
-  7. Movies
-- **Aim for 98%+ page fill.** A column that ends 1in early is a defect.
-- **4–6 columns NYT-broadsheet style.** The page is 12×22in, so default to 5–6 columns; drop to 4 only if 5 would create thin awkward fragments. Never use fewer than 4. Wrap the story flow in a container with `style="column-count: N; column-gap: 14pt; column-rule: 0.5pt solid #999;"` (pick N between 4 and 6).
-- Masthead text: **The Linh Times** in bold serif (use a system serif — `"Times New Roman", "Georgia", serif` — so WeasyPrint renders without external assets).
-- Date line, weather strip, stocks row (directly below weather), then **6–10 prioritized stories** (headline + **4–7 sentence summary** so the page is dense like a real newspaper), with the calendar sidebar in the rail.
-- **Lead story image (REQUIRED — do not skip):** the top story must include a relevant image. Place an `<img>` at the very top of the lead column, before the headline. The renderer sends a real User-Agent so Wikimedia thumbnails will load. Use:
-  1. First choice: a **Wikimedia Commons thumbnail** in the form `https://upload.wikimedia.org/wikipedia/commons/thumb/.../640px-File.jpg`. Verify the URL via `web_search` before including.
-  2. Fallback: a Wikipedia page's lead image, again in the `upload.wikimedia.org/.../thumb/.../640px-` form.
-  Render as: `<img src="..." alt="..." style="width:100%; max-height:1.6in; object-fit:cover; margin:0 0 4pt;">`.
-  If after a real search you cannot find a CC-licensed image for the lead story, **swap the lead story** for one whose subject has a Wikipedia/Wikimedia image. The page must not ship without a lead image.
-- **No** source citations, **no** Hide buttons, **no** interactive elements.
-- **Calendar in PDF:** insert `{{PDF_CALENDAR_HTML}}` verbatim as the calendar sidebar content. If empty, omit the calendar sidebar entirely.
-- **Movies in PDF:** place exactly `<!-- PDF_MOVIES_PLACEHOLDER -->` where the Movies sidebar belongs (typically alongside the Calendar). The server replaces this comment with a pre-rendered movies block (same source as the `/admin/movies` list, filtered to the 3-week-past / 2-month-future window). Do **not** generate any movie content yourself — output only the literal comment tag.
-
-### Typography rules (use these exact CSS values, scaled down to fit one page)
-- Page setup: `@page { size: 12in 22in; margin: 0.4in; }`
-- Body text: `font-size: 8pt; line-height: 1.15;`
-- Story headlines: `font-size: 11pt; font-weight: bold; margin: 4pt 0 2pt;`
-- Section labels (e.g. "WEATHER", "CALENDAR"): `font-size: 7pt; letter-spacing: 0.05em; text-transform: uppercase; border-bottom: 0.5pt solid #000;`
-- Masthead text is exactly **The Linh Times** (no other phrasing). Style: `font-size: 30pt; text-align: center; font-weight: bold;`
-- Date line + weather strip: `font-size: 8pt; padding: 2pt 0;`
-- Stocks row (directly below weather strip — full width, NOT a footer): `font-size: 7pt;` `padding: 2pt 0;` separated from neighbouring rows with `border-bottom: 0.5pt solid #999;`. **Color the % change green when ≥ 0 and red when < 0.** Wrap the change in `<span style="color:#0a7d1f;">` for non-negative or `<span style="color:#b00020;">` for negative. Use the `+` sign on positive moves (e.g. `+2.3%`).
-- Paragraph margins: `margin: 0 0 3pt;`
-- Column gutter: 12pt; column-rule: `0.5pt solid #999`.
-- Use `<small>` for any tertiary text (7pt).
-- Do not use `<br><br>`, `<hr>`, large `<h1>`/`<h2>`, or any heading larger than 11pt outside the masthead.
+Hovering or focusing the `SOURCES` text reveals the popup; each source link is clickable and opens in a new tab. Sort sources by relevance, most relevant first. (Use the single-source shortcut above when there is exactly one source.)
 
 ## Mobile + desktop responsive
 The HTML must read well at 375px (phone), 768px (tablet), and ≥1200px (desktop). The page chrome handles columnization (1 column on phones, 2 on tablets, 3 on desktop) — **do NOT add your own `column-count` styles**.

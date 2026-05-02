@@ -17,11 +17,11 @@ log = logging.getLogger(__name__)
 # without limit.
 _FONT_CACHE_KEY = "linh_news:pdf_font_cache"
 _FONT_CACHE_MAX_SAMPLES = 30
-_FONT_MIN = 5.0
-_FONT_MAX = 24.0
+_FONT_MIN = 7.0   # readable on a 31" 4K monitor
+_FONT_MAX = 14.0  # newspaper sanity ceiling
 _FONT_STEP = 0.5  # render fonts at 0.5pt resolution
-_DEFAULT_FONT_GUESS = 12.0
-_BLANK_TARGET = 0.20  # tolerate up to 20% blank space
+_DEFAULT_FONT_GUESS = 10.0
+_BLANK_TARGET = 0.10  # tolerate up to 10% blank space
 
 
 def _round_half(x: float) -> float:
@@ -176,6 +176,46 @@ def _drop_one_section(html: str) -> str | None:
     return html[: last.start()] + html[last.end():]
 
 
+# Children inside a <section> we consider "articles" — droppable items.
+_ARTICLE_CHILD_RE = re.compile(
+    r"<(article|li)(?:\s[^>]*)?>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _drop_one_article(html: str) -> str | None:
+    """Drop the LAST <article>/<li> from the lowest-priority section that
+    still has more than one such child. Returns trimmed HTML, or None.
+
+    Walks ``_DROP_PRIORITY`` (lowest priority first). The first matching
+    section with ≥2 articles loses its last one.
+    """
+    sections = list(_SECTION_RE.finditer(html))
+    if not sections:
+        return None
+
+    def _h2_text(sec_html: str) -> str:
+        m = _H2_TEXT_RE.search(sec_html)
+        return _TAG_STRIP_RE.sub("", m.group(1)).strip().lower() if m else ""
+
+    for pattern in _DROP_PRIORITY:
+        for sec in reversed(sections):
+            if not pattern.search(_h2_text(sec.group())):
+                continue
+            sec_html = sec.group()
+            articles = list(_ARTICLE_CHILD_RE.finditer(sec_html))
+            if len(articles) < 2:
+                continue
+            last = articles[-1]
+            new_sec = sec_html[: last.start()] + sec_html[last.end():]
+            log.info(
+                "PDF: dropping one article from section %r (%d → %d items)",
+                _h2_text(sec_html)[:60], len(articles), len(articles) - 1,
+            )
+            return html[: sec.start()] + new_sec + html[sec.end():]
+    return None
+
+
 def html_to_pdf(html: str) -> bytes:
     """Render print-styled HTML to a single-page 12×22 in PDF using WeasyPrint.
 
@@ -314,128 +354,102 @@ def html_to_pdf(html: str) -> bytes:
         _walk(root)
         return pdf_bytes, n_pages, max(0.0, min(1.0, deepest / page_h))
 
-    def _bump_for_blank(current_pt: float, blank: float) -> float:
-        """How much bigger the font should be to consume the blank space.
+    def _fit(content: str) -> tuple[bytes, float, float] | None:
+        """Two-sided binary search over [_FONT_MIN, _FONT_MAX] in 0.5pt steps.
 
-        Text area scales ≈ font², so to fill the page we want
-        new/old = sqrt(1/(1-blank)). Clamp so we don't make wild jumps.
+        Returns (pdf_bytes, font_pt, blank_ratio) for the chosen render, or
+        ``None`` if even ``_FONT_MIN`` overflows (caller should drop content).
+
+        Step 1: shrink to fit (if seeded font overflows).
+        Step 2: grow to fill (if blank > _BLANK_TARGET), keeping it on 1 page.
         """
-        if blank <= 0:
-            return 0.0
-        target = current_pt / max(1e-3, (1.0 - blank)) ** 0.5
-        return max(0.5, min(2.5, target - current_pt))
+        # Seed from the (words → font) cache.
+        words = _count_words(content)
+        samples = _load_font_samples()
+        seed = max(_FONT_MIN, min(_FONT_MAX, _predict_font(words, samples)))
+        seed = _round_half(seed)
 
-    def _legacy_search(content: str) -> tuple[bytes, float] | None:
-        """Used as fallback only — binary-search [5, 24]pt in 0.5pt steps."""
-        sizes = [round(_FONT_MIN + i * _FONT_STEP, 1)
-                 for i in range(int((_FONT_MAX - _FONT_MIN) / _FONT_STEP) + 1)]
-        best_bytes: bytes | None = None
-        best_pt: float = sizes[0]
-        lo, hi = 0, len(sizes) - 1
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            pt = sizes[mid]
-            try:
-                pdf_bytes, n_pages, _ = _render_and_measure(content, pt)
-            except Exception as e:  # noqa: BLE001
-                log.exception("Fallback render failed at %.1fpt: %s", pt, e)
-                return None
-            if n_pages <= 1:
-                best_bytes, best_pt = pdf_bytes, pt
-                lo = mid + 1
-            else:
-                hi = mid - 1
-        return (best_bytes, best_pt) if best_bytes is not None else None
-
-    # ── main flow: cache → predict → render → maybe bump ────────────────
-    word_count = _count_words(html)
-    samples = _load_font_samples()
-    predicted = _predict_font(word_count, samples)
-    first_pt = _floor_half(max(_FONT_MIN, min(_FONT_MAX, predicted - 0.2)))
-
-    log.info(
-        "PDF font: %d words, %d cached samples → predicted %.2fpt → trying %.1fpt",
-        word_count, len(samples), predicted, first_pt,
-    )
-
-    try:
-        first_bytes, first_pages, first_fill = _render_and_measure(html, first_pt)
-    except Exception:
-        log.exception("First PDF render failed; falling back to binary search")
-        first_bytes, first_pages, first_fill = b"", 99, 0.0
-
-    if first_pages == 1:
-        first_blank = 1.0 - first_fill
-        log.info(
-            "First render: 1 page at %.1fpt, fill=%.1f%% (blank=%.1f%%)",
-            first_pt, first_fill * 100, first_blank * 100,
-        )
-
-        if first_blank <= _BLANK_TARGET:
-            log.info("Within %.0f%% blank target — using first render at %.1fpt",
-                     _BLANK_TARGET * 100, first_pt)
-            _save_font_sample(word_count, first_pt)
-            return first_bytes
-
-        # Try a bigger font to fill the blank space.
-        bump = _bump_for_blank(first_pt, first_blank)
-        second_pt = _round_half(min(_FONT_MAX, first_pt + bump))
-        if second_pt <= first_pt:
-            _save_font_sample(word_count, first_pt)
-            return first_bytes
-
-        log.info("Blank %.1f%% > %.0f%% — bumping %.1f → %.1fpt to fill",
-                 first_blank * 100, _BLANK_TARGET * 100, first_pt, second_pt)
         try:
-            second_bytes, second_pages, second_fill = _render_and_measure(html, second_pt)
-        except Exception as e:  # noqa: BLE001
-            log.warning("Second render failed (%s); using first.", e)
-            _save_font_sample(word_count, first_pt)
-            return first_bytes
+            seed_bytes, seed_pages, seed_fill = _render_and_measure(content, seed)
+        except Exception:
+            log.exception("Seed render failed at %.1fpt", seed)
+            seed_bytes, seed_pages, seed_fill = b"", 99, 0.0
 
-        if second_pages == 1 and second_fill >= first_fill:
-            log.info("Second render at %.1fpt fits (fill=%.1f%%) — using it.",
-                     second_pt, second_fill * 100)
-            _save_font_sample(word_count, second_pt)
-            return second_bytes
+        # ── Step 1: shrink-to-fit if the seed overflowed ───────────────
+        if seed_pages > 1:
+            try:
+                lo_bytes, lo_pages, lo_fill = _render_and_measure(content, _FONT_MIN)
+            except Exception:
+                log.exception("Floor render failed at %.1fpt", _FONT_MIN)
+                return None
+            if lo_pages > 1:
+                # Even at the readable floor it overflows — caller must drop.
+                return None
+            best_bytes, best_pt, best_fill = lo_bytes, _FONT_MIN, lo_fill
+            lo, hi = _FONT_MIN, seed
+            while hi - lo > _FONT_STEP:
+                mid = _round_half((lo + hi) / 2)
+                if mid <= lo or mid >= hi:
+                    break
+                try:
+                    b, p, f = _render_and_measure(content, mid)
+                except Exception:
+                    log.exception("Shrink render failed at %.1fpt", mid)
+                    break
+                if p <= 1:
+                    best_bytes, best_pt, best_fill = b, mid, f
+                    lo = mid
+                else:
+                    hi = mid
+            seed_bytes, seed, seed_fill, seed_pages = best_bytes, best_pt, best_fill, 1
+            log.info("Shrink-to-fit: chose %.1fpt (fill=%.1f%%)",
+                     seed, seed_fill * 100)
 
-        log.info(
-            "Second render at %.1fpt did not improve (pages=%d, fill=%.1f%%) — "
-            "using first render at %.1fpt.",
-            second_pt, second_pages, second_fill * 100, first_pt,
-        )
-        _save_font_sample(word_count, first_pt)
-        return first_bytes
+        # ── Step 2: grow-to-fill if too much blank ─────────────────────
+        blank = 1.0 - seed_fill
+        if seed_pages == 1 and blank > _BLANK_TARGET and seed < _FONT_MAX:
+            best_bytes, best_pt, best_fill = seed_bytes, seed, seed_fill
+            lo, hi = seed, _FONT_MAX
+            while hi - lo > _FONT_STEP:
+                mid = _round_half((lo + hi) / 2)
+                if mid <= lo or mid >= hi:
+                    break
+                try:
+                    b, p, f = _render_and_measure(content, mid)
+                except Exception:
+                    log.exception("Grow render failed at %.1fpt", mid)
+                    break
+                if p <= 1:
+                    best_bytes, best_pt, best_fill = b, mid, f
+                    lo = mid
+                else:
+                    hi = mid
+            log.info("Grow-to-fill: chose %.1fpt (fill=%.1f%%, blank=%.1f%%)",
+                     best_pt, best_fill * 100, (1.0 - best_fill) * 100)
+            seed_bytes, seed, seed_fill = best_bytes, best_pt, best_fill
 
-    # First render overflowed → cache lied (or this is a first run with empty
-    # cache and the default guess is too big). Fall back to binary search.
-    log.warning("First render overflowed (%d pages at %.1fpt) — running binary search",
-                first_pages, first_pt)
-    result = _legacy_search(html)
-    if result:
-        best_bytes, best_pt = result
-        log.info("Fallback search found %.1fpt", best_pt)
-        _save_font_sample(word_count, best_pt)
-        return best_bytes
+        _save_font_sample(_count_words(content), seed)
+        return seed_bytes, seed, 1.0 - seed_fill
 
-    # Still doesn't fit at minimum font — drop sections.
-    current_html = html
-    for attempt in range(10):
-        trimmed = _drop_one_section(current_html)
-        if trimmed is None:
-            log.warning("PDF: no more sections to drop — giving up")
-            break
-        current_html = trimmed
-        result = _legacy_search(current_html)
-        if result:
-            best_bytes, best_pt = result
+    # ── Driver: fit, then drop articles/sections only if floor overflows ──
+    current = html
+    for attempt in range(20):
+        result = _fit(current)
+        if result is not None:
+            pdf_bytes, font_pt, blank = result
             log.info(
-                "PDF fitted to 1 page at %.1fpt after %d section drop(s)",
-                best_pt, attempt + 1,
+                "PDF fit: %.1fpt, blank=%.1f%% (after %d trim(s))",
+                font_pt, blank * 100, attempt,
             )
-            return best_bytes
+            return pdf_bytes
+        # Floor still overflowed → trim. Article-level first, section-level last.
+        trimmed = _drop_one_article(current) or _drop_one_section(current)
+        if trimmed is None:
+            log.warning("PDF: nothing left to drop — shipping placeholder")
+            return _PLACEHOLDER_PDF
+        current = trimmed
 
-    log.error("PDF: could not fit content into 1 page — returning placeholder")
+    log.error("PDF: still overflowing after 20 trim attempts — placeholder")
     return _PLACEHOLDER_PDF
 
 

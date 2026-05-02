@@ -10,11 +10,9 @@ def test_news_pr_has_required_placeholders():
         "{{WATCHLIST_STOCKS}}",
         "{{WEATHER_COORDS}}",
         "{{NOW_WEATHER}}",
-        "{{PDF_CALENDAR_HTML}}",
         "{{CUSTOM_TOPICS}}",
         "<!-- CALENDAR_PLACEHOLDER -->",
         "<!-- MOVIES_PLACEHOLDER -->",
-        "<!-- PDF_MOVIES_PLACEHOLDER -->",
     ]:
         assert ph in text, f"missing placeholder {ph}"
 

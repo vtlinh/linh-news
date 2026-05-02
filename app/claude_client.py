@@ -23,16 +23,8 @@ EDITION_SCHEMA: dict[str, Any] = {
                 "tooltips on every news/finance/AI/movie/weather/school item."
             ),
         },
-        "pdf_html": {
-            "type": "string",
-            "description": (
-                "Print-styled one-page HTML for WeasyPrint, NYT-broadsheet "
-                "aesthetic on a 12×22 in page. NO source citations, NO "
-                "interactive buttons. Must fit on exactly one page."
-            ),
-        },
     },
-    "required": ["html", "pdf_html"],
+    "required": ["html"],
     "additionalProperties": False,
 }
 
@@ -121,13 +113,13 @@ def call_with_schema(
 
 
 def generate_edition(prompt_template: str, context: dict) -> dict:
-    """Send the rendered prompt to Claude, return parsed {html, pdf_html} dict."""
+    """Send the rendered prompt to Claude, return parsed {html} dict."""
     system_block = prompt_template
     user_lines = ["Run for these inputs (substitute into the system prompt):"]
     for k, v in context.items():
         user_lines.append(f"- {k} = {_to_text(v)}")
     user_lines.append(
-        "\nWhen done, call the return_edition tool with the final HTML and pdf_html."
+        "\nWhen done, call the return_edition tool with the final HTML."
     )
     return call_with_schema(
         system=system_block,

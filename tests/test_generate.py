@@ -17,7 +17,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     fake_claude = patch.object(
         generate.claude_client,
         "generate_edition",
-        return_value={"html": "<p>hi v1</p>", "pdf_html": "<p>pdf v1</p>"},
+        return_value={"html": "<p>hi v1</p>"},
     )
     fake_pdf = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v1")
     fake_list = patch.object(generate.calendar_oauth, "list_calendars", return_value=[])
@@ -25,9 +25,12 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     fake_movies = patch.object(
         generate.movies_mod, "get_movies", return_value=[],
     )
+    # Lead-image lookup / preflight reach Claude + the network — stub them.
+    fake_lead = patch.object(generate, "_inject_lead_image", side_effect=lambda h, _d: h)
+    fake_ensure = patch.object(generate, "_ensure_lead_image", side_effect=lambda h: h)
     today = date(2026, 4, 30)
 
-    with fake_claude, fake_pdf, fake_list, fake_fetch, fake_movies:
+    with fake_claude, fake_pdf, fake_list, fake_fetch, fake_movies, fake_lead, fake_ensure:
         generate.run("morning", today=today)
         row = db_session.get(Edition, today)
         assert row.html == "<p>hi v1</p>"
@@ -39,7 +42,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         return_value={"html": "<p>hi v2</p>", "pdf_html": "<p>pdf v2</p>"},
     )
     fake_pdf2 = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v2")
-    with fake_claude2, fake_pdf2, fake_list, fake_fetch, fake_movies:
+    with fake_claude2, fake_pdf2, fake_list, fake_fetch, fake_movies, fake_lead, fake_ensure:
         generate.run("evening", today=today)
 
     db_session.expire_all()

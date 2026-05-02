@@ -63,15 +63,15 @@ def test_call_with_schema_raises_when_tool_not_invoked():
         p.stop()
 
 
-def test_generate_edition_returns_html_and_pdf_html():
-    fake = _fake_response("return_edition", {"html": "<p>h</p>", "pdf_html": "<p>p</p>"})
+def test_generate_edition_returns_html():
+    fake = _fake_response("return_edition", {"html": "<p>h</p>"})
     p = _patch_stream(fake)
     try:
         out = generate_edition("template {{DATE}}", {"DATE": "2026-04-30"})
     finally:
         p.stop()
-    assert out == {"html": "<p>h</p>", "pdf_html": "<p>p</p>"}
+    assert out == {"html": "<p>h</p>"}
 
 
 def test_edition_schema_has_required_keys():
-    assert EDITION_SCHEMA["required"] == ["html", "pdf_html"]
+    assert EDITION_SCHEMA["required"] == ["html"]

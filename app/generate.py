@@ -314,6 +314,7 @@ def _inject_lead_image(pdf_html: str, today: date) -> str:
             schema_description="Return the verified image URL for the lead story.",
             extra_tools=[claude_client.WEB_SEARCH_TOOL],
             max_tokens=4000,
+            model="claude-haiku-4-5-20251001",
         )
     except Exception as e:  # noqa: BLE001
         log.warning("Lead-image lookup failed: %s", e)

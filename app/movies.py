@@ -64,7 +64,16 @@ def fetch_year_movie_list() -> list[dict]:
 
     No MPAA-rating filter is applied here — every certification is stored
     so service-time filters can include or exclude any rating without a
-    refetch."""
+    refetch.
+
+    Three candidate sources are merged:
+
+    * curated US theatrical feeds (``now_playing`` + ``upcoming``) for
+      mainstream Hollywood in the next ~3 months,
+    * cert-gated discover for mainstream titles further out (up to a year),
+    * popularity-sorted discover (10 pages) for announced pre-release
+      sequels with no votes/cert yet (e.g. The Angry Birds Movie 3).
+    """
     today = date.today()
     earliest = today - _DISCOVER_PAST
     latest = today + _DISCOVER_FUTURE

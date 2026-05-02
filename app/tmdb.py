@@ -147,17 +147,20 @@ def discover_popular_upcoming(
     *,
     earliest: date,
     latest: date,
-    max_pages: int = 3,
+    max_pages: int = 10,
 ) -> list[dict]:
     """Paginate ``/discover/movie`` sorted by popularity descending — no
     vote_count or certification filter. Catches announced mainstream
     sequels (e.g. The Angry Birds Movie 3) that don't yet have TMDB votes
     or an MPAA cert because they're months pre-release.
 
-    The page cap prevents the long tail of festival / foreign indies from
-    leaking back in: TMDB's popularity score puts mainstream Hollywood and
-    major-studio releases at the top, and three pages (~60 results) covers
-    that ceiling while staying well clear of the noise floor."""
+    Empirically (May 2026 sampling) the popularity floor across the year
+    window: page 3 ≈ pop 8, page 10 ≈ pop 2.1, page 15 ≈ pop 1.6. AB3
+    lands at page 9 with popularity 2.48, so 10 pages reliably catches it
+    and similar-tier sequels. Beyond ~page 12 the long tail (festival
+    shorts, regional releases, foreign indies) dominates because their
+    bot-bumped popularity exceeds quiet pre-release sequels — that's the
+    cap line."""
     key = get_settings().tmdb_api_key
     if not key:
         return []

@@ -199,13 +199,24 @@ def view_date(
 
 @app.get("/pdf/latest")
 def pdf_latest(
+    request: Request,
     token: str | None = None,
     s: Session = Depends(get_session),
 ):
-    """Return the most recently generated PDF. Authenticated via ?token=
-    (no login required) so it can be bookmarked or used as a home-screen shortcut."""
+    """Return the most recently generated PDF. Public, gated by a shared
+    secret — no Google login required. Accepts the secret either as
+    ``?token=…`` (handy for bookmarks / home-screen shortcuts) or as
+    ``Authorization: Bearer …`` (preferred — query strings end up in
+    proxy and Fly access logs)."""
     expected = get_settings().pdf_latest_token
-    if not expected or not token or token != expected:
+    auth_header = request.headers.get("authorization", "")
+    bearer = (
+        auth_header[len("Bearer "):].strip()
+        if auth_header.lower().startswith("bearer ")
+        else ""
+    )
+    presented = (token or bearer or "").strip()
+    if not expected or not presented or not secrets.compare_digest(presented, expected):
         raise HTTPException(401, "Invalid or missing token")
     edition = s.execute(
         select(Edition)

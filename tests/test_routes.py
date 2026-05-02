@@ -88,3 +88,71 @@ def test_refresh_forbidden_for_non_admin(client, login_as):
         r = client.post("/refresh")
     assert r.status_code == 403
     popen.assert_not_called()
+
+
+# ── /pdf/latest: public, gated by shared secret ───────────────────────────
+
+
+def _seed_latest(db_session, day: date) -> None:
+    db_session.add(
+        Edition(
+            date=day,
+            html="<p>hi</p>",
+            pdf=b"%PDF-1.4 fake-latest",
+            generated_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+
+def test_pdf_latest_401_when_token_unset(client, db_session):
+    _seed_latest(db_session, date(2026, 4, 30))
+    # Default settings have an empty PDF_LATEST_TOKEN — must always 401.
+    r = client.get("/pdf/latest?token=anything")
+    assert r.status_code == 401
+
+
+def test_pdf_latest_query_param(client, db_session, monkeypatch):
+    _seed_latest(db_session, date(2026, 4, 30))
+    from app.settings import get_settings
+    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+
+    r = client.get("/pdf/latest?token=s3cret")
+    assert r.status_code == 200
+    assert r.content.startswith(b"%PDF")
+
+    r = client.get("/pdf/latest?token=wrong")
+    assert r.status_code == 401
+
+    r = client.get("/pdf/latest")
+    assert r.status_code == 401
+
+
+def test_pdf_latest_bearer_header(client, db_session, monkeypatch):
+    _seed_latest(db_session, date(2026, 4, 30))
+    from app.settings import get_settings
+    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+
+    r = client.get("/pdf/latest", headers={"Authorization": "Bearer s3cret"})
+    assert r.status_code == 200
+    assert r.content.startswith(b"%PDF")
+
+    r = client.get("/pdf/latest", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
+def test_pdf_latest_does_not_require_login(client, db_session, monkeypatch):
+    """Sanity check: hitting /pdf/latest with the right token works without
+    any session cookie — confirms no Google login redirect on this route."""
+    _seed_latest(db_session, date(2026, 4, 30))
+    from app.settings import get_settings
+    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+
+    # Make absolutely sure we have no session cookie set on the client.
+    client.cookies.clear()
+    r = client.get(
+        "/pdf/latest", headers={"Authorization": "Bearer s3cret"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200
+    assert "/login" not in r.headers.get("location", "")

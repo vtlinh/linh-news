@@ -22,6 +22,14 @@
   <p id="movies-status" style="text-align:center; padding:8px; color:var(--muted);">
     Loading…
   </p>
+
+  <section id="hidden-section" hidden style="margin-top:2em;">
+    <h2 style="font-size:1.1em; margin:0 0 4px; color:var(--muted);">Hidden</h2>
+    <p style="margin:0 0 12px; color:var(--muted); font-size:0.9em;">
+      These movies are excluded from the daily edition and PDF. Untick to restore.
+    </p>
+    <div id="hidden-grid" class="movies-grid"></div>
+  </section>
 </main>
 
 <style>
@@ -45,7 +53,6 @@
     display: flex;
     flex-direction: column;
   }
-  .movie-tile.hidden-state { opacity: 0.5; }
   .movie-poster {
     width: 100%;
     aspect-ratio: 2 / 3;
@@ -107,6 +114,8 @@
 {% block scripts %}
 <script>
   const grid = document.getElementById('movies-grid');
+  const hiddenGrid = document.getElementById('hidden-grid');
+  const hiddenSection = document.getElementById('hidden-section');
   const statusEl = document.getElementById('movies-status');
 
   function selectedRatings() {
@@ -243,21 +252,27 @@
       const r = await fetch('/admin/movies/data?' + params.toString());
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
+      const visible = data.movies.filter(m => !m.hidden);
+      const hidden = data.movies.filter(m => m.hidden);
       grid.replaceChildren();
-      for (const m of data.movies) grid.appendChild(buildTile(m));
-      statusEl.textContent = `${data.movies.length} movies`;
+      for (const m of visible) grid.appendChild(buildTile(m));
+      hiddenGrid.replaceChildren();
+      for (const m of hidden) hiddenGrid.appendChild(buildTile(m));
+      hiddenSection.hidden = hidden.length === 0;
+      statusEl.textContent = hidden.length
+        ? `${visible.length} movies (${hidden.length} hidden below)`
+        : `${visible.length} movies`;
     } catch (e) {
       statusEl.textContent = 'Failed to load.';
       window.toast('Load failed', true);
     }
   }
 
-  grid.addEventListener('change', async (ev) => {
+  async function onToggleHide(ev) {
     const cb = ev.target.closest('input.movie-toggle');
     if (!cb) return;
     const title = cb.dataset.title;
     const hidden = cb.checked;
-    const tile = cb.closest('.movie-tile');
     cb.disabled = true;
     try {
       const r = await fetch('/admin/movies/toggle', {
@@ -266,15 +281,17 @@
         body: JSON.stringify({title, hidden})
       });
       if (!r.ok) throw new Error(await r.text());
-      tile.classList.toggle('hidden-state', hidden);
       window.toast(hidden ? `Hidden: ${title}` : `Restored: ${title}`);
+      await load(false);
     } catch (e) {
       cb.checked = !hidden;
       window.toast('Save failed', true);
-    } finally {
       cb.disabled = false;
     }
-  });
+  }
+
+  grid.addEventListener('change', onToggleHide);
+  hiddenGrid.addEventListener('change', onToggleHide);
 
   async function saveRatings(sel) {
     try {

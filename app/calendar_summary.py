@@ -35,6 +35,41 @@ log = logging.getLogger(__name__)
 # fingerprint so cached rows are auto-invalidated and re-rendered.
 _PROMPT_VERSION = "v4-python-bullet"
 
+# Last-resort keyword map used when the LLM didn't return an emoji for a
+# title (whole batch failed, individual entry empty, etc). The map lives
+# only in memory — we never persist its output to ``event_emojis``, so the
+# next refresh gets another LLM chance to upgrade the result.
+_FALLBACK_EMOJI_RULES: list[tuple[tuple[str, ...], str]] = [
+    (("birthday",), "🎂"),
+    (("anniversary",), "💞"),
+    (("soccer",), "⚽"),
+    (("dance",), "💃"),
+    (("school", "elementary", "dorchester"), "🏫"),
+    (("dentist",), "🦷"),
+    (("doctor", "appointment", "checkup"), "🩺"),
+    (("dinner",), "🍽"),
+    (("lunch",), "🍱"),
+    (("breakfast",), "🥐"),
+    (("flight", "travel", "trip"), "✈️"),
+    (("holiday", "labor day", "memorial day", "thanksgiving", "christmas",
+      "new year", "easter"), "🎉"),
+    (("water",), "💧"),
+    (("delivery",), "📦"),
+    (("photo",), "📷"),
+    (("library",), "📚"),
+]
+
+
+def _fallback_emoji(title: str) -> str:
+    """Keyword-based emoji guess used at render time when the LLM didn't
+    supply one. Never written to the DB — only used in the live page."""
+    t = (title or "").lower()
+    for keywords, emoji in _FALLBACK_EMOJI_RULES:
+        if any(kw in t for kw in keywords):
+            return emoji
+    return "📅"
+
+
 def _normalize_title(title: str) -> str:
     """Collapse whitespace + lowercase so trivial variants share one emoji."""
     return re.sub(r"\s+", " ", (title or "").strip().lower())
@@ -352,10 +387,12 @@ def _format_time(start: str) -> str | None:
 def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) -> str:
     """Return the one-line ``<div>…</div>`` for a single calendar day.
 
-    Format: ``Day, Month D: time {emoji} title • {emoji} title`` — when an
-    emoji is known. If a title's emoji isn't in ``emoji_for`` (LLM lookup
-    failed or hasn't happened yet), the event renders without an emoji
-    rather than blocking edition generation.
+    Format: ``Day, Month D: time {emoji} title • {emoji} title``. If a
+    title's emoji isn't in ``emoji_for`` (LLM lookup failed or hasn't
+    happened yet) the renderer applies the keyword-based fallback so every
+    event still gets a leading glyph. The fallback emoji is rendered but
+    never persisted, so the next refresh can upgrade it to a real LLM
+    result.
 
     Events are sorted by start time; all-day events sort to the front.
     """
@@ -363,13 +400,12 @@ def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) ->
     pieces: list[str] = []
     for ev in sorted(events, key=lambda x: x.get("start", "")):
         title = (ev.get("summary") or "(untitled)").strip() or "(untitled)"
-        emoji = (emoji_for.get(title) or "").strip()
+        emoji = (emoji_for.get(title) or "").strip() or _fallback_emoji(title)
         time_str = _format_time(ev.get("start", ""))
-        prefix = f"{time_str} " if time_str else ""
-        if emoji:
-            pieces.append(f"{prefix}{emoji} {title}")
+        if time_str:
+            pieces.append(f"{time_str} {emoji} {title}")
         else:
-            pieces.append(f"{prefix}{title}".strip())
+            pieces.append(f"{emoji} {title}")
     return f"<div><strong>{day_label}:</strong> " + " • ".join(pieces) + "</div>"
 
 

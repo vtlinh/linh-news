@@ -31,13 +31,16 @@ import html
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app import tmdb
-from app.calendar_oauth import allowed_movie_ratings, current_kid_age  # noqa: F401  (re-exports kept for callers)
+from app.calendar_oauth import (  # noqa: F401  (re-exports kept for callers)
+    allowed_movie_ratings,
+    current_kid_age,
+)
 from app.db import Movie, session_factory
 
 log = logging.getLogger(__name__)
@@ -46,6 +49,11 @@ log = logging.getLogger(__name__)
 # wide-release date is within [today - 3 weeks, today + 2 months].
 EDITION_PAST_WINDOW = timedelta(weeks=3)
 EDITION_FUTURE_WINDOW = timedelta(days=60)
+# Favorite-only inclusion: admin-marked favorites bypass the MPAA rating
+# filter when their release falls in [today - 3 weeks, today + 1 month].
+# Tighter forward window than the standard so the edition isn't dragged
+# forward by a long-horizon must-watch sequel.
+EDITION_FAVORITE_FUTURE_WINDOW = timedelta(days=30)
 
 # Refresh policy: at most once per week.
 _REFRESH_MIN_SECONDS = 7 * 24 * 60 * 60
@@ -109,7 +117,7 @@ def fetch_year_movie_list() -> list[dict]:
             ))
 
     rows: list[dict] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for d in details:
         if not d or not d.get("title"):
             continue
@@ -157,8 +165,8 @@ def movies_cache_age_seconds() -> float | None:
     if latest is None:
         return None
     if latest.tzinfo is None:
-        latest = latest.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - latest).total_seconds()
+        latest = latest.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - latest).total_seconds()
 
 
 def _should_refresh() -> bool:
@@ -243,14 +251,21 @@ def filter_for_edition(
     *,
     hidden_titles: set[str],
     allowed_ratings: set[str],
+    favorite_titles: set[str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Return ``(in_theaters, coming_soon)`` lists for the daily edition.
 
-    ``in_theaters`` are movies whose release_date is in
-    ``[today - 3 weeks, today]``; ``coming_soon`` are movies whose
-    release_date is in ``(today, today + 2 months]``."""
+    Standard inclusion: release_date in ``[today - 3 weeks, today + 2 months]``
+    AND ``rating`` in ``allowed_ratings`` AND title not in ``hidden_titles``.
+
+    Favorites override the rating filter on a tighter forward window:
+    if a movie's title is in ``favorite_titles`` and its release_date is
+    in ``[today - 3 weeks, today + 1 month]``, it is included regardless
+    of ``allowed_ratings``. ``hidden_titles`` still applies."""
+    favorite_titles = favorite_titles or set()
     earliest = today - EDITION_PAST_WINDOW
     latest = today + EDITION_FUTURE_WINDOW
+    fav_latest = today + EDITION_FAVORITE_FUTURE_WINDOW
     in_theaters: list[dict] = []
     coming_soon: list[dict] = []
     seen: set[str] = set()
@@ -258,11 +273,18 @@ def filter_for_edition(
         title = (m.get("title") or "").strip()
         if not title or title in seen or title in hidden_titles:
             continue
-        if m.get("rating") not in allowed_ratings:
-            continue
         rd = _parse_release(m)
-        if rd is None or rd < earliest or rd > latest:
+        if rd is None or rd < earliest:
             continue
+        is_fav = title in favorite_titles
+        if is_fav:
+            if rd > fav_latest:
+                continue
+        else:
+            if rd > latest:
+                continue
+            if m.get("rating") not in allowed_ratings:
+                continue
         seen.add(title)
         if rd <= today:
             in_theaters.append(m)
@@ -337,6 +359,7 @@ def render_html_section(
     *,
     hidden_titles: set[str],
     allowed_ratings: set[str],
+    favorite_titles: set[str] | None = None,
 ) -> str:
     """Render the full Movies <section> block for the daily HTML edition.
 
@@ -345,6 +368,7 @@ def render_html_section(
     in_theaters, coming_soon = filter_for_edition(
         movies, today,
         hidden_titles=hidden_titles, allowed_ratings=allowed_ratings,
+        favorite_titles=favorite_titles,
     )
     if not in_theaters and not coming_soon:
         return ""
@@ -369,12 +393,14 @@ def render_pdf_html(
     *,
     hidden_titles: set[str],
     allowed_ratings: set[str],
+    favorite_titles: set[str] | None = None,
     max_items: int = 8,
 ) -> str:
     """Render a compact Movies block for the Linh Times PDF."""
     in_theaters, coming_soon = filter_for_edition(
         movies, today,
         hidden_titles=hidden_titles, allowed_ratings=allowed_ratings,
+        favorite_titles=favorite_titles,
     )
     items = (in_theaters + coming_soon)[:max_items]
     if not items:

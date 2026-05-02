@@ -84,6 +84,24 @@
   }
   .movie-tile .hide-corner svg { width: 18px; height: 18px; display: block; }
   .movie-tile.hidden-state .hide-corner { color: var(--accent, #b00); }
+  /* Favorite-star sits to the LEFT of the hide-eye button (top-right
+     corner of the poster). Same chrome (rounded white box) but the icon
+     uses the canonical golden-star colour, filled when favorited and
+     outlined otherwise. */
+  .movie-tile .fav-corner {
+    position: absolute;
+    top: 6px; right: 42px;
+    width: 30px; height: 30px;
+    padding: 0;
+    background: rgba(255,255,255,0.9);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    color: #f5b400;
+  }
+  .movie-tile .fav-corner:hover { background: #fff; border-color: #f5b400; }
+  .movie-tile .fav-corner svg { width: 18px; height: 18px; display: block; }
   .movie-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .movie-title { font-weight: 700; font-size: 1.02em; line-height: 1.25; }
   .movie-subtitle { font-size: 0.85em; color: var(--muted); }
@@ -173,6 +191,35 @@
       }
       svg.appendChild(el);
     }
+    return svg;
+  }
+
+  // Five-pointed star — same path for filled and outlined variants; the
+  // `filled` flag flips between fill=currentColor (no stroke) and
+  // fill=none (stroke only) so colour stays consistent (golden) in both
+  // states.
+  const STAR_PATH =
+    'M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.957a1 1 0 00.95.69h' +
+    '4.162c.969 0 1.371 1.24.588 1.81l-3.367 2.446a1 1 0 00-.364 1.118l' +
+    '1.287 3.957c.299.921-.755 1.688-1.54 1.118l-3.366-2.446a1 1 0 00-1' +
+    '.176 0l-3.367 2.446c-.784.57-1.838-.197-1.539-1.118l1.286-3.957a1 ' +
+    '1 0 00-.363-1.118L2.07 9.384c-.783-.57-.38-1.81.588-1.81h4.163a1 1' +
+    ' 0 00.95-.69l1.287-3.957z';
+  function buildStarIcon(filled) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('aria-hidden', 'true');
+    if (filled) {
+      svg.setAttribute('fill', 'currentColor');
+    } else {
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '1.6');
+      svg.setAttribute('stroke-linejoin', 'round');
+    }
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', STAR_PATH);
+    svg.appendChild(path);
     return svg;
   }
 
@@ -269,6 +316,20 @@
     corner.title = m.hidden ? 'Restore movie' : 'Hide from daily edition';
     corner.appendChild(buildEyeIcon(m.hidden));
     poster.appendChild(corner);
+
+    const favBtn = document.createElement('button');
+    favBtn.type = 'button';
+    favBtn.className = 'fav-corner movie-fav-toggle';
+    favBtn.dataset.title = m.title;
+    favBtn.dataset.favorite = m.favorite ? '1' : '0';
+    favBtn.setAttribute(
+      'aria-label', m.favorite ? 'Unfavorite movie' : 'Favorite movie',
+    );
+    favBtn.title = m.favorite
+      ? 'Remove from favorites'
+      : 'Mark as favorite — always visible, included in daily edition';
+    favBtn.appendChild(buildStarIcon(!!m.favorite));
+    poster.appendChild(favBtn);
     tile.appendChild(poster);
 
     // Body
@@ -344,8 +405,40 @@
     }
   }
 
-  grid.addEventListener('click', onToggleHide);
-  hiddenGrid.addEventListener('click', onToggleHide);
+  async function onToggleFavorite(ev) {
+    const btn = ev.target.closest('button.movie-fav-toggle');
+    if (!btn) return;
+    const title = btn.dataset.title;
+    const wasFav = btn.dataset.favorite === '1';
+    const favorite = !wasFav;
+    btn.disabled = true;
+    try {
+      const r = await fetch('/admin/movies/favorite', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title, favorite})
+      });
+      if (!r.ok) throw new Error(await r.text());
+      window.toast(favorite ? `Favorited: ${title}` : `Unfavorited: ${title}`);
+      await load(false);
+    } catch (e) {
+      window.toast('Save failed', true);
+      btn.disabled = false;
+    }
+  }
+
+  function onCornerClick(ev) {
+    // The two corner buttons share the same poster overlay; dispatch by
+    // class so each handler can closest()-match against its own button.
+    if (ev.target.closest('button.movie-fav-toggle')) {
+      onToggleFavorite(ev);
+    } else if (ev.target.closest('button.movie-toggle')) {
+      onToggleHide(ev);
+    }
+  }
+
+  grid.addEventListener('click', onCornerClick);
+  hiddenGrid.addEventListener('click', onCornerClick);
 
   async function saveRatings(sel) {
     try {

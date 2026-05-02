@@ -47,6 +47,57 @@ def test_filter_for_edition_window():
     assert [m["title"] for m in coming_soon] == ["Soon"]
 
 
+def test_favorite_overrides_rating_within_favorite_window():
+    today = date(2026, 5, 1)
+    # PG-13 normally allowed in {"G","PG"} would NOT be — but as a favorite
+    # within 30 days, it must be included.
+    fav_pg13 = _make("Fav Drama", "PG-13", today + timedelta(days=20))
+    in_theaters, coming_soon = movies.filter_for_edition(
+        [fav_pg13], today,
+        hidden_titles=set(), allowed_ratings={"G", "PG"},
+        favorite_titles={"Fav Drama"},
+    )
+    assert [m["title"] for m in coming_soon] == ["Fav Drama"]
+    assert in_theaters == []
+
+
+def test_favorite_outside_tight_window_excluded():
+    today = date(2026, 5, 1)
+    # A favorite released > 30 days out is excluded — favorite window is
+    # tighter than the standard 60-day window.
+    fav_far = _make("Fav Far", "PG", today + timedelta(days=45))
+    in_theaters, coming_soon = movies.filter_for_edition(
+        [fav_far], today,
+        hidden_titles=set(), allowed_ratings={"G", "PG"},
+        favorite_titles={"Fav Far"},
+    )
+    assert in_theaters == [] and coming_soon == []
+
+
+def test_favorite_does_not_override_hidden():
+    today = date(2026, 5, 1)
+    fav_and_hidden = _make("Both", "PG", today + timedelta(days=10))
+    in_theaters, coming_soon = movies.filter_for_edition(
+        [fav_and_hidden], today,
+        hidden_titles={"Both"}, allowed_ratings={"G", "PG"},
+        favorite_titles={"Both"},
+    )
+    assert in_theaters == [] and coming_soon == []
+
+
+def test_non_favorite_uses_full_60_day_window():
+    today = date(2026, 5, 1)
+    # A non-favorite PG release at +45 days is still in the standard
+    # 60-day window — ensures the favorite-window change didn't shrink
+    # the standard window.
+    m = _make("Standard", "PG", today + timedelta(days=45))
+    _, coming_soon = movies.filter_for_edition(
+        [m], today,
+        hidden_titles=set(), allowed_ratings={"G", "PG"},
+    )
+    assert [x["title"] for x in coming_soon] == ["Standard"]
+
+
 def test_filter_for_edition_dedupes_by_title():
     today = date(2026, 5, 1)
     a = _make("Same Movie", "PG", today - timedelta(days=5))

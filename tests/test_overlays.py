@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from app.db import HiddenMovie, ImportantEvent
+from app.db import FavoriteMovie, HiddenMovie, ImportantEvent
 from app.overlays import (
     active_hidden_movie_titles,
+    favorite_movie,
+    favorite_movie_titles,
     hide_calendar,
     hide_movie,
     important_events_from,
+    unfavorite_movie,
     unhide_calendar,
 )
 
@@ -31,6 +34,19 @@ def test_hide_movie_inserts_and_extends(db_session):
     hide_movie(db_session, "Foo", days=30)
     row = db_session.get(HiddenMovie, "Foo")
     assert row.hidden_until == today + timedelta(days=30)
+
+
+def test_favorite_toggle_round_trip(db_session):
+    assert favorite_movie_titles(db_session) == set()
+    favorite_movie(db_session, "Angry Birds 3")
+    favorite_movie(db_session, "Angry Birds 3")  # idempotent
+    favorite_movie(db_session, "Toy Story 5")
+    assert favorite_movie_titles(db_session) == {"Angry Birds 3", "Toy Story 5"}
+    unfavorite_movie(db_session, "Angry Birds 3")
+    unfavorite_movie(db_session, "missing")  # no error
+    assert favorite_movie_titles(db_session) == {"Toy Story 5"}
+    # Underlying row is gone, not just hidden.
+    assert db_session.get(FavoriteMovie, "Angry Birds 3") is None
 
 
 def test_hide_and_unhide_calendar(db_session):

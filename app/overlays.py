@@ -5,7 +5,14 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db import HiddenCalendar, HiddenMovie, ImportantEvent, SuppressedEvent, WatchlistStock
+from app.db import (
+    FavoriteMovie,
+    HiddenCalendar,
+    HiddenMovie,
+    ImportantEvent,
+    SuppressedEvent,
+    WatchlistStock,
+)
 
 
 def active_hidden_movie_titles(s: Session, today: date) -> list[str]:
@@ -58,6 +65,24 @@ def unhide_movie(s: Session, title: str) -> None:
 def all_hidden_movies(s: Session) -> list[dict]:
     rows = s.execute(select(HiddenMovie).order_by(HiddenMovie.title)).scalars().all()
     return [{"title": r.title, "hidden_until": r.hidden_until.isoformat()} for r in rows]
+
+
+def favorite_movie_titles(s: Session) -> set[str]:
+    return set(s.execute(select(FavoriteMovie.title)).scalars().all())
+
+
+def favorite_movie(s: Session, title: str) -> None:
+    if not title or s.get(FavoriteMovie, title):
+        return
+    s.add(FavoriteMovie(title=title))
+    s.commit()
+
+
+def unfavorite_movie(s: Session, title: str) -> None:
+    row = s.get(FavoriteMovie, title)
+    if row:
+        s.delete(row)
+        s.commit()
 
 
 def hide_calendar(s: Session, calendar_id: str, calendar_name: str) -> None:

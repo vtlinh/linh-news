@@ -14,7 +14,16 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app import calendar_oauth, calendar_summary, claude_client, overlays, pdf, prefs, weather
+from app import (
+    calendar_oauth,
+    calendar_summary,
+    claude_client,
+    overlays,
+    pdf,
+    pdf_html_builder,
+    prefs,
+    weather,
+)
 from app import movies as movies_mod
 from app.db import Edition, session_factory
 from app.settings import get_settings, local_today
@@ -54,14 +63,17 @@ def run(slot: Slot, today: date | None = None) -> date:
         response = claude_client.generate_edition(template, ctx)
     with _step("strip_document_wrapper"):
         response["html"] = _strip_document_wrapper(response["html"])
-    with _step("inject_pdf_movies"):
-        response["pdf_html"] = _inject_pdf_movies(
-            response["pdf_html"], pdf_movies_html
+    with _step("build_pdf_html"):
+        pdf_html = pdf_html_builder.build(
+            response["html"],
+            pdf_calendar_html=ctx.get("PDF_CALENDAR_HTML", ""),
+            pdf_movies_html=pdf_movies_html,
+            today=today,
         )
     with _step("inject_lead_image"):
-        response["pdf_html"] = _inject_lead_image(response["pdf_html"], today)
+        pdf_html = _inject_lead_image(pdf_html, today)
     with _step("ensure_lead_image"):
-        response["pdf_html"] = _ensure_lead_image(response["pdf_html"])
+        pdf_html = _ensure_lead_image(pdf_html)
     # Snapshot the print HTML *exactly* as it goes into WeasyPrint, so we
     # can inspect missing-image and overflow problems after the fact.
     try:
@@ -69,18 +81,17 @@ def run(slot: Slot, today: date | None = None) -> date:
         snap_dir = Path(__file__).resolve().parent.parent / "logs"
         snap_dir.mkdir(exist_ok=True)
         snap = snap_dir / f"pdf-html-{slot}-{int(datetime.now(UTC).timestamp())}.html"
-        snap.write_text(response["pdf_html"], encoding="utf-8")
+        snap.write_text(pdf_html, encoding="utf-8")
         log.info("Saved pre-WeasyPrint pdf_html: %s (%d bytes, %d <img> tags)",
-                 snap, len(response["pdf_html"]),
-                 response["pdf_html"].lower().count("<img"))
+                 snap, len(pdf_html), pdf_html.lower().count("<img"))
     except Exception:
         log.exception("Could not snapshot pdf_html")
 
     with _step("html_to_pdf"):
-        pdf_bytes = pdf.html_to_pdf(response["pdf_html"])
+        pdf_bytes = pdf.html_to_pdf(pdf_html)
 
     with _step("upsert_edition"), Maker() as s:
-        _upsert_edition(s, today, response["html"], pdf_bytes, response["pdf_html"])
+        _upsert_edition(s, today, response["html"], pdf_bytes, pdf_html)
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
     log.info("⏱  ── refresh pipeline end (total %.2fs) ──",
@@ -94,6 +105,7 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
 
     with _step("overlays (hidden movies + watchlist)"):
         hidden_movies = overlays.active_hidden_movie_titles(s, today)
+        favorite_movies = overlays.favorite_movie_titles(s)
         watchlist = overlays.watchlist_symbols(s)
 
     # Refresh the cached movie list (long-horizon, kid-appropriate) once per
@@ -109,7 +121,9 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
         with _step("movies.render_pdf_html"):
             pdf_movies_html = movies_mod.render_pdf_html(
                 cached_movies, today,
-                hidden_titles=hidden_set, allowed_ratings=allowed_ratings,
+                hidden_titles=hidden_set,
+                allowed_ratings=allowed_ratings,
+                favorite_titles=favorite_movies,
             )
     except Exception:  # noqa: BLE001
         log.exception("Movie cache refresh / render failed")
@@ -380,24 +394,6 @@ def _ensure_lead_image(pdf_html: str) -> str:
         )
         rewritten = injection + rewritten
     return rewritten
-
-
-_PDF_MOVIES_PLACEHOLDER = "<!-- PDF_MOVIES_PLACEHOLDER -->"
-
-
-def _inject_pdf_movies(pdf_html: str, movies_html: str) -> str:
-    """Replace ``<!-- PDF_MOVIES_PLACEHOLDER -->`` in the LLM-rendered PDF
-    HTML with the server-rendered movies block. If the LLM omitted the
-    placeholder there's nothing to do — the PDF simply ships without
-    movies (which is acceptable per the priority list)."""
-    if _PDF_MOVIES_PLACEHOLDER not in pdf_html:
-        if movies_html:
-            log.warning(
-                "PDF movies placeholder missing — server-rendered movies block "
-                "will not appear in this PDF.",
-            )
-        return pdf_html
-    return pdf_html.replace(_PDF_MOVIES_PLACEHOLDER, movies_html, 1)
 
 
 def _strip_document_wrapper(html: str) -> str:

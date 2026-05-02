@@ -32,6 +32,15 @@ class HiddenMovie(Base):
     hidden_until: Mapped[date] = mapped_column(Date, nullable=False)
 
 
+class FavoriteMovie(Base):
+    """Admin-marked must-watch titles. Bypass the MPAA rating filter on the
+    admin Movies page (always visible) and force inclusion in the daily
+    edition / PDF when their release date falls in the favorite window
+    (today - 3 weeks, today + 1 month)."""
+    __tablename__ = "favorite_movies"
+    title: Mapped[str] = mapped_column(String, primary_key=True)
+
+
 class Movie(Base):
     """The full TMDB-sourced movie list. Refreshed weekly; filtered to the
     user's allowed MPAA ratings + ``hidden_movies`` overlay at service time

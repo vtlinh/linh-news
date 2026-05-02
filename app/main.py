@@ -132,9 +132,12 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
     if not cached:
         return html.replace("<!-- MOVIES_PLACEHOLDER -->", "", 1)
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
+    favorites = overlays.favorite_movie_titles(s)
     allowed = set(prefs.get_allowed_ratings(today))
     section = movies_mod.render_html_section(
-        cached, today, hidden_titles=hidden, allowed_ratings=allowed,
+        cached, today,
+        hidden_titles=hidden, allowed_ratings=allowed,
+        favorite_titles=favorites,
     )
     return html.replace("<!-- MOVIES_PLACEHOLDER -->", section, 1)
 
@@ -624,8 +627,13 @@ def admin_movies_data(
     selected = set(requested) if requested else set(prefs.get_allowed_ratings())
     include_unrated = "Unrated" in selected
     movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
+    favorites = overlays.favorite_movie_titles(s)
 
     def _matches(m: dict) -> bool:
+        # Favorites bypass the rating filter — always visible regardless of
+        # selected MPAA boxes.
+        if m.get("title") in favorites:
+            return True
         rating = (m.get("rating") or "").strip()
         if rating in selected:
             return True
@@ -646,7 +654,14 @@ def admin_movies_data(
     movies = [m for m in movies if _still_fresh(m)]
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
     return {
-        "movies": [{**m, "hidden": m["title"] in hidden} for m in movies],
+        "movies": [
+            {
+                **m,
+                "hidden": m["title"] in hidden,
+                "favorite": m["title"] in favorites,
+            }
+            for m in movies
+        ],
         "cache_age_seconds": movies_mod.movies_cache_age_seconds(),
     }
 
@@ -682,6 +697,27 @@ async def admin_movies_toggle(
     else:
         overlays.unhide_movie(s, title)
     return {"ok": True, "hidden": hide}
+
+
+@app.post("/admin/movies/favorite")
+async def admin_movies_favorite(
+    request: Request,
+    email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Toggle a movie's favorite flag. Favorites bypass the MPAA-rating
+    filter on the admin page and force inclusion in the daily edition / PDF
+    when their release falls in the favorite window."""
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    favorite = bool(body.get("favorite"))
+    if not title:
+        raise HTTPException(400, "title required")
+    if favorite:
+        overlays.favorite_movie(s, title)
+    else:
+        overlays.unfavorite_movie(s, title)
+    return {"ok": True, "favorite": favorite}
 
 
 @app.get("/admin/stocks", response_class=HTMLResponse)

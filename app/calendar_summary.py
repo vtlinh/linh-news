@@ -62,12 +62,15 @@ _FALLBACK_EMOJI_RULES: list[tuple[tuple[str, ...], str]] = [
 
 def _fallback_emoji(title: str) -> str:
     """Keyword-based emoji guess used at render time when the LLM didn't
-    supply one. Never written to the DB — only used in the live page."""
+    supply one. Never written to the DB — only used in the live page.
+
+    Returns ``""`` when no keyword matches; the renderer drops the emoji
+    prefix entirely rather than printing a generic 📅 placeholder."""
     t = (title or "").lower()
     for keywords, emoji in _FALLBACK_EMOJI_RULES:
         if any(kw in t for kw in keywords):
             return emoji
-    return "📅"
+    return ""
 
 
 def _normalize_title(title: str) -> str:
@@ -402,10 +405,9 @@ def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) ->
         title = (ev.get("summary") or "(untitled)").strip() or "(untitled)"
         emoji = (emoji_for.get(title) or "").strip() or _fallback_emoji(title)
         time_str = _format_time(ev.get("start", ""))
-        if time_str:
-            pieces.append(f"{time_str} {emoji} {title}")
-        else:
-            pieces.append(f"{emoji} {title}")
+        # Build the piece without double-spaces when emoji is missing.
+        parts = [p for p in (time_str, emoji, title) if p]
+        pieces.append(" ".join(parts))
     return f"<div><strong>{day_label}:</strong> " + " • ".join(pieces) + "</div>"
 
 

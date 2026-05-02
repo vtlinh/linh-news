@@ -104,8 +104,8 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     hidden_set = set(hidden_movies)
     pdf_movies_html = ""
     try:
-        with _step("movies.get_or_fetch_movies(force=True)"):
-            cached_movies = movies_mod.get_or_fetch_movies(force=True)
+        with _step("movies.get_movies(refresh_if_stale=True)"):
+            cached_movies = movies_mod.get_movies(refresh_if_stale=True)
         with _step("movies.render_pdf_html"):
             pdf_movies_html = movies_mod.render_pdf_html(
                 cached_movies, today,
@@ -491,9 +491,12 @@ def _cli() -> int:
         if error_msg is None:
             # Record duration for the running average shown in the UI toast.
             cache.record_refresh_duration(elapsed)
+        else:
+            # Persist the failure for any slot (not just refresh) so cron
+            # failures surface in the UI's freshness endpoint instead of
+            # disappearing into the worker's tmpfs log.
+            cache.set_edition_refresh_error(error_msg)
         if args.slot == "refresh":
-            if error_msg:
-                cache.set_edition_refresh_error(error_msg)
             cache.end_edition_refresh()
     return 0 if error_msg is None else 1
 

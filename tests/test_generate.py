@@ -23,7 +23,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     fake_list = patch.object(generate.calendar_oauth, "list_calendars", return_value=[])
     fake_fetch = patch.object(generate.calendar_oauth, "fetch_events", return_value=[])
     fake_movies = patch.object(
-        generate.movies_mod, "get_or_fetch_movies", return_value=[],
+        generate.movies_mod, "get_movies", return_value=[],
     )
     today = date(2026, 4, 30)
 
@@ -53,7 +53,7 @@ def test_build_context_includes_overlays(db_session, monkeypatch):
     with patch.object(generate.calendar_oauth, "list_calendars", return_value=[]), \
          patch.object(generate.calendar_oauth, "fetch_events", return_value=[]), \
          patch.object(
-             generate.movies_mod, "get_or_fetch_movies", return_value=[],
+             generate.movies_mod, "get_movies", return_value=[],
          ):
         ctx = generate._build_context(db_session, today, "evening")
     assert ctx["DATE"] == "2026-04-30"

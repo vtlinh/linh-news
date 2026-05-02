@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session, defer
 
-from app import auth, cache, calendar_oauth, calendar_summary, overlays, tmdb
+from app import auth, cache, calendar_oauth, calendar_summary, overlays
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, get_session
@@ -128,7 +128,7 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
     block on a 30–60 s LLM call when the cache is stale or empty."""
     if "<!-- MOVIES_PLACEHOLDER -->" not in html:
         return html
-    cached, _ = cache.get_movies()
+    cached = movies_mod.get_movies()
     if not cached:
         return html.replace("<!-- MOVIES_PLACEHOLDER -->", "", 1)
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
@@ -617,7 +617,7 @@ def admin_movies_data(
 ):
     requested = [r for r in request.query_params.getlist("ratings") if r in _ALL_MOVIE_RATINGS]
     selected = set(requested) if requested else set(calendar_oauth.allowed_movie_ratings())
-    movies = movies_mod.get_or_fetch_movies(force=bool(refresh))
+    movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
     movies = [m for m in movies if m.get("rating") in selected]
     # Drop "Currently in theaters" entries that opened more than 3 weeks ago —
     # those are no longer relevant suggestions.
@@ -631,24 +631,10 @@ def admin_movies_data(
         except Exception:  # noqa: BLE001
             return True
     movies = [m for m in movies if _still_fresh(m)]
-    # Backfill missing posters via TMDB (and replace any obviously bad ones).
-    for m in movies:
-        url = m.get("poster_url") or ""
-        if not url or "search" in url or not url.lower().endswith(
-            (".jpg", ".jpeg", ".png", ".webp")
-        ):
-            year = None
-            try:
-                year = int((m.get("release_date") or "")[:4])
-            except (TypeError, ValueError):
-                year = None
-            tmdb_url = tmdb.lookup_poster(m["title"], year=year)
-            if tmdb_url:
-                m["poster_url"] = tmdb_url
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
     return {
         "movies": [{**m, "hidden": m["title"] in hidden} for m in movies],
-        "cache_age_seconds": cache.movies_cache_age(),
+        "cache_age_seconds": movies_mod.movies_cache_age_seconds(),
     }
 
 
@@ -668,36 +654,6 @@ async def admin_movies_toggle(
     else:
         overlays.unhide_movie(s, title)
     return {"ok": True, "hidden": hide}
-
-
-@app.post("/admin/movies/poster")
-async def admin_movies_poster(
-    request: Request,
-    email: str = Depends(auth.require_admin),
-):
-    body = await request.json()
-    title = (body.get("title") or "").strip()
-    if not title:
-        raise HTTPException(400, "title required")
-    year: int | None = None
-    try:
-        year = int(body["year"]) if body.get("year") else None
-    except (TypeError, ValueError):
-        year = None
-
-    poster_url = tmdb.lookup_poster(title, year=year)
-    if poster_url:
-        movies, _ = cache.get_movies()
-        if movies:
-            updated = False
-            for m in movies:
-                if m.get("title") == title and not m.get("poster_url"):
-                    m["poster_url"] = poster_url
-                    updated = True
-                    break
-            if updated:
-                cache.store_movies(movies)
-    return {"poster_url": poster_url}
 
 
 @app.get("/admin/stocks", response_class=HTMLResponse)

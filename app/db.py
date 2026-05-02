@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Integer, LargeBinary, String, Text, create_engine
+from sqlalchemy import JSON, Date, DateTime, Integer, LargeBinary, String, Text, create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -30,6 +30,36 @@ class HiddenMovie(Base):
     __tablename__ = "hidden_movies"
     title: Mapped[str] = mapped_column(String, primary_key=True)
     hidden_until: Mapped[date] = mapped_column(Date, nullable=False)
+
+
+class Movie(Base):
+    """The full TMDB-sourced movie list. Refreshed weekly; filtered to the
+    user's allowed MPAA ratings + ``hidden_movies`` overlay at service time
+    (admin Movies page, edition HTML injection, PDF generation)."""
+    __tablename__ = "movies"
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    release_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    rating: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trailers: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    poster_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "tmdb_id": self.tmdb_id,
+            "title": self.title,
+            "release_date": self.release_date.isoformat() if self.release_date else "",
+            "rating": self.rating or "",
+            "status": self.status,
+            "summary": self.summary or "",
+            "trailers": list(self.trailers or []),
+            "poster_url": self.poster_url,
+        }
 
 
 class HiddenCalendar(Base):

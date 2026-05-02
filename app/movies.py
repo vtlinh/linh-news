@@ -1,22 +1,38 @@
-"""Movie watchlist support for the admin /admin/movies page.
+"""Movie watchlist support, sourced from TMDB.
 
-We ask Claude (with web_search) to return a long-horizon list of
-kid-appropriate movies — currently in theaters or opening within the next
-12 months — using a structured-output schema. The result is cached so the
-admin page loads instantly on subsequent visits.
+The full unfiltered watchlist (all MPAA ratings) lives in the ``movies`` DB
+table. :func:`fetch_year_movie_list` calls TMDB once a week to refresh the
+table:
 
-The same cached list is reused (no extra LLM call) to render the Movies
-section on the daily edition (HTML) and in the printed Linh Times (PDF) —
-see ``filter_for_edition``, ``render_html_section``, ``render_pdf_html``."""
+* ``GET /discover/movie`` for movies whose original US theatrical primary
+  release falls in ``[today - 21 days, today + 365 days]``,
+* ``GET /movie/{id}?append_to_response=videos,release_dates`` per candidate
+  to extract MPAA cert, plot summary, YouTube trailer URLs, and poster URL.
+
+Filtering (allowed MPAA ratings + admin-hidden titles + edition window) is
+applied at service time:
+
+* :func:`filter_for_edition` — used by both the daily HTML edition's
+  ``_inject_movies`` and PDF generation.
+* :func:`render_html_section` / :func:`render_pdf_html` — render the
+  filtered list.
+
+The admin Movies page calls :func:`get_movies` directly and applies its own
+rating filter from the query string."""
 from __future__ import annotations
 
 import html
 import logging
 import re
-from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 
-from app import cache, claude_client
-from app.calendar_oauth import allowed_movie_ratings, current_kid_age
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from app import tmdb
+from app.calendar_oauth import allowed_movie_ratings, current_kid_age  # noqa: F401  (re-exports kept for callers)
+from app.db import Movie, session_factory
 
 log = logging.getLogger(__name__)
 
@@ -25,123 +41,155 @@ log = logging.getLogger(__name__)
 EDITION_PAST_WINDOW = timedelta(weeks=3)
 EDITION_FUTURE_WINDOW = timedelta(days=60)
 
-_VALID_TRAILER_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[\w-]{8,}")
+# Refresh policy: at most once per week.
+_REFRESH_MIN_SECONDS = 7 * 24 * 60 * 60
 
-MOVIES_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "movies": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "rating": {
-                        "type": "string",
-                        "enum": ["G", "PG", "PG-13", "R", "NC-17"],
-                    },
-                    "release_date": {
-                        "type": "string",
-                        "description": "ISO date (YYYY-MM-DD). Wide-release date.",
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["in_theaters", "upcoming"],
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "1–2 sentence plot summary.",
-                    },
-                    "trailers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Up to 3 canonical YouTube watch URLs of "
-                            "real, verified trailers/teasers (in the form "
-                            "https://www.youtube.com/watch?v=XXXXXXXXXXX). "
-                            "Empty array if no trailers are available. "
-                            "Do NOT use search URLs, embeds, or short links."
-                        ),
-                    },
-                },
-                "required": ["title", "rating", "release_date", "status", "summary"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["movies"],
-    "additionalProperties": False,
-}
+# Discover window for TMDB: same past cushion as the edition window, plus a
+# full year of upcoming releases for the admin's planning page.
+_DISCOVER_PAST = timedelta(weeks=3)
+_DISCOVER_FUTURE = timedelta(days=365)
+
+_VALID_TRAILER_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[\w-]{8,}")
 
 
 def fetch_year_movie_list() -> list[dict]:
-    """Ask Claude for movies in/coming to theaters within the next 12 months,
-    filtered to kid-appropriate ratings."""
-    ratings = allowed_movie_ratings()
-    age = current_kid_age()
-    system = (
-        "You are compiling a 12-month movie outlook for a parent's planning "
-        "page. Use web_search aggressively to find real, currently-scheduled "
-        "movies. Do NOT invent titles or guess release dates."
-    )
-    user = (
-        f"Return up to 80 movies in two groups:\n"
-        f"  (a) **Currently in theaters** — every kid-appropriate film still "
-        f"playing in US theaters today, regardless of how long ago it "
-        f"opened (set status='in_theaters').\n"
-        f"  (b) **Coming soon** — every kid-appropriate film with a US "
-        f"theatrical release date between tomorrow and 365 days from now "
-        f"(set status='upcoming').\n\n"
-        f"**EXCLUDE all re-releases** — any film whose current theatrical "
-        f"showing is a re-release, anniversary screening, restored cut, "
-        f"director's cut, IMAX re-release, or any other return to theaters of "
-        f"a film that previously had a US wide release. Only include first-run "
-        f"original theatrical releases. If the same title was in US theaters "
-        f"in any prior year, skip it.\n\n"
-        f"Allowed MPAA ratings: {ratings}. The audience is a {age}-year-old, "
-        f"so include only films a parent would consider watching with that "
-        f"age.\n\nFor each movie include: official title, MPAA rating, "
-        f"wide-release date (ISO), status, and a 2-3 sentence plot summary. "
-        f"Posters are fetched server-side from TMDB — DO NOT include any "
-        f"poster URL. Also include up to 3 real trailer YouTube watch URLs "
-        f"(trailers; https://www.youtube.com/watch?v=<11-char id>). Verify "
-        f"each trailer via web_search. Do not invent video IDs, do not use "
-        f"search URLs, do not use embed or short-link URLs. If a movie has "
-        f"no verified trailers, return trailers=[]. Sort by release_date "
-        f"ascending. When done, call return_movies."
-    )
-    out = claude_client.call_with_schema(
-        system=system,
-        user=user,
-        schema=MOVIES_SCHEMA,
-        schema_name="return_movies",
-        schema_description="Return the kid-appropriate movie watchlist.",
-        extra_tools=[claude_client.WEB_SEARCH_TOOL],
-        max_tokens=12000,
-    )
-    movies = list(out.get("movies", []))
-    movies = [m for m in movies if m.get("rating") in ratings]
-    return movies
+    """Refresh the ``movies`` table from TMDB. Returns the upserted list of
+    dicts (same shape as :func:`get_movies`).
+
+    No MPAA-rating filter is applied here — every certification is stored
+    so service-time filters can include or exclude any rating without a
+    refetch."""
+    today = date.today()
+    earliest = today - _DISCOVER_PAST
+    latest = today + _DISCOVER_FUTURE
+
+    candidates = tmdb.discover_movies(earliest=earliest, latest=latest)
+    if not candidates:
+        log.warning("TMDB discover returned no results — table left untouched.")
+        return _read_all_as_dicts()
+
+    ids = [int(c["id"]) for c in candidates if c.get("id") is not None]
+
+    with tmdb._client() as client:  # noqa: SLF001 — same module family
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            details = list(pool.map(
+                lambda i: tmdb.fetch_movie_detail(i, client=client), ids
+            ))
+
+    rows: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for d in details:
+        if not d or not d.get("title"):
+            continue
+        rd = d.get("release_date")
+        status = (
+            "in_theaters" if (rd is not None and rd <= today) else "upcoming"
+        )
+        rows.append({
+            "tmdb_id": d["tmdb_id"],
+            "title": d["title"],
+            "release_date": rd,
+            "rating": d.get("rating") or "",
+            "status": status,
+            "summary": d.get("summary") or "",
+            "trailers": d.get("trailers") or [],
+            "poster_url": d.get("poster_url"),
+            "fetched_at": now,
+        })
+
+    _upsert_movies(rows, today=today)
+    return _read_all_as_dicts()
 
 
-def get_or_fetch_movies(force: bool = False) -> list[dict]:
-    """Return cached movies; trigger a fetch if cache is stale or forced."""
-    cached, _ = cache.get_movies()
-    if cached is not None and not (force or cache.movies_should_refresh()):
-        return cached
-    try:
-        movies = fetch_year_movie_list()
-        cache.store_movies(movies)
-        return movies
-    except Exception as e:  # noqa: BLE001
-        log.exception("Movie fetch failed: %s", e)
-        return cached or []
+def get_movies(*, refresh_if_stale: bool = False) -> list[dict]:
+    """Return all rows from the ``movies`` table as dicts.
+
+    With ``refresh_if_stale=True``, kicks off a TMDB refresh first if the
+    most recent ``fetched_at`` is older than the weekly threshold (or if
+    the table is empty). Failures during refresh are logged and the existing
+    table contents are returned unchanged."""
+    if refresh_if_stale and _should_refresh():
+        try:
+            fetch_year_movie_list()
+        except Exception as e:  # noqa: BLE001
+            log.exception("Movie refresh failed: %s", e)
+    return _read_all_as_dicts()
+
+
+def movies_cache_age_seconds() -> float | None:
+    """Return seconds since the most recent ``fetched_at``, or ``None`` if
+    the table is empty."""
+    Maker = session_factory()
+    with Maker() as s:
+        latest = s.execute(select(func.max(Movie.fetched_at))).scalar()
+    if latest is None:
+        return None
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - latest).total_seconds()
+
+
+def _should_refresh() -> bool:
+    age = movies_cache_age_seconds()
+    return age is None or age >= _REFRESH_MIN_SECONDS
+
+
+def _read_all_as_dicts() -> list[dict]:
+    Maker = session_factory()
+    with Maker() as s:
+        rows = s.execute(
+            select(Movie).order_by(Movie.release_date.asc().nullslast())
+        ).scalars().all()
+        return [m.to_dict() for m in rows]
+
+
+def _upsert_movies(rows: list[dict], *, today: date) -> None:
+    """Upsert the given rows by tmdb_id. Also delete stale rows that fell
+    out of TMDB's response and whose release_date is already outside the
+    edition past window (so we don't churn rows that may matter for an
+    edition viewed today)."""
+    if not rows:
+        return
+    Maker = session_factory()
+    fresh_ids = {r["tmdb_id"] for r in rows}
+    cutoff = today - EDITION_PAST_WINDOW
+    with Maker() as s:
+        bind = s.get_bind()
+        dialect = bind.dialect.name if bind is not None else ""
+        if dialect == "postgresql":
+            stmt = pg_insert(Movie.__table__).values(rows)
+            update_cols = {
+                c.name: stmt.excluded[c.name]
+                for c in Movie.__table__.columns
+                if c.name != "tmdb_id"
+            }
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["tmdb_id"], set_=update_cols,
+            )
+            s.execute(stmt)
+        else:
+            # SQLite path used in tests — emulate upsert with merge.
+            for r in rows:
+                existing = s.get(Movie, r["tmdb_id"])
+                if existing is None:
+                    s.add(Movie(**r))
+                else:
+                    for k, v in r.items():
+                        setattr(existing, k, v)
+        # Drop rows that fell out of TMDB and are already past the edition
+        # window — anything still in-window stays so a viewer's current
+        # edition isn't disrupted mid-week.
+        s.execute(
+            delete(Movie).where(
+                ~Movie.tmdb_id.in_(fresh_ids),
+                (Movie.release_date.is_(None)) | (Movie.release_date < cutoff),
+            )
+        )
+        s.commit()
 
 
 # ───────────────────── Edition / PDF rendering ──────────────────────
-# These helpers render the cached movie list (no LLM call) into the same
-# shapes the daily HTML edition and the Linh Times PDF used to ask Claude
-# to generate. Filtering rules:
+# Filtering rules (applied at service time):
 #   * exclude any title in ``hidden_titles``
 #   * include only ratings in ``allowed_ratings``
 #   * include only movies whose release_date is within

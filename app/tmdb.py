@@ -1,21 +1,24 @@
-"""Tiny TMDB helper: given a movie title (and optional year), return the
-poster URL hosted on image.tmdb.org.
+"""TMDB API helpers used to populate the ``movies`` table.
 
-Why TMDB and not IMDb directly?
-  - IMDb has no free, key-less public API. IMDb Pro is a paid product.
-  - OMDb (https://www.omdbapi.com) wraps IMDb data with a free API key tier
-    but has stricter rate limits and a less reliable image CDN.
-  - TMDB is community-maintained, free for personal use, and serves posters
-    from image.tmdb.org, which our PDF preflight already accepts.
+We use TMDB (themoviedb.org) — a free, community-maintained movie database —
+as the source of truth for the kid-appropriate movie watchlist. TMDB exposes
+release dates, US MPAA certifications, plot summaries, YouTube trailer keys,
+and poster paths through a simple JSON API. Set ``TMDB_API_KEY`` in the
+environment.
 
-Set ``TMDB_API_KEY`` in the environment to enable. With no key set, this
-module returns ``None`` for every lookup so the page falls back gracefully.
+Two public helpers:
+
+* :func:`discover_movies` — paginated ``/discover/movie`` query for movies
+  whose original theatrical primary release falls in a given date range.
+  Excludes re-releases structurally (old films have an old
+  ``primary_release_date`` and won't appear in a forward-looking window).
+* :func:`fetch_movie_detail` — ``/movie/{id}?append_to_response=videos,
+  release_dates`` for one movie, returning the fields we store.
 """
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
-from urllib.parse import quote_plus
+from datetime import date
 
 import httpx
 
@@ -25,49 +28,158 @@ log = logging.getLogger(__name__)
 
 _BASE = "https://api.themoviedb.org/3"
 _IMG_BASE = "https://image.tmdb.org/t/p/w500"
+_YT_WATCH = "https://www.youtube.com/watch?v="
+
+# US theatrical release types per TMDB:
+#   1 = Premiere, 2 = Theatrical (limited), 3 = Theatrical, 4 = Digital,
+#   5 = Physical, 6 = TV.
+_THEATRICAL_TYPES = {2, 3}
 
 
-@lru_cache(maxsize=512)
-def lookup_poster(title: str, year: int | None = None) -> str | None:
-    """Return a TMDB poster URL for the given movie title, or None.
+def _client() -> httpx.Client:
+    return httpx.Client(timeout=15.0, limits=httpx.Limits(max_connections=10))
 
-    Cached for the process lifetime — TMDB poster URLs are immutable, and
-    the admin Movies page can hit this many times per page load."""
+
+def discover_movies(
+    *,
+    earliest: date,
+    latest: date,
+    max_pages: int = 5,
+) -> list[dict]:
+    """Return TMDB ``/discover/movie`` results (raw page items merged) for US
+    theatrical movies whose original primary release date is in
+    ``[earliest, latest]``. Returns ``[]`` if ``TMDB_API_KEY`` is unset."""
+    key = get_settings().tmdb_api_key
+    if not key:
+        log.warning("TMDB_API_KEY not set — discover_movies returns empty.")
+        return []
+    out: list[dict] = []
+    with _client() as c:
+        for page in range(1, max_pages + 1):
+            params = {
+                "api_key": key,
+                "region": "US",
+                "with_release_type": "2|3",
+                "primary_release_date.gte": earliest.isoformat(),
+                "primary_release_date.lte": latest.isoformat(),
+                "sort_by": "primary_release_date.asc",
+                "include_adult": "false",
+                "page": str(page),
+            }
+            r = c.get(f"{_BASE}/discover/movie", params=params)
+            if r.status_code != 200:
+                log.warning("TMDB discover page %s -> %s", page, r.status_code)
+                break
+            body = r.json()
+            results = body.get("results") or []
+            out.extend(results)
+            if page >= int(body.get("total_pages") or 0):
+                break
+    return out
+
+
+def fetch_movie_detail(tmdb_id: int, client: httpx.Client | None = None) -> dict | None:
+    """Return a normalized dict for one movie:
+
+    ``{tmdb_id, title, summary, rating, release_date, status, trailers,
+    poster_url}``
+
+    ``release_date`` is the earliest US theatrical date if present; otherwise
+    falls back to the global ``release_date`` field. Returns ``None`` on any
+    HTTP error."""
     key = get_settings().tmdb_api_key
     if not key:
         return None
-    title = (title or "").strip()
-    if not title:
-        return None
-
-    params: dict[str, str] = {
-        "api_key": key,
-        "query": title,
-        "include_adult": "false",
-    }
-    if year:
-        params["year"] = str(year)
+    own_client = client is None
+    c = client or _client()
     try:
-        with httpx.Client(timeout=8.0) as c:
-            r = c.get(f"{_BASE}/search/movie", params=params)
-            if r.status_code != 200:
-                log.warning("TMDB lookup %s -> %s", title, r.status_code)
-                return None
-            results = r.json().get("results", [])
+        r = c.get(
+            f"{_BASE}/movie/{tmdb_id}",
+            params={
+                "api_key": key,
+                "append_to_response": "videos,release_dates",
+            },
+        )
+        if r.status_code != 200:
+            log.warning("TMDB detail %s -> %s", tmdb_id, r.status_code)
+            return None
+        body = r.json()
     except (httpx.HTTPError, ValueError) as e:
-        log.warning("TMDB lookup %s failed: %s", title, e)
+        log.warning("TMDB detail %s failed: %s", tmdb_id, e)
         return None
+    finally:
+        if own_client:
+            c.close()
 
-    if not results:
-        return None
-    # Best match heuristic: highest-popularity result that has a poster.
-    results = [m for m in results if m.get("poster_path")]
-    if not results:
-        return None
-    best = max(results, key=lambda m: float(m.get("popularity", 0) or 0))
-    return _IMG_BASE + best["poster_path"]
+    return _normalize_detail(body)
 
 
-def encode_title(title: str) -> str:
-    """Convenience for callers that need a URL-encoded form."""
-    return quote_plus(title)
+def _normalize_detail(body: dict) -> dict:
+    title = (body.get("title") or "").strip()
+    overview = (body.get("overview") or "").strip()
+    poster_path = body.get("poster_path") or ""
+    poster_url = (_IMG_BASE + poster_path) if poster_path else None
+
+    us_rating, us_theatrical_date = _us_release_info(body.get("release_dates") or {})
+    fallback_date = _parse_iso(body.get("release_date") or "")
+    release_date = us_theatrical_date or fallback_date
+
+    trailers = _youtube_trailers(body.get("videos") or {})
+
+    return {
+        "tmdb_id": int(body.get("id")),
+        "title": title,
+        "summary": overview,
+        "rating": us_rating,
+        "release_date": release_date,
+        "trailers": trailers,
+        "poster_url": poster_url,
+    }
+
+
+def _us_release_info(release_dates_block: dict) -> tuple[str | None, date | None]:
+    """Pick the earliest US theatrical date and first non-empty US cert."""
+    results = release_dates_block.get("results") or []
+    us = next((r for r in results if r.get("iso_3166_1") == "US"), None)
+    if not us:
+        return None, None
+    entries = us.get("release_dates") or []
+    cert: str | None = None
+    earliest: date | None = None
+    for entry in entries:
+        if cert is None:
+            c = (entry.get("certification") or "").strip()
+            if c:
+                cert = c
+        rt = entry.get("type")
+        if rt in _THEATRICAL_TYPES:
+            d = _parse_iso((entry.get("release_date") or "")[:10])
+            if d and (earliest is None or d < earliest):
+                earliest = d
+    return cert, earliest
+
+
+def _youtube_trailers(videos_block: dict) -> list[str]:
+    results = videos_block.get("results") or []
+    youtube = [v for v in results if v.get("site") == "YouTube"]
+    # Trailer first, then Teaser; preserve TMDB's ordering within each group.
+    trailers = [v for v in youtube if v.get("type") == "Trailer"]
+    teasers = [v for v in youtube if v.get("type") == "Teaser"]
+    seen: set[str] = set()
+    urls: list[str] = []
+    for v in trailers + teasers:
+        key = (v.get("key") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        urls.append(_YT_WATCH + key)
+        if len(urls) >= 3:
+            break
+    return urls
+
+
+def _parse_iso(s: str) -> date | None:
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None

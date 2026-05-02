@@ -28,9 +28,6 @@ log = logging.getLogger(__name__)
 
 _KEY_DATA = "linh_news:events:data"
 _KEY_META = "linh_news:events:meta"  # {"updated_at": float, "in_progress": bool}
-_KEY_MOVIES_DATA = "linh_news:movies:data"
-_KEY_MOVIES_META = "linh_news:movies:meta"
-_MOVIES_REFRESH_MIN_SECONDS = 7 * 24 * 60 * 60  # at most once per week
 _KEY_REFRESH = "linh_news:edition_refresh"  # {"started_at": float, "worker_pid": int}
 _KEY_REFRESH_ERR = "linh_news:edition_refresh_error"
 _KEY_REFRESH_DURATIONS = "linh_news:edition_refresh_durations"
@@ -284,34 +281,6 @@ def store_events(events: list[dict]) -> float:
     b.set(_KEY_DATA, json.dumps(events, default=str))
     b.set(_KEY_META, json.dumps({"updated_at": now, "in_progress": False}))
     return now
-
-
-def get_movies() -> tuple[list[dict] | None, float]:
-    b = _get_backend()
-    data_raw = b.get(_KEY_MOVIES_DATA)
-    meta_raw = b.get(_KEY_MOVIES_META)
-    movies = json.loads(data_raw) if data_raw else None
-    meta = json.loads(meta_raw) if meta_raw else {}
-    return movies, float(meta.get("updated_at", 0))
-
-
-def store_movies(movies: list[dict]) -> float:
-    b = _get_backend()
-    now = time.time()
-    b.set(_KEY_MOVIES_DATA, json.dumps(movies, default=str))
-    b.set(_KEY_MOVIES_META, json.dumps({"updated_at": now}))
-    return now
-
-
-def movies_cache_age() -> float | None:
-    """Return seconds since last refresh, or None if never cached."""
-    _, updated = get_movies()
-    return None if updated == 0 else time.time() - updated
-
-
-def movies_should_refresh() -> bool:
-    age = movies_cache_age()
-    return age is None or age >= _MOVIES_REFRESH_MIN_SECONDS
 
 
 def maybe_refresh_in_background(

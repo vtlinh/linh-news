@@ -234,26 +234,6 @@
     return tile;
   }
 
-  async function fetchPoster(title, year) {
-    try {
-      const r = await fetch('/admin/movies/poster', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({title, year: year || null})
-      });
-      if (!r.ok) return;
-      const data = await r.json();
-      if (!data.poster_url) return;
-      const tile = grid.querySelector(`.movie-tile[data-title="${CSS.escape(title)}"]`);
-      if (!tile) return;
-      const poster = tile.querySelector('.movie-poster');
-      if (!poster) return;
-      poster.style.backgroundImage = `url("${data.poster_url.replace(/"/g, '\\"')}")`;
-      poster.classList.remove('no-image');
-      poster.textContent = '';
-    } catch (_) { /* silently ignore — TMDB key may not be set */ }
-  }
-
   async function load(force) {
     statusEl.textContent = force ? 'Refreshing…' : 'Loading…';
     try {
@@ -266,13 +246,6 @@
       grid.replaceChildren();
       for (const m of data.movies) grid.appendChild(buildTile(m));
       statusEl.textContent = `${data.movies.length} movies`;
-      // Async-backfill missing posters via TMDB; updates tiles inline.
-      for (const m of data.movies) {
-        if (!m.poster_url) {
-          const year = m.release_date ? parseInt(m.release_date.slice(0, 4), 10) : null;
-          fetchPoster(m.title, year);
-        }
-      }
     } catch (e) {
       statusEl.textContent = 'Failed to load.';
       window.toast('Load failed', true);

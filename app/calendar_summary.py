@@ -133,48 +133,10 @@ _EMOJI_SYSTEM = (
 _EMOJI_MODEL = "claude-haiku-4-5-20251001"
 
 
-def _llm_emoji_lookup(titles: list[str]) -> dict[str, str]:
-    """Ask Claude (Haiku, no web_search) for one emoji per title.
-
-    Returns ``{original_title: emoji}``. Titles whose response was empty are
-    omitted — the caller is expected to fall back to ``_fallback_emoji``.
-    """
-    if not titles:
-        return {}
-    user = (
-        "Return one representative emoji for each of these calendar event "
-        "titles. Output via the `return_emojis` tool with one entry per "
-        "title, in the same order:\n\n"
-        + "\n".join(f"- {t}" for t in titles)
-    )
-    out = claude_client.call_with_schema(
-        system=_EMOJI_SYSTEM,
-        user=user,
-        schema=_EMOJI_SCHEMA,
-        schema_name="return_emojis",
-        schema_description="Map of calendar event titles to a single emoji.",
-        max_tokens=1500,
-        model=_EMOJI_MODEL,
-    )
-    mapping: dict[str, str] = {}
-    by_norm: dict[str, str] = {_normalize_title(t): t for t in titles}
-    for entry in out.get("emojis", []):
-        title = (entry.get("title") or "").strip()
-        emoji = (entry.get("emoji") or "").strip()
-        if not title or not emoji:
-            continue
-        # Match by normalized title so trivial differences (case / whitespace)
-        # in the model's echoed title don't break the lookup.
-        original = by_norm.get(_normalize_title(title))
-        if original is not None:
-            mapping[original] = emoji
-    return mapping
-
-
 def emojis_for_titles(s: Session, titles: list[str]) -> dict[str, str]:
     """Return ``{title: emoji}`` for every distinct title.
 
-    DB cache first; one LLM call covers any titles missing from the table,
+    DB cache first; one Haiku call covers any titles missing from the table,
     and results are persisted so future runs skip the LLM entirely. On LLM
     failure we use a small built-in keyword fallback rather than blocking
     edition generation.
@@ -188,33 +150,63 @@ def emojis_for_titles(s: Session, titles: list[str]) -> dict[str, str]:
     norm_for = {t: _normalize_title(t) for t in distinct}
     norms = list({norm_for[t] for t in distinct})
 
+    # 1. Cache lookup.
     rows = s.execute(
         select(EventEmoji).where(EventEmoji.title_norm.in_(norms))
     ).scalars().all()
     cached: dict[str, str] = {row.title_norm: row.emoji for row in rows}
 
     missing = [t for t in distinct if norm_for[t] not in cached]
-    if missing:
-        try:
-            llm_map = _llm_emoji_lookup(missing)
-        except Exception:  # noqa: BLE001 — never fail edition generation on emoji lookup
-            log.exception("Emoji LLM lookup failed; using fallback for %d titles",
-                          len(missing))
-            llm_map = {}
-        now = datetime.now(UTC)
-        for t in missing:
-            tn = norm_for[t]
-            emoji = (llm_map.get(t) or "").strip() or _fallback_emoji(t)
-            cached[tn] = emoji
-            existing = s.get(EventEmoji, tn)
-            if existing:
-                existing.emoji = emoji
-                existing.generated_at = now
-            else:
-                s.add(EventEmoji(
-                    title_norm=tn, emoji=emoji, generated_at=now,
-                ))
-        s.commit()
+    if not missing:
+        return {t: cached[norm_for[t]] for t in distinct}
+
+    # 2. One Haiku call for everything still missing.
+    llm_map: dict[str, str] = {}
+    try:
+        out = claude_client.call_with_schema(
+            system=_EMOJI_SYSTEM,
+            user=(
+                "Return one representative emoji for each of these calendar "
+                "event titles. Output via the `return_emojis` tool with one "
+                "entry per title, in the same order:\n\n"
+                + "\n".join(f"- {t}" for t in missing)
+            ),
+            schema=_EMOJI_SCHEMA,
+            schema_name="return_emojis",
+            schema_description="Map of calendar event titles to a single emoji.",
+            max_tokens=1500,
+            model=_EMOJI_MODEL,
+        )
+        by_norm = {_normalize_title(t): t for t in missing}
+        for entry in out.get("emojis", []):
+            title = (entry.get("title") or "").strip()
+            emoji = (entry.get("emoji") or "").strip()
+            if not title or not emoji:
+                continue
+            # Match by normalized title so trivial differences (case /
+            # whitespace) in the model's echoed title don't break the lookup.
+            original = by_norm.get(_normalize_title(title))
+            if original is not None:
+                llm_map[original] = emoji
+    except Exception:  # noqa: BLE001 — never fail edition generation on emoji lookup
+        log.exception("Emoji LLM lookup failed; using fallback for %d titles",
+                      len(missing))
+
+    # 3. Apply (LLM result | keyword fallback) and persist.
+    now = datetime.now(UTC)
+    for t in missing:
+        tn = norm_for[t]
+        emoji = (llm_map.get(t) or "").strip() or _fallback_emoji(t)
+        cached[tn] = emoji
+        existing = s.get(EventEmoji, tn)
+        if existing:
+            existing.emoji = emoji
+            existing.generated_at = now
+        else:
+            s.add(EventEmoji(
+                title_norm=tn, emoji=emoji, generated_at=now,
+            ))
+    s.commit()
 
     return {t: cached[norm_for[t]] for t in distinct}
 

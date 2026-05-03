@@ -17,15 +17,15 @@ log = logging.getLogger(__name__)
 # without limit.
 _FONT_CACHE_KEY = "linh_news:pdf_font_cache"
 _FONT_CACHE_MAX_SAMPLES = 30
-# Body font window: 12pt floor (≈30% larger than the original 9pt) up to
-# 16pt ceiling. The fit loop binary-searches inside this window and tries
-# to grow the body font as much as 1-page layout allows. _BLANK_TARGET=0
-# makes the grow-to-fill step always run when the page isn't completely
-# full, so we use the available 16pt ceiling whenever content permits.
-_FONT_MIN = 12.0
-_FONT_MAX = 24.0
+# Body font window: 10pt floor up to 20pt ceiling. The fit loop
+# binary-searches inside this window and tries to grow the body font as
+# much as 1-page layout allows. _BLANK_TARGET=0 makes the grow-to-fill
+# step always run when the page isn't completely full, so we use the
+# available 20pt ceiling whenever content permits.
+_FONT_MIN = 10.0
+_FONT_MAX = 20.0
 _FONT_STEP = 0.1
-_DEFAULT_FONT_GUESS = 16.0
+_DEFAULT_FONT_GUESS = 14.0
 _BLANK_TARGET = 0.01  # grow-to-fill until fill_ratio >= 0.99
 
 
@@ -159,8 +159,17 @@ _TAG_STRIP_RE = re.compile(r"<[^>]+>")
 
 
 def _drop_one_section(html: str) -> str | None:
-    """Remove the single lowest-priority droppable section from the PDF HTML.
-    Returns the trimmed HTML, or None if nothing was dropped."""
+    """Remove the single lowest-priority droppable category from the PDF HTML.
+
+    The flow uses one-section-per-item: a category title lives in its own
+    h2-only ``<section>``, followed by sibling story sections (h3 + body)
+    that belong to that category. Dropping just the title section would
+    orphan its stories under the previous category's heading, so we drop
+    the title section *and* every following story section up to (but not
+    including) the next title section.
+
+    Returns the trimmed HTML, or None if nothing was dropped.
+    """
     sections = list(_SECTION_RE.finditer(html))
     if not sections:
         return None
@@ -169,18 +178,48 @@ def _drop_one_section(html: str) -> str | None:
         m = _H2_TEXT_RE.search(sec_html)
         return _TAG_STRIP_RE.sub("", m.group(1)).strip().lower() if m else ""
 
+    def _is_category_header(sec_html: str) -> bool:
+        return bool(_H2_TEXT_RE.search(sec_html))
+
+    def _drop_group(idx: int) -> str:
+        """Drop sections[idx] (a category header) plus all immediately
+        following non-header sibling sections."""
+        end_idx = idx + 1
+        while end_idx < len(sections) and not _is_category_header(
+            sections[end_idx].group()
+        ):
+            end_idx += 1
+        start = sections[idx].start()
+        end = sections[end_idx - 1].end()
+        # Eat any whitespace between this group and what follows so we
+        # don't leave an empty gap.
+        return html[:start] + html[end:].lstrip()
+
     # Try each drop-priority pattern in order.
     for pattern in _DROP_PRIORITY:
-        for sec in reversed(sections):  # last matching section wins (keep lead)
-            if pattern.search(_h2_text(sec.group())):
-                log.info("PDF: dropping section %r to fit one page",
-                         _h2_text(sec.group())[:60])
-                return html[: sec.start()] + html[sec.end():]
+        for i in range(len(sections) - 1, -1, -1):  # last match wins
+            sec_html = sections[i].group()
+            if not _is_category_header(sec_html):
+                continue
+            if pattern.search(_h2_text(sec_html)):
+                title = _h2_text(sec_html)[:60]
+                trailing = 0
+                k = i + 1
+                while k < len(sections) and not _is_category_header(
+                    sections[k].group()
+                ):
+                    trailing += 1
+                    k += 1
+                log.info(
+                    "PDF: dropping category %r (header + %d stories) to fit one page",
+                    title, trailing,
+                )
+                return _drop_group(i)
 
     # No pattern matched — drop the very last section as a last resort.
-    last = sections[-1]
+    last_idx = len(sections) - 1
     log.info("PDF: dropping last section (no priority match) to fit one page")
-    return html[: last.start()] + html[last.end():]
+    return html[: sections[last_idx].start()] + html[sections[last_idx].end():]
 
 
 # Children inside a <section> we consider "articles" — droppable items.
@@ -191,11 +230,14 @@ _ARTICLE_CHILD_RE = re.compile(
 
 
 def _drop_one_article(html: str) -> str | None:
-    """Drop the LAST <article>/<li> from the lowest-priority section that
-    still has more than one such child. Returns trimmed HTML, or None.
+    """Drop one <article>/<li> from a section, keeping subsection counts
+    balanced across sections. Returns trimmed HTML, or None.
 
-    Walks ``_DROP_PRIORITY`` (lowest priority first). The first matching
-    section with ≥2 articles loses its last one.
+    Selection rule: among sections with ≥2 articles, prefer the one with
+    the most articles (so we shave the fattest section first and keep
+    sections balanced). Ties broken by drop priority — the lowest-priority
+    section in ``_DROP_PRIORITY`` loses an article first. The dropped
+    article is the LAST one in the chosen section.
     """
     sections = list(_SECTION_RE.finditer(html))
     if not sections:
@@ -205,22 +247,39 @@ def _drop_one_article(html: str) -> str | None:
         m = _H2_TEXT_RE.search(sec_html)
         return _TAG_STRIP_RE.sub("", m.group(1)).strip().lower() if m else ""
 
-    for pattern in _DROP_PRIORITY:
-        for sec in reversed(sections):
-            if not pattern.search(_h2_text(sec.group())):
-                continue
-            sec_html = sec.group()
-            articles = list(_ARTICLE_CHILD_RE.finditer(sec_html))
-            if len(articles) < 2:
-                continue
-            last = articles[-1]
-            new_sec = sec_html[: last.start()] + sec_html[last.end():]
-            log.info(
-                "PDF: dropping one article from section %r (%d → %d items)",
-                _h2_text(sec_html)[:60], len(articles), len(articles) - 1,
-            )
-            return html[: sec.start()] + new_sec + html[sec.end():]
-    return None
+    def _drop_rank(title: str) -> int:
+        """Lower rank = drop first. Sections not in _DROP_PRIORITY get the
+        highest rank (drop last)."""
+        for i, p in enumerate(_DROP_PRIORITY):
+            if p.search(title):
+                return i
+        return len(_DROP_PRIORITY)
+
+    candidates = []
+    for sec in sections:
+        sec_html = sec.group()
+        title = _h2_text(sec_html)
+        if not title:
+            continue
+        articles = list(_ARTICLE_CHILD_RE.finditer(sec_html))
+        if len(articles) < 2:
+            continue
+        candidates.append((sec, title, articles))
+
+    if not candidates:
+        return None
+
+    # Sort: most articles first (balance), then by drop priority.
+    candidates.sort(key=lambda c: (-len(c[2]), _drop_rank(c[1])))
+    sec, title, articles = candidates[0]
+    sec_html = sec.group()
+    last = articles[-1]
+    new_sec = sec_html[: last.start()] + sec_html[last.end():]
+    log.info(
+        "PDF: dropping one article from section %r (%d → %d items)",
+        title[:60], len(articles), len(articles) - 1,
+    )
+    return html[: sec.start()] + new_sec + html[sec.end():]
 
 
 def html_to_pdf(html: str) -> bytes:

@@ -144,7 +144,9 @@ def test_builder_rebuilds_stocks_with_explicit_separator():
 
 def test_builder_uses_provided_refreshed_at_in_dateline():
     """When the caller passes `refreshed_at`, the dateline shows it
-    formatted in Eastern time as `Refreshed at HH:00 EST`."""
+    formatted in Eastern time. The tz abbreviation flips between EST
+    (winter) and EDT (summer)."""
+    # May 2 is in DST → EDT.
     refreshed = datetime(2026, 5, 2, 19, 30, tzinfo=timezone.utc)  # 15:30 ET
     out = pdf_html_builder.build(
         '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
@@ -152,7 +154,7 @@ def test_builder_uses_provided_refreshed_at_in_dateline():
         today=date(2026, 5, 2),
         refreshed_at=refreshed,
     )
-    assert "Refreshed at 15:00 EST" in out
+    assert "Refreshed at 15:00 EDT" in out
     assert 'class="refreshed"' in out
 
 
@@ -164,19 +166,64 @@ def test_builder_treats_naive_refreshed_at_as_local():
         today=date(2026, 5, 2),
         refreshed_at=datetime(2026, 5, 2, 7, 15),
     )
-    assert "Refreshed at 07:00 EST" in out
+    assert "Refreshed at 07:00 EDT" in out
 
 
-def test_builder_section_separator_css_present():
-    """Sections after the first inside the flow get a black top rule;
-    articles after the first inside a section get a short centered rule."""
+def test_builder_uses_est_in_winter():
+    """Winter-month refreshed_at picks up the EST abbreviation."""
+    # Jan 15 is outside DST → EST.
+    refreshed = datetime(2026, 1, 15, 17, 30, tzinfo=timezone.utc)  # 12:30 ET
     out = pdf_html_builder.build(
         '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
         pdf_calendar_html="", pdf_movies_html="",
+        today=date(2026, 1, 15),
+        refreshed_at=refreshed,
+    )
+    assert "Refreshed at 12:00 EST" in out
+
+
+def test_builder_section_separators_distinguish_stories_and_groups():
+    """Two distinct rules are injected:
+      * ``sep-story`` — centred 1/3-width rule between two stories of
+        the same category.
+      * ``sep-group`` — full-width rule between the last story of one
+        category and the next category header.
+    No rule is drawn above the first section, above a story that follows
+    its own category header, or around back-to-back / empty headers.
+    Each rule carries ``break-before: avoid`` so a column break lands
+    *after* the rule rather than before it."""
+    body = (
+        '<div class="flow">'
+        # Category 1
+        '<section><h2>🌍 Top Global Political News</h2></section>'
+        '<section><h3>Headline 1</h3><p>Body 1.</p></section>'
+        '<section><h3>Headline 2</h3><p>Body 2.</p></section>'
+        '<section><h3>Headline 3</h3><p>Body 3.</p></section>'
+        # Category 2
+        '<section><h2>🇺🇸 Top US Political News</h2></section>'
+        '<section><h3>Headline 4</h3><p>Body 4.</p></section>'
+        '<section><h3>Headline 5</h3><p>Body 5.</p></section>'
+        '</div>'
+    )
+    out = pdf_html_builder.build(
+        body,
+        pdf_calendar_html="", pdf_movies_html="",
         today=date(2026, 5, 2),
     )
-    assert ".flow > section:not(:first-of-type)" in out
-    assert ".flow > section > article:not(:first-of-type)::before" in out
+    # 2 story-story rules in cat 1 + 1 in cat 2 = 3 sep-story rules.
+    assert out.count('class="sep-story"') == 3
+    # 1 group boundary (between cat 1's last story and cat 2's header).
+    assert out.count('class="sep-group"') == 1
+    # Old class names are gone.
+    assert 'class="sep-section"' not in out
+    assert 'class="sep-article"' not in out
+    # Subsection rule is 1/3 width and centred (margin: auto).
+    assert "width:33%" in out
+    assert "margin:6pt auto 4pt" in out
+    # Group rule is full-width black.
+    assert "border-top:0.75pt solid #000" in out
+    # Column-break behaviour: every rule glued to preceding content.
+    assert "break-before:avoid" in out
 
 
 def test_column_count_scales_with_word_count():

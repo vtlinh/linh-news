@@ -102,3 +102,42 @@ def test_list_calendars_returns_normalized(monkeypatch, db_session):
         {"id": "a", "name": "Primary", "primary": True},
         {"id": "b", "name": "US Holidays", "primary": False},
     ]
+
+
+def test_dedupe_events_collapses_cross_calendar_duplicates():
+    """Same occurrence (same title + same start) appearing on two
+    subscribed calendars under different iCalUIDs collapses to one.
+    First-seen wins so order is preserved."""
+    events = [
+        {"ical_uid": "u1@cal-a", "calendar_id": "cal-a",
+         "summary": "Racquetball weekly", "start": "2026-05-04T19:00:00-04:00"},
+        # Mirror of the same occurrence on a second subscribed calendar.
+        {"ical_uid": "u1@cal-b", "calendar_id": "cal-b",
+         "summary": "Racquetball weekly", "start": "2026-05-04T19:00:00-04:00"},
+        # Different occurrence (next week) — keep.
+        {"ical_uid": "u1@cal-a", "calendar_id": "cal-a",
+         "summary": "Racquetball weekly", "start": "2026-05-11T19:00:00-04:00"},
+        # Different event at same time — keep.
+        {"ical_uid": "u2@cal-a", "calendar_id": "cal-a",
+         "summary": "Dinner", "start": "2026-05-04T19:00:00-04:00"},
+    ]
+    out = calendar_oauth.dedupe_events(events)
+    assert len(out) == 3
+    # First-seen wins (cal-a's copy of the racquetball occurrence).
+    assert out[0]["calendar_id"] == "cal-a"
+    assert out[0]["start"] == "2026-05-04T19:00:00-04:00"
+    assert out[1]["start"] == "2026-05-11T19:00:00-04:00"
+    assert out[2]["summary"] == "Dinner"
+
+
+def test_dedupe_events_falls_back_to_uid_when_no_title():
+    """Untitled events fall back to (ical_uid, start) so they don't
+    incorrectly merge with each other."""
+    events = [
+        {"ical_uid": "u1", "summary": "", "start": "2026-05-04T10:00:00"},
+        {"ical_uid": "u2", "summary": "", "start": "2026-05-04T10:00:00"},
+        {"ical_uid": "u1", "summary": "", "start": "2026-05-04T10:00:00"},  # dup
+    ]
+    out = calendar_oauth.dedupe_events(events)
+    assert len(out) == 2
+    assert {e["ical_uid"] for e in out} == {"u1", "u2"}

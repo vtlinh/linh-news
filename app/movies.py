@@ -419,7 +419,7 @@ def render_pdf_html(
     )
     row_style = "margin:0 0 6pt;font-size:10pt;line-height:1.25"
     sub_style = "font-size:9pt;color:#555"
-    desc_style = "font-size:9.5pt;color:#222;margin-top:2pt;line-height:1.3"
+    desc_style = "font-size:12pt;color:#222;margin-top:2pt;line-height:1.3"
     parts = [f'<div style="{label_style}">Movies</div>']
     for m in items:
         title = (m.get("title") or "").strip()

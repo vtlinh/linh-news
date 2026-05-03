@@ -231,8 +231,49 @@ def build(
             sidebar_parts.append(str(child))
         sidebar_inner = "".join(sidebar_parts).strip()
 
-    flow_sections = soup.select("div.flow > section")
-    flow_html = "".join(str(s) for s in flow_sections)
+    # The flow is a flat list of <section> siblings. Each section is either
+    # a *category header* (h2-only, e.g. "🌍 Top Global Political News")
+    # or a *story* (h3 headline + body). We inject two distinct rules:
+    #
+    #   * sep-story  — a centred 1/3-width grey rule, between two
+    #                  consecutive *stories within the same category*.
+    #   * sep-group  — a full-width black rule, between the last story of
+    #                  one category and the next category header.
+    #
+    # No rule is drawn above the first section, immediately above a story
+    # that follows its own category header (the h2 itself is the break),
+    # or around back-to-back / empty header sections (the "double-rule
+    # with missing title" bug).
+    #
+    # Each separator carries `break-before: avoid` so any column break
+    # lands *after* the rule rather than before it: the new column
+    # therefore never starts with a stray horizontal line above its
+    # leading story or category header.
+    def _is_story_section(sec: Tag) -> bool:
+        return sec.find(["h3", "p"]) is not None
+
+    flow_root = soup.select_one("div.flow")
+    if flow_root is not None:
+        sections = flow_root.find_all("section", recursive=False)
+        prev_was_story = False
+        for sec in sections:
+            is_story = _is_story_section(sec)
+            if is_story and prev_was_story:
+                # story → story (within the same category)
+                sep = soup.new_tag("div")
+                sep["class"] = "sep-story"
+                sec.insert_before(sep)
+            elif (not is_story) and prev_was_story:
+                # story → category header (boundary between two categories)
+                sep = soup.new_tag("div")
+                sep["class"] = "sep-group"
+                sec.insert_before(sep)
+            # category header → story  : no rule (h2 is the boundary)
+            # first section / hdr→hdr  : no rule
+            prev_was_story = is_story
+        flow_html = _inner_html(flow_root)
+    else:
+        flow_html = ""
     n_cols = _column_count(flow_html)
 
     dateline = _format_date(today)
@@ -248,7 +289,11 @@ def build(
         refreshed_at = refreshed_at.replace(tzinfo=LOCAL_TZ)
     else:
         refreshed_at = refreshed_at.astimezone(LOCAL_TZ)
-    refreshed_label = f"Refreshed at {refreshed_at.hour:02d}:00 EST"
+    # tzname() returns "EST" in winter and "EDT" in summer for
+    # America/New_York; falls back to "EST" if the platform's tzdata
+    # doesn't supply a name for some reason.
+    tz_abbrev = refreshed_at.tzname() or "EST"
+    refreshed_label = f"Refreshed at {refreshed_at.hour:02d}:00 {tz_abbrev}"
     font_url = _MASTHEAD_FONT_PATH.as_uri()
 
     style_block = f"""
@@ -298,18 +343,39 @@ def build(
              column-rule:0.5pt solid #999; }}
     .flow > section, .flow > section > article {{
              /* allow free wrapping from one column to the next */ }}
-    /* Section separator: full-width black rule above every section
-       after the first inside the flow. */
-    .flow > section:not(:first-of-type) {{
-             border-top:0.75pt solid #000;
-             padding-top:6pt; margin-top:6pt; }}
-    /* Sub-section separator: short centered rule above every article
-       after the first inside its section. ::before keeps the article
-       itself column-width while drawing a 1/3-width centered line. */
-    .flow > section > article:not(:first-of-type)::before {{
-             content:""; display:block; width:33%;
-             margin:6pt auto 4pt;
-             border-top:0.4pt solid #999; }}
+    /* Story-to-story separator (within a category): centred 1/3-width
+       grey rule. WeasyPrint does not honour `margin: auto` on a zero-
+       height block inside a multi-column flow, so we use a `text-align:
+       center` outer block and draw the rule as an inline-block ::before
+       (which centring *does* work on). */
+    .flow div.sep-story {{
+             display:block; text-align:center !important;
+             margin-left:0 !important; margin-right:0 !important;
+             margin-top:6pt !important; margin-bottom:4pt !important;
+             padding:0; height:0;
+             break-before:avoid; page-break-before:avoid;
+             break-inside:avoid; break-after:auto; }}
+    .flow div.sep-story::before {{
+             content:""; display:inline-block;
+             width:33%; height:0;
+             border-top:0.4pt solid #999;
+             vertical-align:middle; }}
+    /* Breathing room above any story that sits below a sep-story rule
+       (i.e. every story in a category except the first — the first story
+       follows its category h2 instead and needs no extra padding).
+       Padding (not margin) because _make_css sets section margins with
+       !important. */
+    .flow div.sep-story + section {{ padding-top:6pt !important; }}
+    /* Category-to-category separator: full-width black rule, drawn just
+       above the next category header. */
+    .flow div.sep-group {{
+             display:block; box-sizing:content-box;
+             border:0; border-top:0.75pt solid #000;
+             width:auto; margin-left:0 !important; margin-right:0 !important;
+             margin-top:8pt !important; margin-bottom:4pt !important;
+             padding:0; height:0;
+             break-before:avoid; page-break-before:avoid;
+             break-inside:avoid; break-after:auto; }}
     aside.rail {{ flex:0 0 2.4in; padding-left:8pt;
                   border-left:0.5pt solid #999;
                   font-size:9pt; line-height:1.2; }}

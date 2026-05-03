@@ -65,6 +65,8 @@ def run(slot: Slot, today: date | None = None) -> date:
         response = claude_client.generate_edition(template, ctx)
     with _step("strip_document_wrapper"):
         response["html"] = _strip_document_wrapper(response["html"])
+    with _step("backfill_missing_sections"):
+        response["html"] = _backfill_missing_sections(response["html"], today)
     # Build the weather strip used in the PDF (baked at generation time;
     # the screen page substitutes its own at view time so 'Now' stays
     # within the 1-hour cache window).
@@ -96,6 +98,16 @@ def run(slot: Slot, today: date | None = None) -> date:
 
     with _step("html_to_pdf"):
         pdf_bytes = pdf.html_to_pdf(pdf_html)
+    try:
+        from pathlib import Path
+        snap_dir = Path(__file__).resolve().parent.parent / "logs"
+        snap_dir.mkdir(exist_ok=True)
+        ts = int(datetime.now(UTC).timestamp())
+        pdf_snap = snap_dir / f"pdf-{slot}-{ts}.pdf"
+        pdf_snap.write_bytes(pdf_bytes)
+        log.info("Saved generated PDF: %s (%d bytes)", pdf_snap, len(pdf_bytes))
+    except Exception:
+        log.exception("Could not snapshot pdf bytes")
 
     with _step("upsert_edition"), Maker() as s:
         _upsert_edition(
@@ -162,16 +174,10 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
                 s, active_ids, today, horizon, calendar_names=cal_names
             )
             events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
-
-            seen: set[tuple[str, str]] = set()
-            deduped: list[dict] = []
-            for e in events:
-                key = (e.get("ical_uid") or "", e.get("start") or "")
-                if key[0] and key in seen:
-                    continue
-                seen.add(key)
-                deduped.append(e)
-            events = deduped
+            # Collapse duplicates that span multiple subscribed calendars
+            # (e.g. a shared "Racquetball weekly" appearing on two cals
+            # with different iCalUIDs).
+            events = calendar_oauth.dedupe_events(events)
 
         # Auto-mark important events and collect their uids for PDF calendar.
         for ev in events:
@@ -257,6 +263,200 @@ def _strip_document_wrapper(html: str) -> str:
     html = _HEAD_LEAK_RE.sub("", html)
     html = _CITE_RE.sub(lambda m: m.group(1), html)
     return html.strip()
+
+
+# ── Required news sections (in flow order) ───────────────────────────────
+# Each entry: (key, human-friendly name, h2-keyword pattern used to detect
+# whether the section is already present, topic spec for re-roll prompt).
+_REQUIRED_NEWS_SECTIONS: list[tuple[str, str, re.Pattern, str]] = [
+    ("global", "🌍 Top Global Political News",
+     re.compile(r"global|world|international", re.IGNORECASE),
+     "Top global political news — major world / international developments. "
+     "Cite reputable outlets (Reuters, AP, BBC, etc.)."),
+    ("us", "🇺🇸 Top US Political News",
+     re.compile(r"\bus\b|u\.s\.|united states|us political", re.IGNORECASE),
+     "Top US political news — major US government / political developments."),
+    ("njny", "🗽 Top NJ / NY News",
+     re.compile(r"\bnj\b|new jersey|new york|\bny\b", re.IGNORECASE),
+     "Top New Jersey / New York regional news."),
+    ("dorch", "🏫 Dorchester Elementary School News & Events",
+     re.compile(r"dorchester|elementary", re.IGNORECASE),
+     "Top Dorchester Elementary School (Woodcliff Lake, NJ) news plus upcoming "
+     "events. Always check https://www.wclpfa.com/WlL/index.cfm."),
+    ("finance", "💰 Top Financial News",
+     re.compile(r"financ", re.IGNORECASE),
+     "Top financial news — markets, deals, economic data."),
+    ("tech", "💻 Top Tech News",
+     re.compile(r"\btech\b|technology", re.IGNORECASE),
+     "Top tech news — product launches, acquisitions, regulatory actions, "
+     "platform changes, hardware releases. Exclude AI-specific stories."),
+    ("ai", "🤖 AI News",
+     re.compile(r"\bai\b|artificial intelligence", re.IGNORECASE),
+     "AI news, emphasizing coding AI (Claude, Cursor, Copilot, Codex, etc.)."),
+    ("ukraine", "🇺🇦 Ukraine News",
+     re.compile(r"ukrain", re.IGNORECASE),
+     "Ukraine news — front-line military situation, diplomatic and "
+     "peace-process news, Western aid and sanctions, significant domestic "
+     "political/economic developments inside Ukraine, humanitarian stories. "
+     "Cite reputable outlets (Reuters, AP, BBC, Kyiv Independent, "
+     "Ukrainska Pravda, etc.)."),
+]
+
+_H2_RE = re.compile(r"<h2[^>]*>(.*?)</h2\s*>", re.IGNORECASE | re.DOTALL)
+_TAG_STRIP = re.compile(r"<[^>]+>")
+_SECTION_BLOCK_RE = re.compile(
+    r"<section(?:\s[^>]*)?>.*?</section\s*>", re.IGNORECASE | re.DOTALL,
+)
+
+
+def _detect_missing_sections(html: str) -> list[tuple[str, str, re.Pattern, str]]:
+    h2_titles = [
+        _TAG_STRIP.sub("", m.group(1)).strip()
+        for m in _H2_RE.finditer(html)
+    ]
+    missing = []
+    for entry in _REQUIRED_NEWS_SECTIONS:
+        _, _, pat, _ = entry
+        if not any(pat.search(t) for t in h2_titles):
+            missing.append(entry)
+    return missing
+
+
+def _regenerate_section(
+    name: str, topic: str, today: date,
+) -> str | None:
+    """Re-roll a single missing news section. Returns the validated
+    ``<section>…</section>`` HTML, or ``None`` if the model didn't produce
+    something usable."""
+    system = (
+        "You are filling in ONE missing news section for Linh's daily "
+        "newspaper edition. Use the web_search tool aggressively to find "
+        "fresh items dated within 1–2 days of the target date. "
+        "Return STRICT JSON {\"html\": \"<section>...</section>\"} containing "
+        "exactly one <section> element with: an <h2> title (use the exact "
+        "title given below, including its emoji), and AT LEAST 3 <article> "
+        "children, each with an <h3> headline, a one-paragraph blurb, and a "
+        "single Sources element at the end. The Sources element is either "
+        "<a class=\"sources\" href=\"…\" target=\"_blank\" rel=\"noopener\">"
+        "SOURCES</a> for a single source, or a tooltip popup span for "
+        "multiple. Do NOT wrap in <html>/<head>/<body>/<style>; do NOT use "
+        "<cite> tags; do NOT print citation numbers like [1]."
+    )
+    user = (
+        f"Target date: {today.isoformat()}.\n"
+        f"Section title (use verbatim as the <h2>): {name}\n\n"
+        f"Topic: {topic}\n\n"
+        "Run multiple web_search queries until you have at least 3 fresh, "
+        "distinct articles. Return only the single <section> element."
+    )
+    try:
+        result = claude_client.call_with_schema(
+            system=system,
+            user=user,
+            schema=claude_client.EDITION_SCHEMA,
+            schema_name="return_section",
+            schema_description=(
+                "Return the requested news section as one <section> element."
+            ),
+            extra_tools=[claude_client.WEB_SEARCH_TOOL],
+            max_tokens=8000,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Re-roll for missing section %r failed", name)
+        return None
+
+    raw = (result or {}).get("html", "")
+    if not isinstance(raw, str) or not raw.strip():
+        log.warning("Re-roll for %r returned empty html", name)
+        return None
+    cleaned = _strip_document_wrapper(raw)
+    m = _SECTION_BLOCK_RE.search(cleaned)
+    if not m:
+        log.warning("Re-roll for %r had no <section> block", name)
+        return None
+    section_html = m.group(0)
+    if not _H2_RE.search(section_html):
+        log.warning("Re-roll for %r had no <h2>", name)
+        return None
+    n_articles = len(re.findall(r"<article(?:\s[^>]*)?>", section_html, re.I))
+    if n_articles < 1:
+        log.warning("Re-roll for %r had no <article> children", name)
+        return None
+    log.info("Re-roll for %r succeeded (%d articles)", name, n_articles)
+    return section_html
+
+
+def _splice_section(html: str, key: str, section_html: str) -> str:
+    """Insert ``section_html`` into ``html`` at the correct position relative
+    to the other required news sections."""
+    order = [k for k, _, _, _ in _REQUIRED_NEWS_SECTIONS]
+    target_idx = order.index(key)
+
+    # Walk the existing sections in document order; record where to splice.
+    insert_after_end: int | None = None
+    insert_before_start: int | None = None
+    for sec in _SECTION_BLOCK_RE.finditer(html):
+        sec_html = sec.group()
+        m = _H2_RE.search(sec_html)
+        if not m:
+            continue
+        title = _TAG_STRIP.sub("", m.group(1)).strip()
+        for k, _, pat, _ in _REQUIRED_NEWS_SECTIONS:
+            if pat.search(title):
+                kidx = order.index(k)
+                if kidx < target_idx:
+                    insert_after_end = sec.end()
+                elif kidx > target_idx and insert_before_start is None:
+                    insert_before_start = sec.start()
+                break
+
+    if insert_before_start is not None:
+        return (
+            html[:insert_before_start]
+            + section_html + "\n"
+            + html[insert_before_start:]
+        )
+    if insert_after_end is not None:
+        return (
+            html[:insert_after_end]
+            + "\n" + section_html
+            + html[insert_after_end:]
+        )
+    # Fallback: append just before </div></aside transition (end of .flow).
+    flow_close = re.search(r"</div\s*>\s*<aside", html, re.IGNORECASE)
+    if flow_close:
+        return (
+            html[:flow_close.start()]
+            + section_html + "\n"
+            + html[flow_close.start():]
+        )
+    return html + "\n" + section_html
+
+
+def _backfill_missing_sections(html: str, today: date) -> str:
+    """Detect required news sections that the LLM omitted, re-roll each in a
+    focused call, and splice valid responses into ``html`` at the right
+    position. If a re-roll fails or returns garbage, leave the HTML alone for
+    that section — never insert an empty placeholder shell."""
+    missing = _detect_missing_sections(html)
+    if not missing:
+        return html
+    log.warning(
+        "Edition missing %d required section(s): %s — attempting re-roll",
+        len(missing), [k for k, _, _, _ in missing],
+    )
+    for key, name, _pat, topic in missing:
+        with _step(f"reroll_section:{key}"):
+            section_html = _regenerate_section(name, topic, today)
+        if section_html:
+            html = _splice_section(html, key, section_html)
+            log.info("Backfilled missing section %s inline", key)
+        else:
+            log.warning(
+                "Could not backfill section %s — storing edition without it",
+                key,
+            )
+    return html
 
 
 def _upsert_edition(

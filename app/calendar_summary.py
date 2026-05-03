@@ -609,7 +609,7 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
         "border-bottom:0.5pt solid #000;margin:0 0 2pt;padding-bottom:1pt;"
         "font-weight:bold"
     )
-    row_style = "margin:0 0 1pt;font-size:9pt"
+    row_style = "margin:0 0 1pt;font-size:12pt"
     parts: list[str] = [
         f'<div style="{label_style}">Calendar</div>'
     ]

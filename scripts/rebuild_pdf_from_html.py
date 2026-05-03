@@ -52,6 +52,9 @@ def main(target: date) -> int:
             s, active, target, target + timedelta(days=30), calendar_names=cal_names,
         )
         events = [ev for ev in events if ev.get("ical_uid") not in suppressed]
+        # Same dedup the main generation pipeline applies — collapses
+        # the same occurrence appearing on multiple subscribed calendars.
+        events = calendar_oauth.dedupe_events(events)
         for ev in events:
             cn = cal_names.get(ev.get("calendar_id"), "")
             if calendar_oauth.is_auto_important(cn, ev.get("summary", "")):

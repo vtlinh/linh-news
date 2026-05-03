@@ -19,6 +19,11 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         "generate_edition",
         return_value={"html": "<p>hi v1</p>"},
     )
+    # Backfill would otherwise hit the real Claude API for each missing
+    # required section. The stub html has none of them — short-circuit.
+    fake_backfill = patch.object(
+        generate, "_backfill_missing_sections", side_effect=lambda h, _t: h,
+    )
     fake_pdf = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v1")
     fake_list = patch.object(generate.calendar_oauth, "list_calendars", return_value=[])
     fake_fetch = patch.object(generate.calendar_oauth, "fetch_events", return_value=[])
@@ -30,8 +35,8 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     fake_now = patch.object(generate.weather, "get_now_cached", return_value="")
     today = date(2026, 4, 30)
 
-    with fake_claude, fake_pdf, fake_list, fake_fetch, fake_movies, \
-            fake_forecast, fake_alerts, fake_now:
+    with fake_claude, fake_backfill, fake_pdf, fake_list, fake_fetch, \
+            fake_movies, fake_forecast, fake_alerts, fake_now:
         generate.run("morning", today=today)
         row = db_session.get(Edition, today)
         assert row.html == "<p>hi v1</p>"
@@ -43,8 +48,8 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         return_value={"html": "<p>hi v2</p>", "pdf_html": "<p>pdf v2</p>"},
     )
     fake_pdf2 = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v2")
-    with fake_claude2, fake_pdf2, fake_list, fake_fetch, fake_movies, \
-            fake_forecast, fake_alerts, fake_now:
+    with fake_claude2, fake_backfill, fake_pdf2, fake_list, fake_fetch, \
+            fake_movies, fake_forecast, fake_alerts, fake_now:
         generate.run("evening", today=today)
 
     db_session.expire_all()

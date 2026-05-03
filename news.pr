@@ -35,7 +35,8 @@ Render exactly:
   <section>…Dorchester…</section>
   <section>…financial news…</section>
   <section>…tech news…</section>
-  <section>…AI news…</section>
+  <section>…🤖 AI news…</section>
+  <section>…🇺🇦 Ukraine News…</section>
 </div>
 <aside class="rail">
   <section>…stocks…</section>
@@ -48,7 +49,7 @@ The page chrome turns the flow into 1/2/3/3 columns at 375/768/1200/1920px, and 
 
 The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
 
-**Omit a section entirely if there is no fresh content.**
+**All 8 news sections below (global politics, US politics, NJ/NY, Dorchester, financial, tech, AI, Ukraine) are REQUIRED in every edition.** They must each appear with at least 3 fresh articles — see the MINIMUM ITEMS rule after the list. The only optional sections are Stocks (omit if `{{WATCHLIST_STOCKS}}` is empty) and the placeholder-only Weather/Calendar/Movies blocks (which the server fills in).
 
 1. **Weather** — place exactly `<!-- WEATHER_PLACEHOLDER -->` as the very first element of the body (before the flow and the rail). Do **not** generate any weather content yourself — the server injects a pre-rendered weather strip at render time using NWS data. Output only the literal comment tag, nothing else at this position.
 2. **Calendar** — place exactly `<!-- CALENDAR_PLACEHOLDER -->` where the calendar section belongs in the rail (between Stocks and Movies). Do **not** generate any calendar content yourself — the server injects real pre-generated calendar data at render time. Output only the literal comment tag, nothing else at this position.
@@ -66,13 +67,14 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
 7. **Top financial news**
 8. **Top tech news** — major developments in the tech industry: product launches, acquisitions, regulatory actions, platform changes, hardware releases. Exclude AI-specific stories (those go in the next section) and financial/earnings coverage (that goes in financial news).
 9. **AI news** (emphasize coding AI: Claude, Cursor, Copilot, Codex, etc.)
+10. **Ukraine news** — major developments related to Ukraine: front-line military situation, diplomatic and peace-process news, Western aid and sanctions decisions, significant domestic political or economic developments inside Ukraine, and notable humanitarian stories. Cite reputable outlets (Reuters, AP, BBC, Kyiv Independent, Ukrainska Pravda, etc.).
 
-> **MINIMUM ITEMS — applies to every "Top …" / "news" section above (global politics, US politics, NJ/NY, Dorchester, financial, tech, AI):** each section MUST contain **at least 3 distinct articles** from the past 1–2 days. If your initial search produces fewer than 3 items, run additional `web_search` queries (broader terms, related angles, regional outlets) until you have 3. Only omit a section entirely if, after a genuine multi-query search, you cannot find 3 fresh items — never ship a section with 1 or 2 items.
+> **MINIMUM ITEMS — applies to every "Top …" / "news" section above (global politics, US politics, NJ/NY, Dorchester, financial, tech, AI, Ukraine):** each section MUST contain **at least 3 distinct articles** from the past 1–2 days. If your initial search produces fewer than 3 items, run additional `web_search` queries (broader terms, related angles, regional outlets) until you have 3. **Never silently drop a required section** — if after a genuine multi-query search you truly cannot find 3 fresh items, ship the section with whatever fresh items you found (1 or 2) plus a one-line note explaining the slow news day. The server will detect a missing section and try to re-roll it, but the right answer is to ship it the first time.
 
-10. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. **Always include a hover-revealed explanation** for every stock in the list — even when the daily move is small. The explanation is shown only inside the tooltip; never inline. Tone the depth to the move: a small (<2%) day gets a one-sentence note ("trading flat alongside the S&P", "drifted with semis"); a moderate move gets 2–3 sentences with the catalyst; a >5% day gets the full multi-source rundown described below.
+11. **Stocks** — for each symbol in `{{WATCHLIST_STOCKS}}` (in order). If the watchlist is empty, omit the section entirely. Show current price and % change today. **Always include a hover-revealed explanation** for every stock in the list — even when the daily move is small. The explanation is shown only inside the tooltip; never inline. Tone the depth to the move: a small (<2%) day gets a one-sentence note ("trading flat alongside the S&P", "drifted with semis"); a moderate move gets 2–3 sentences with the catalyst; a >5% day gets the full multi-source rundown described below.
 
    For every stock:
-   - Use `web_search` to find **at least 5 distinct sources** explaining today's price action (earnings reports, analyst notes, regulatory news, sector moves, broad-market context — whatever applies). Even a quiet day has reasonable sources; if the symbol genuinely had nothing happen, cite the broad market read (S&P/Nasdaq, sector ETF) plus any analyst coverage you can find.
+   - Use `web_search` to find **at least 5 distinct sources** explaining today's price action (earnings reports, analyst notes, regulatory news, sector moves, broad-market context — whatever applies). Even a quiet day has reasonable sources; if the symbol genuinely had nothing happen, cite the broad market read (S&P/Nasdaq, sector ETF) plus any analyst coverage you can find. Make sure the urls point directly to the article, so that even if we check that url a few days later, we will still be able to read that article.
    - **Sort sources by trustworthiness, most trusted first.** Rough hierarchy:
      1. **Tier 1 — primary / wire**: Reuters, Bloomberg, Wall Street Journal, Financial Times, Associated Press, the company's own SEC filings or investor relations release.
      2. **Tier 2 — established financial press**: CNBC, Barron's, MarketWatch, The Economist, Forbes (staff reporting only — skip Forbes contributor blogs).
@@ -96,7 +98,7 @@ The right-rail order is fixed: **Stocks, Calendar, Movies** in that order.
    - At least 5 source links are required for every stock. Style the links inside `.tooltip-popup` as block elements (the chrome already does this).
    - The `<span class="tooltip">` wrapper is ALWAYS present — the hover popup is the only place the explanation lives, regardless of the day's move size.
    - Use the same green/red colour rules used in the PDF (`#0a7d1f` for ≥0, `#b00020` for <0; prefix `+` on positive moves).
-11. **Movies** — place exactly `<!-- MOVIES_PLACEHOLDER -->` where the Movies section belongs in the rail (after Stocks and the Calendar placeholder). Do **not** generate any movie content yourself — the server injects a pre-filtered, server-rendered Movies block at render time using the cached watchlist (the same list the `/admin/movies` page shows). Output only the literal comment tag, nothing else at this position.
+12. **Movies** — place exactly `<!-- MOVIES_PLACEHOLDER -->` where the Movies section belongs in the rail (after Stocks and the Calendar placeholder). Do **not** generate any movie content yourself — the server injects a pre-filtered, server-rendered Movies block at render time using the cached watchlist (the same list the `/admin/movies` page shows). Output only the literal comment tag, nothing else at this position.
 
 ## Sources (HTML only — NOT in the PDF)
 For every news, finance, AI, and school item, append **exactly one** `Sources` element at the end of the item. **Do not** add a Sources element to the weather strip (single-value lookup) or to movie cards (movies use a separate "▶ Trailers" button — see the movies section).

@@ -15,7 +15,7 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 - Python 3.12, managed with **uv**. `pyproject.toml` declares deps; `uv.lock` is committed.
 - Database: Postgres on Fly.io.
 - LLM: Anthropic API (`claude-opus-4-7`) with the `web_search_20250305` tool. Use prompt caching on the static `news.pr` block.
-- PDF: WeasyPrint (system serif fonts, US Letter, must fit one page).
+- PDF: WeasyPrint (system serif fonts, 15.296in × 27.193in broadsheet page, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
 - Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) once daily at 11:00 UTC (6 AM EST / 7 AM EDT).
 
@@ -73,6 +73,10 @@ Sources rendering is HTML-only — never include source citations in `pdf_html`.
 
 Whenever you push to GitHub, also re-read [README.md](README.md) and update it if it has drifted from reality. Stale README is a real problem — admin pages, deployment commands, and feature lists all change frequently. Keep it current with each push.
 
+## Deploy
+
+GitHub Actions is configured to deploy to Fly on push. **Do not run `fly deploy` yourself** unless the user explicitly asks for it — pushing to GitHub is sufficient.
+
 ## Verifying generated content
 
 Whenever you trigger a new edition (e.g. `python -m app.generate refresh`, calling `/refresh`, or making a change that affects the prompt or the data assembled into it), **always verify the result before declaring success**:
@@ -85,7 +89,7 @@ Whenever you trigger a new edition (e.g. `python -m app.generate refresh`, calli
    - Movies: hidden titles are absent; early-access vs. wide-release dedupe is correct; old re-releases (>1 year old) skipped.
    - Weather is for Woodcliff Lake 07677.
    - Calendar: no past events, hidden calendars excluded, important all-day events surface with appropriate lead time.
-3. **PDF**: open it (or call `app.pdf.page_count`) and confirm one US Letter page, NYT-style masthead, no source citations, no Hide buttons.
+3. **PDF**: open it (or call `app.pdf.page_count`) and confirm one broadsheet page (15.296in × 27.193in), NYT-style masthead, no source citations, no Hide buttons.
 4. **Sanity-check the *content*, not just the structure**: spot-check a couple of facts. If a section has stale or invented information, treat the run as failed and re-trigger after fixing the prompt or input data — don't ship plausible-looking garbage.
 
 If any of the above fails, fix the underlying issue (prompt, overlays, calendar fetch, etc.) and re-generate. Never report a generation as successful purely because the run exited 0.

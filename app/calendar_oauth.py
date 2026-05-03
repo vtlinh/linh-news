@@ -154,6 +154,33 @@ def list_calendars(s: Session) -> list[dict]:
     return out
 
 
+def dedupe_events(events: list[dict]) -> list[dict]:
+    """Collapse duplicate occurrences across calendars.
+
+    The same occurrence is recognised by ``(summary, start)`` — title +
+    start timestamp uniquely identifies an event instance even when the
+    same recurring event is mirrored across multiple calendars (each
+    with its own ``iCalUID``). Falls back to ``ical_uid`` only when no
+    title is present.
+
+    Order is preserved; the first occurrence of each key wins.
+    """
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for ev in events:
+        title = (ev.get("summary") or "").strip().lower()
+        start = ev.get("start") or ""
+        if title:
+            key: tuple = ("t", title, start)
+        else:
+            key = ("u", ev.get("ical_uid") or "", start)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ev)
+    return out
+
+
 def fetch_events(
     s: Session,
     calendar_ids: list[str],

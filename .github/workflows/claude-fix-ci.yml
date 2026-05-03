@@ -1,0 +1,62 @@
+name: Claude — fix failing CI
+
+# When the CI workflow fails on main, hand the failing logs + diff to Claude
+# and let it open a PR with a proposed fix.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  fix:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Download failing CI logs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p /tmp/ci-logs
+          gh run view "$RUN_ID" --log-failed > /tmp/ci-logs/failed.log 2>&1 || true
+          # Trim to last 400 lines to keep prompt size reasonable
+          tail -n 400 /tmp/ci-logs/failed.log > /tmp/ci-logs/failed.tail.log
+          echo "FAILED_LOG_PATH=/tmp/ci-logs/failed.tail.log" >> "$GITHUB_ENV"
+
+      - name: Run Claude to propose a fix
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          model: claude-opus-4-7
+          prompt: |
+            CI failed on main at commit ${{ github.event.workflow_run.head_sha }}.
+
+            Failing CI run: ${{ github.event.workflow_run.html_url }}
+            The tail of the failing job log is at: ${{ env.FAILED_LOG_PATH }}
+
+            Your job:
+            1. Read the failing log to identify the root cause.
+            2. Read CLAUDE.md and orient yourself in the repo.
+            3. Make the smallest correct fix. Do not refactor unrelated code.
+            4. Run `uv sync --frozen`, then `uv run ruff check` and `uv run pytest -q` locally to confirm the fix.
+            5. Create a new branch `claude/ci-fix-${{ github.event.workflow_run.id }}`,
+               commit, push, and open a PR against main titled
+               "CI fix: <one-line summary>".
+            6. In the PR body: explain the root cause, the fix, and any risks.
+               Link back to the failing run.
+
+            If the failure is environmental (flaky network, transient infra)
+            and not a code defect, do NOT open a PR — instead post a comment
+            on the latest commit explaining that and stop.

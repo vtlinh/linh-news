@@ -174,8 +174,10 @@ def _render_viewer(
     edition_html = edition.html if edition else None
     if edition_html:
         edition_html = _inject_weather(edition_html, s, edition)
-        edition_html = _inject_calendar(edition_html, s, today)
-        edition_html = _inject_movies(edition_html, s, today)
+        # Calendar and movies honor the viewed date (date picker), not now —
+        # so picking a past edition shows that edition's calendar/movies.
+        edition_html = _inject_calendar(edition_html, s, day)
+        edition_html = _inject_movies(edition_html, s, day)
     return templates.TemplateResponse(
         request,
         "viewer.html",

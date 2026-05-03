@@ -187,14 +187,18 @@ def fetch_events(
     start: date,
     end: date,
     *,
-    now: datetime | None = None,
     calendar_names: dict[str, str] | None = None,
 ) -> list[dict]:
-    """Fetch events from given calendars in [start, end). Drops events that
-    have already ended (relative to ``now``) and any titles caught by
-    EVENT_TITLE_FILTERS for that calendar."""
+    """Fetch events from given calendars in [start, end). Drops any titles
+    caught by EVENT_TITLE_FILTERS for that calendar.
+
+    Events are NOT filtered by whether they have already ended — keeping
+    earlier-today events (and any other events inside the window) in the
+    result means a refresh won't wipe them from per-day persistence, so the
+    date picker can still surface them when viewing today's or a past
+    edition.
+    """
     svc = _service(s)
-    now = now or datetime.now(UTC)
     time_min = datetime.combine(start, time.min, tzinfo=UTC).isoformat()
     time_max = datetime.combine(end, time.min, tzinfo=UTC).isoformat()
     cal_names = calendar_names or {}
@@ -221,8 +225,6 @@ def fetch_events(
                     continue
                 start_d, all_day = _event_start(ev)
                 end_d = _event_end(ev)
-                if end_d and end_d < now:
-                    continue
                 out.append(
                     {
                         "calendar_id": cal_id,

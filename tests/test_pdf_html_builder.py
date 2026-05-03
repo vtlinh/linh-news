@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app import pdf_html_builder
-from app.settings import LOCAL_TZ
 
 SAMPLE_BODY = """
 <!-- WEATHER_PLACEHOLDER -->
@@ -147,7 +146,7 @@ def test_builder_uses_provided_refreshed_at_in_dateline():
     formatted in Eastern time. The tz abbreviation flips between EST
     (winter) and EDT (summer)."""
     # May 2 is in DST → EDT.
-    refreshed = datetime(2026, 5, 2, 19, 30, tzinfo=timezone.utc)  # 15:30 ET
+    refreshed = datetime(2026, 5, 2, 19, 30, tzinfo=UTC)  # 15:30 ET
     out = pdf_html_builder.build(
         '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
         pdf_calendar_html="", pdf_movies_html="",
@@ -172,7 +171,7 @@ def test_builder_treats_naive_refreshed_at_as_local():
 def test_builder_uses_est_in_winter():
     """Winter-month refreshed_at picks up the EST abbreviation."""
     # Jan 15 is outside DST → EST.
-    refreshed = datetime(2026, 1, 15, 17, 30, tzinfo=timezone.utc)  # 12:30 ET
+    refreshed = datetime(2026, 1, 15, 17, 30, tzinfo=UTC)  # 12:30 ET
     out = pdf_html_builder.build(
         '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
         pdf_calendar_html="", pdf_movies_html="",
@@ -217,9 +216,9 @@ def test_builder_section_separators_distinguish_stories_and_groups():
     # Old class names are gone.
     assert 'class="sep-section"' not in out
     assert 'class="sep-article"' not in out
-    # Subsection rule is 1/3 width and centred (margin: auto).
+    # Subsection rule is 1/3 width and centred (text-align on outer block).
     assert "width:33%" in out
-    assert "margin:6pt auto 4pt" in out
+    assert "text-align:center" in out
     # Group rule is full-width black.
     assert "border-top:0.75pt solid #000" in out
     # Column-break behaviour: every rule glued to preceding content.

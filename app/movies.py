@@ -110,11 +110,10 @@ def fetch_year_movie_list() -> list[dict]:
 
     ids = [int(c["id"]) for c in candidates if c.get("id") is not None]
 
-    with tmdb._client() as client:  # noqa: SLF001 — same module family
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            details = list(pool.map(
-                lambda i: tmdb.fetch_movie_detail(i, client=client), ids
-            ))
+    with tmdb._client() as client, ThreadPoolExecutor(max_workers=8) as pool:  # noqa: SLF001 — same module family
+        details = list(pool.map(
+            lambda i: tmdb.fetch_movie_detail(i, client=client), ids
+        ))
 
     rows: list[dict] = []
     now = datetime.now(UTC)

@@ -15,6 +15,7 @@ The output is a single ``<div>`` per day::
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -218,10 +219,8 @@ def _emoji_lookup_batch(missing: list[str]) -> dict[str, str]:
         if time.monotonic() > deadline:
             log.warning("Emoji batch %s exceeded 30-min cap; cancelling",
                         batch.id)
-            try:
+            with contextlib.suppress(Exception):
                 client.messages.batches.cancel(batch.id)
-            except Exception:  # noqa: BLE001
-                pass
             raise TimeoutError(f"emoji batch {batch.id} timed out")
         batch = client.messages.batches.retrieve(batch.id)
         if batch.processing_status == "ended":

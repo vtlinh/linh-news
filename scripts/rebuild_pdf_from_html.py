@@ -13,10 +13,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import calendar_oauth, calendar_summary, overlays, pdf, pdf_html_builder, prefs
+from app import (
+    calendar_oauth,
+    calendar_summary,
+    overlays,
+    pdf,
+    pdf_html_builder,
+    prefs,
+    weather,
+)
 from app import movies as movies_mod
 from app.db import Edition, session_factory
-from app.settings import local_today
+from app.settings import get_settings, local_today
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 log = logging.getLogger("rebuild_pdf")
@@ -60,8 +68,29 @@ def main(target: date) -> int:
         )
         log.info("Movies block: %d bytes", len(pdf_mov))
 
+        # Weather strip — fetch fresh forecast / alerts and combine with the
+        # cached "Now" reading. The build path normally provides this; the
+        # rebuild script needs to do it explicitly because the LLM body now
+        # only emits `<!-- WEATHER_PLACEHOLDER -->` (no embedded strip).
+        coords = get_settings().weather_coords
+        try:
+            now_text = weather.get_now_cached(s, coords)
+            forecast = weather.fetch_forecast(coords)
+            alerts = weather.fetch_alerts(coords)
+            weather_strip_html = weather.build_weather_strip(
+                now_text, forecast, alerts,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Could not build weather strip; rendering without it")
+            weather_strip_html = ""
+        log.info("Weather strip: %d bytes", len(weather_strip_html))
+
         pdf_html = pdf_html_builder.build(
-            e.html, pdf_calendar_html=pdf_cal, pdf_movies_html=pdf_mov, today=target,
+            e.html,
+            pdf_calendar_html=pdf_cal,
+            pdf_movies_html=pdf_mov,
+            weather_strip_html=weather_strip_html,
+            today=target,
         )
         log.info("Print HTML: %d bytes", len(pdf_html))
 

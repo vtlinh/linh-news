@@ -1,18 +1,17 @@
-"""Per-day calendar summary rendering with a DB-cached emoji map.
+"""Per-day calendar event persistence + view-time HTML rendering.
 
-The summary HTML for each day is produced in pure Python — no LLM call —
-in the format::
+The refresh pipeline persists raw events per day into
+``calendar_day_summaries.events_json`` and backfills any missing
+title→emoji rows in ``event_emojis`` (via Claude Haiku). Nothing about
+the rendered HTML is cached — every page view re-renders the calendar
+from the persisted events plus the (DB-only, no-LLM) emoji map. This
+guarantees that whenever the renderer changes, the next page view
+reflects it without requiring cache invalidation.
+
+The output is a single ``<div>`` per day::
 
     <div><strong>Friday, May 2:</strong> 9:00 AM 📚 Library visit
         • 12:00 PM 🍕 Lunch with team • 🎂 Dad's birthday</div>
-
-Events are joined with ' • ' (bullet). Each event renders as
-``time {emoji} title`` (timed) or ``{emoji} title`` (all-day).
-
-Per-event emojis come from the ``event_emojis`` table, which maps a
-normalized event title to a single emoji. When a title has no row, we
-ask Claude (Haiku, no web_search) for an emoji once, then persist the
-result so future runs are LLM-free.
 """
 from __future__ import annotations
 
@@ -30,10 +29,6 @@ from sqlalchemy.orm import Session
 from app import claude_client
 
 log = logging.getLogger(__name__)
-
-# Bumped when the per-day output format changes — folded into the
-# fingerprint so cached rows are auto-invalidated and re-rendered.
-_PROMPT_VERSION = "v4-python-bullet"
 
 # Last-resort keyword map used when the LLM didn't return an emoji for a
 # title (whole batch failed, individual entry empty, etc). The map lives
@@ -76,29 +71,6 @@ def _fallback_emoji(title: str) -> str:
 def _normalize_title(title: str) -> str:
     """Collapse whitespace + lowercase so trivial variants share one emoji."""
     return re.sub(r"\s+", " ", (title or "").strip().lower())
-
-
-def _fingerprint(events: list[dict]) -> str:
-    """sha-256 of fields that affect rendering — order-independent."""
-    stable = sorted(
-        [
-            {
-                "ical_uid": e.get("ical_uid", ""),
-                "summary": e.get("summary", ""),
-                "start": e.get("start", ""),
-                "end": e.get("end", ""),
-                "calendar_name": e.get("calendar_name", ""),
-            }
-            for e in events
-        ],
-        key=lambda x: (x["start"], x["summary"], x["ical_uid"]),
-    )
-    payload = json.dumps(
-        {"prompt": _PROMPT_VERSION, "events": stable},
-        sort_keys=True,
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 # ───────────────── Emoji lookup (LLM only on cache miss) ─────────────────
@@ -411,7 +383,7 @@ def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) ->
     return f"<div><strong>{day_label}:</strong> " + " • ".join(pieces) + "</div>"
 
 
-def _upsert_day(s: Session, day: date, html: str, fp: str, events_json: str) -> None:
+def _upsert_day(s: Session, day: date, events_json: str) -> None:
     from app.db import CalendarDaySummary
 
     now = datetime.now(UTC)
@@ -420,16 +392,12 @@ def _upsert_day(s: Session, day: date, html: str, fp: str, events_json: str) -> 
 
         stmt = pg_insert(CalendarDaySummary).values(
             day=day,
-            summary_html=html,
-            event_fingerprint=fp,
             events_json=events_json,
             generated_at=now,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[CalendarDaySummary.day],
             set_={
-                "summary_html": stmt.excluded.summary_html,
-                "event_fingerprint": stmt.excluded.event_fingerprint,
                 "events_json": stmt.excluded.events_json,
                 "generated_at": stmt.excluded.generated_at,
             },
@@ -438,16 +406,12 @@ def _upsert_day(s: Session, day: date, html: str, fp: str, events_json: str) -> 
     except Exception:
         existing = s.get(CalendarDaySummary, day)
         if existing:
-            existing.summary_html = html
-            existing.event_fingerprint = fp
             existing.events_json = events_json
             existing.generated_at = now
         else:
             s.add(
                 CalendarDaySummary(
                     day=day,
-                    summary_html=html,
-                    event_fingerprint=fp,
                     events_json=events_json,
                     generated_at=now,
                 )
@@ -455,57 +419,57 @@ def _upsert_day(s: Session, day: date, html: str, fp: str, events_json: str) -> 
     s.commit()
 
 
-def get_or_generate_summaries(
+def persist_events_for_days(
     s: Session,
     events_by_day: dict[date, list[dict]],
     *,
     use_batch: bool = False,
-) -> dict[date, str]:
-    """Return ``{day: html}`` for all days with events.
+) -> None:
+    """Refresh-time: persist raw events per day and backfill missing emojis.
 
-    Cache hits return immediately. Misses are rendered in pure Python using a
-    DB-backed emoji map; titles whose emoji we haven't seen before are
-    backfilled via Claude — through the Batch API when ``use_batch=True``
-    (cron) or via a single Messages call when ``use_batch=False`` (user
-    /refresh, where wall-clock latency matters).
+    No HTML is rendered or cached here — the page renders the calendar
+    inline at view time from the persisted ``events_json`` plus the
+    ``event_emojis`` map. The emoji backfill (LLM) runs at refresh time
+    because it's the slow part; the per-day render at view time then has
+    a guaranteed cache hit on every emoji and is pure Python.
+
+    ``use_batch=True`` uses the Anthropic Batch API for cron runs;
+    ``use_batch=False`` uses a single low-latency call for user /refresh.
     """
-    from app.db import CalendarDaySummary
-
-    results: dict[date, str] = {}
-    to_generate: list[tuple[date, list[dict], str]] = []
-
-    for day in sorted(events_by_day):
-        events = events_by_day[day]
-        fp = _fingerprint(events)
-        row = s.get(CalendarDaySummary, day)
-        if row is not None and row.event_fingerprint == fp:
-            log.debug("Calendar day %s: cache hit", day)
-            results[day] = row.summary_html
-        else:
-            log.info("Calendar day %s: %s — re-rendering",
-                     day, "stale" if row else "new")
-            to_generate.append((day, events, fp))
-
-    if not to_generate:
-        return results
-
-    # One pass to look up every distinct title across the days we need to
-    # render — backfills emojis with a single LLM call (if any are missing).
     titles: list[str] = []
-    for _, events, _ in to_generate:
+    for events in events_by_day.values():
         for ev in events:
             t = (ev.get("summary") or "").strip()
             if t:
                 titles.append(t)
-    emoji_for = emojis_for_titles(s, titles, use_batch=use_batch)
+    if titles:
+        emojis_for_titles(s, titles, use_batch=use_batch)
 
-    for day, events, fp in to_generate:
-        html = render_day_html(day, events, emoji_for)
+    for day in sorted(events_by_day):
+        events = events_by_day[day]
         events_json = json.dumps(events, ensure_ascii=False, default=str)
-        _upsert_day(s, day, html, fp, events_json)
-        results[day] = html
+        _upsert_day(s, day, events_json)
 
-    return results
+
+def read_emoji_map(s: Session, titles: list[str]) -> dict[str, str]:
+    """View-time emoji lookup: pure DB read of ``event_emojis`` — no LLM.
+
+    Titles missing from the cache are simply absent from the result;
+    ``render_day_html`` handles a missing emoji by applying the
+    keyword-based fallback (and dropping the prefix entirely if even that
+    fails to match). Missing entries get backfilled by the next refresh
+    via :func:`persist_events_for_days`."""
+    from app.db import EventEmoji
+
+    distinct = list({(t or "").strip() for t in titles if (t or "").strip()})
+    if not distinct:
+        return {}
+    norm_for = {t: _normalize_title(t) for t in distinct}
+    rows = s.execute(
+        select(EventEmoji).where(EventEmoji.title_norm.in_(list(norm_for.values())))
+    ).scalars().all()
+    by_norm = {row.title_norm: row.emoji for row in rows}
+    return {t: by_norm[norm_for[t]] for t in distinct if norm_for[t] in by_norm}
 
 
 def build_calendar_section(day_htmls: dict[date, str]) -> str:
@@ -517,7 +481,14 @@ def build_calendar_section(day_htmls: dict[date, str]) -> str:
 
 
 def load_calendar_section(s: Session, today: date) -> str:
-    """Read cached summaries for today..today+30d and assemble a section."""
+    """View-time: render the calendar section inline from persisted events.
+
+    Reads the raw events for ``[today, today+30d]`` from
+    ``calendar_day_summaries.events_json``, looks up emojis from the
+    ``event_emojis`` table (no LLM call), runs :func:`render_day_html`
+    for each day, and assembles the section. Re-rendering on every view
+    means renderer changes take effect immediately, no cache-bust needed.
+    """
     from app.db import CalendarDaySummary
 
     horizon = today + timedelta(days=30)
@@ -526,7 +497,25 @@ def load_calendar_section(s: Session, today: date) -> str:
         .where(CalendarDaySummary.day >= today, CalendarDaySummary.day <= horizon)
         .order_by(CalendarDaySummary.day)
     ).scalars().all()
-    day_htmls = {row.day: row.summary_html for row in rows}
+
+    events_by_day: dict[date, list[dict]] = {}
+    titles: list[str] = []
+    for row in rows:
+        try:
+            events = json.loads(row.events_json) or []
+        except (TypeError, ValueError):
+            continue
+        events_by_day[row.day] = events
+        for ev in events:
+            t = (ev.get("summary") or "").strip()
+            if t:
+                titles.append(t)
+
+    emoji_for = read_emoji_map(s, titles)
+    day_htmls = {
+        day: render_day_html(day, events, emoji_for)
+        for day, events in events_by_day.items()
+    }
     return build_calendar_section(day_htmls)
 
 

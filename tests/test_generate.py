@@ -108,7 +108,7 @@ def test_build_context_dorchester_passthrough(db_session, monkeypatch):
     ]
     with patch.object(generate.calendar_oauth, "list_calendars", return_value=cals), \
          patch.object(generate.calendar_oauth, "fetch_events", return_value=events), \
-         patch.object(generate.calendar_summary, "get_or_generate_summaries", return_value={}), \
+         patch.object(generate.calendar_summary, "persist_events_for_days", return_value=None), \
          patch.object(generate.movies_mod, "get_movies", return_value=[]), \
          patch.object(generate.weather, "fetch_forecast", return_value={}), \
          patch.object(generate.weather, "fetch_alerts", return_value=[]):
@@ -154,14 +154,13 @@ def test_build_context_dedupes_calendar_events(db_session, monkeypatch):
     ]
     captured: dict = {}
 
-    def fake_summaries(s, by_day, **kwargs):
+    def fake_persist(s, by_day, **kwargs):
         captured["by_day"] = by_day
-        return {}
 
     with patch.object(generate.calendar_oauth, "list_calendars", return_value=cals), \
          patch.object(generate.calendar_oauth, "fetch_events", return_value=events), \
-         patch.object(generate.calendar_summary, "get_or_generate_summaries",
-                      side_effect=fake_summaries), \
+         patch.object(generate.calendar_summary, "persist_events_for_days",
+                      side_effect=fake_persist), \
          patch.object(generate.movies_mod, "get_movies", return_value=[]), \
          patch.object(generate.weather, "fetch_forecast", return_value={}), \
          patch.object(generate.weather, "fetch_alerts", return_value=[]):

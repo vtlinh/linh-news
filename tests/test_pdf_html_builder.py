@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from app import pdf_html_builder
+from app.settings import LOCAL_TZ
 
 SAMPLE_BODY = """
 <!-- WEATHER_PLACEHOLDER -->
@@ -95,6 +96,87 @@ def test_builder_handles_empty_optional_blocks():
     assert 'class="weather-corner"' in out
     # No rail in input → no aside in output
     assert "<aside" not in out
+
+
+def test_builder_strips_html_comments_from_body():
+    """HTML comments (LLM scatters `<!-- =========== STOCKS -->` block
+    dividers in the rail) must be removed so they don't surface in
+    extraction tools / readers."""
+    body = (
+        '<!-- WEATHER_PLACEHOLDER -->'
+        '<div class="flow">'
+        '<section><h2>X</h2><!-- block divider --><p>hello</p></section>'
+        '</div>'
+    )
+    out = pdf_html_builder.build(
+        body, pdf_calendar_html="", pdf_movies_html="",
+        today=date(2026, 5, 2),
+    )
+    assert "block divider" not in out
+    assert "hello" in out
+
+
+def test_builder_rebuilds_stocks_with_explicit_separator():
+    """Stocks rail block is rebuilt from .tooltip spans into a flat list
+    joined by an explicit `<span class="stock-sep">` element — bypasses
+    the fragile CSS-adjacency rule the LLM kept breaking."""
+    body = (
+        '<!-- WEATHER_PLACEHOLDER -->'
+        '<div class="flow"><section><h2>x</h2><p>x</p></section></div>'
+        '<aside class="rail">'
+        '<section><h2>📈 Stocks</h2>'
+        '<div><span class="tooltip">GOOG $182.45 +2.3%'
+        '<span class="tooltip-popup">why moved</span></span></div>'
+        '<br>'
+        '<div><span class="tooltip">AAPL $200.00 -1.0%</span></div>'
+        '</section>'
+        '</aside>'
+    )
+    out = pdf_html_builder.build(
+        body, pdf_calendar_html="", pdf_movies_html="",
+        today=date(2026, 5, 2),
+    )
+    # Both tickers present, popup stripped, separator element emitted.
+    assert "GOOG" in out and "AAPL" in out
+    assert "why moved" not in out
+    assert 'class="stock-sep"' in out
+
+
+def test_builder_uses_provided_refreshed_at_in_dateline():
+    """When the caller passes `refreshed_at`, the dateline shows it
+    formatted in Eastern time as `Refreshed at HH:00 EST`."""
+    refreshed = datetime(2026, 5, 2, 19, 30, tzinfo=timezone.utc)  # 15:30 ET
+    out = pdf_html_builder.build(
+        '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
+        pdf_calendar_html="", pdf_movies_html="",
+        today=date(2026, 5, 2),
+        refreshed_at=refreshed,
+    )
+    assert "Refreshed at 15:00 EST" in out
+    assert 'class="refreshed"' in out
+
+
+def test_builder_treats_naive_refreshed_at_as_local():
+    """Naive datetimes are assumed to already be in `LOCAL_TZ`."""
+    out = pdf_html_builder.build(
+        '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
+        pdf_calendar_html="", pdf_movies_html="",
+        today=date(2026, 5, 2),
+        refreshed_at=datetime(2026, 5, 2, 7, 15),
+    )
+    assert "Refreshed at 07:00 EST" in out
+
+
+def test_builder_section_separator_css_present():
+    """Sections after the first inside the flow get a black top rule;
+    articles after the first inside a section get a short centered rule."""
+    out = pdf_html_builder.build(
+        '<div class="flow"><section><h2>X</h2><p>x</p></section></div>',
+        pdf_calendar_html="", pdf_movies_html="",
+        today=date(2026, 5, 2),
+    )
+    assert ".flow > section:not(:first-of-type)" in out
+    assert ".flow > section > article:not(:first-of-type)::before" in out
 
 
 def test_column_count_scales_with_word_count():

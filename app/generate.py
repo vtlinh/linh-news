@@ -192,9 +192,9 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
         # at the cost of ~5+ min of extra latency. User /refresh runs take
         # the single-call path so the spinner stays under ~10 s for emojis.
         emoji_use_batch = slot != "refresh"
-        with _step(f"calendar_summary ({len(events_by_day)} days, "
+        with _step(f"calendar_persist ({len(events_by_day)} days, "
                    f"emoji_batch={emoji_use_batch})"):
-            calendar_summary.get_or_generate_summaries(
+            calendar_summary.persist_events_for_days(
                 s, events_by_day, use_batch=emoji_use_batch,
             )
 

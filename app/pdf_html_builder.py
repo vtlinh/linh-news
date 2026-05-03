@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+
+from app.settings import LOCAL_TZ, local_now
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +153,7 @@ def build(
     pdf_movies_html: str,
     today: date,
     weather_strip_html: str = "",
+    refreshed_at: datetime | None = None,
 ) -> str:
     """Build the print-styled HTML document for WeasyPrint.
 
@@ -166,6 +169,11 @@ def build(
 
     soup = BeautifulSoup(body_html, "html.parser")
     _strip_interactive(soup)
+    # Strip HTML comments (some PDF readers / extraction tools surface them
+    # as visible text, and the LLM scatters "==================== STOCKS"
+    # block-divider comments throughout the rail).
+    for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+        c.extract()
 
     weather_inner = _format_weather_for_pdf(
         _inner_html(soup.select_one("div.weather-strip"))
@@ -179,14 +187,35 @@ def build(
     if rail is not None:
         rail_sections = rail.find_all("section", recursive=False)
         if rail_sections:
-            # Drop <br> tags inside the stocks block so the
-            # ".tooltip + .tooltip" CSS selector fires (CSS sees <br> as
-            # an intervening sibling and breaks the adjacency rule). Also
-            # makes the "* " separator + 16pt padding actually render.
             stocks_block = rail_sections[0]
-            for br in stocks_block.find_all("br"):
-                br.decompose()
-            stocks_inner = _inner_html(stocks_block)
+            # Pull each ticker's `.tooltip` span (which carries the visible
+            # "TICKER $price ±X%" text) and rebuild a flat, single-line
+            # list joined by an explicit "*" separator with 16pt of
+            # whitespace on each side. This bypasses all the CSS-adjacency
+            # fragility introduced by the LLM wrapping every ticker in its
+            # own <div> with comment dividers between them.
+            tickers: list[str] = []
+            for tip in stocks_block.find_all("span", class_="tooltip"):
+                # Remove the inner ".tooltip-popup" details panel.
+                for popup in tip.find_all(class_="tooltip-popup"):
+                    popup.decompose()
+                # Drop any <br> inside the visible portion.
+                for br in tip.find_all("br"):
+                    br.decompose()
+                tickers.append(str(tip))
+            sep = ' <span class="stock-sep">•</span> '
+            if tickers:
+                stocks_inner = sep.join(tickers)
+            else:
+                # Fallback (unit tests / no .tooltip wrapper): drop the h2 +
+                # any disclaimer paragraph and use whatever's left.
+                for h2 in stocks_block.find_all("h2"):
+                    h2.decompose()
+                for p in stocks_block.find_all("p"):
+                    p.decompose()
+                for br in stocks_block.find_all("br"):
+                    br.decompose()
+                stocks_inner = _inner_html(stocks_block).strip()
         # Anything else in the rail (calendar substitution + movies
         # substitution + any extra sections) becomes the sidebar.
         # We rebuild from rail children minus the first <section>.
@@ -208,6 +237,18 @@ def build(
 
     dateline = _format_date(today)
     vol_roman = _roman(_day_of_year(today))
+    # Always render the refresh time on the Eastern-time clock that the
+    # rest of the app uses (settings.LOCAL_TZ = America/New_York). If a
+    # caller passes a naive datetime or one in a different zone, convert
+    # it to America/New_York before formatting so the label is always
+    # consistent.
+    if refreshed_at is None:
+        refreshed_at = local_now()
+    elif refreshed_at.tzinfo is None:
+        refreshed_at = refreshed_at.replace(tzinfo=LOCAL_TZ)
+    else:
+        refreshed_at = refreshed_at.astimezone(LOCAL_TZ)
+    refreshed_label = f"Refreshed at {refreshed_at.hour:02d}:00 EST"
     font_url = _MASTHEAD_FONT_PATH.as_uri()
 
     style_block = f"""
@@ -247,9 +288,9 @@ def build(
                  font-size:8pt; padding:2pt 0;
                  border-bottom:0.5pt solid #000;
                  letter-spacing:.05em; text-transform:uppercase; }}
-    .dateline .vol, .dateline .vol-spacer {{ flex:0 0 22%; }}
+    .dateline .vol, .dateline .refreshed {{ flex:0 0 22%; }}
     .dateline .vol {{ text-align:left; }}
-    .dateline .vol-spacer {{ text-align:right; }}
+    .dateline .refreshed {{ text-align:right; }}
     .dateline .date {{ flex:1 1 auto; text-align:center; }}
     .content {{ display:flex; gap:14pt; margin-top:6pt;
                 align-items:stretch; }}
@@ -257,6 +298,18 @@ def build(
              column-rule:0.5pt solid #999; }}
     .flow > section, .flow > section > article {{
              /* allow free wrapping from one column to the next */ }}
+    /* Section separator: full-width black rule above every section
+       after the first inside the flow. */
+    .flow > section:not(:first-of-type) {{
+             border-top:0.75pt solid #000;
+             padding-top:6pt; margin-top:6pt; }}
+    /* Sub-section separator: short centered rule above every article
+       after the first inside its section. ::before keeps the article
+       itself column-width while drawing a 1/3-width centered line. */
+    .flow > section > article:not(:first-of-type)::before {{
+             content:""; display:block; width:33%;
+             margin:6pt auto 4pt;
+             border-top:0.4pt solid #999; }}
     aside.rail {{ flex:0 0 2.4in; padding-left:8pt;
                   border-left:0.5pt solid #999;
                   font-size:9pt; line-height:1.2; }}
@@ -268,18 +321,13 @@ def build(
     /* Drop the "Stocks" heading entirely — the footer is identifiable
        by its border + ticker formatting. */
     .stocks-footer h2 {{ display:none !important; }}
-    .stocks-footer > div {{ display:inline; }}
     .stocks-footer .tooltip {{ display:inline;
                  white-space:nowrap; }}
-    /* The LLM emits explicit <br> between tickers — hide them so the
-       footer reads as a single line. */
-    .stocks-footer br {{ display:none; }}
-    /* Add an asterisk separator between adjacent ticker spans, with
-       8pt of horizontal whitespace on each side (16pt total padding
-       between consecutive stocks). */
-    .stocks-footer .tooltip + .tooltip::before {{
-                 content: " * "; padding:0 8pt;
-                 color:#000; font-weight:bold; }}
+    /* The "*" separator is now an explicit DOM element; just give it
+       8pt of horizontal padding on each side (16pt total between
+       consecutive stocks) so the footer reads cleanly. */
+    .stocks-footer .stock-sep {{ display:inline-block;
+                 padding:0 8pt; color:#000; font-weight:bold; }}
     """
 
     parts = [
@@ -300,7 +348,7 @@ def build(
         '<div class="dateline">'
         f'<span class="vol">VOL. {vol_roman}</span>'
         f'<span class="date">{dateline}</span>'
-        '<span class="vol-spacer"></span>'
+        f'<span class="refreshed">{refreshed_label}</span>'
         '</div>',
     ]
     # Main content area: multi-column flow on the left, fixed-width rail

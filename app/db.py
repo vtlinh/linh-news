@@ -126,10 +126,11 @@ class GoogleOAuth(Base):
 
 
 class CalendarDaySummary(Base):
+    """Persisted raw calendar events per day, written by the refresh
+    pipeline. The HTML summary is rendered inline at view time from
+    ``events_json`` plus the ``event_emojis`` map — no cached HTML."""
     __tablename__ = "calendar_day_summaries"
     day: Mapped[date] = mapped_column(Date, primary_key=True)
-    summary_html: Mapped[str] = mapped_column(Text, nullable=False)
-    event_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     events_json: Mapped[str] = mapped_column(Text, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

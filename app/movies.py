@@ -68,11 +68,20 @@ _VALID_TRAILER_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[\w-]{8,}")
 _VALID_BACKDROP_RE = re.compile(r"^https://image\.tmdb\.org/t/p/[\w]+/[\w./-]+$")
 
 
-def _pick_backdrop(m: dict, *, rng: random.Random | None = None) -> str | None:
-    """Return one backdrop URL chosen uniformly at random, or ``None`` when
-    the movie has no usable backdrops. Validates the URL shape so a
-    malformed cache entry can't slip an arbitrary string into the rendered
-    page."""
+def _pick_backdrop(
+    m: dict,
+    *,
+    rng: random.Random | None = None,
+    liveness_check: bool = True,
+) -> str | None:
+    """Return one backdrop URL chosen at random, skipping any URL that no
+    longer resolves on the TMDB CDN. Returns ``None`` when the movie has no
+    usable backdrops (or all of them are dead).
+
+    Validates the URL shape first so a malformed cache entry can't slip an
+    arbitrary string into the rendered page. Then shuffles and HEAD-checks
+    each candidate in turn; the first 2xx wins. ``liveness_check=False``
+    short-circuits the HEAD checks (used by tests to keep them offline)."""
     raw = m.get("backdrops") or []
     valid = [
         u for u in raw
@@ -80,7 +89,14 @@ def _pick_backdrop(m: dict, *, rng: random.Random | None = None) -> str | None:
     ]
     if not valid:
         return None
-    return (rng or random).choice(valid)
+    if not liveness_check:
+        return (rng or random).choice(valid)
+    shuffled = list(valid)
+    (rng or random).shuffle(shuffled)
+    for url in shuffled:
+        if tmdb.url_is_alive(url):
+            return url
+    return None
 
 
 def fetch_year_movie_list() -> list[dict]:

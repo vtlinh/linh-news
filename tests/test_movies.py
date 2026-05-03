@@ -3,8 +3,18 @@ from __future__ import annotations
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from app import movies, overlays
+import pytest
+
+from app import movies, overlays, tmdb
 from app.db import Movie
+
+
+@pytest.fixture(autouse=True)
+def _stub_backdrop_liveness(monkeypatch):
+    """The backdrop renderer HEAD-checks each candidate URL before serving
+    it. Tests fabricate URLs that aren't real TMDB CDN entries — stub the
+    network probe to always say 'alive' so tests stay offline and fast."""
+    monkeypatch.setattr(tmdb, "url_is_alive", lambda url, **_: True)
 
 
 def _make(
@@ -422,6 +432,27 @@ def test_pick_backdrop_rejects_malformed_urls():
     assert movies._pick_backdrop(m) is None
 
 
+def test_pick_backdrop_skips_dead_urls(monkeypatch):
+    dead = "https://image.tmdb.org/t/p/w300/dead.jpg"
+    alive = "https://image.tmdb.org/t/p/w300/alive.jpg"
+    monkeypatch.setattr(tmdb, "url_is_alive", lambda url, **_: url == alive)
+    m = {"backdrops": [dead, alive]}
+    # Repeat a few times so we exercise both shuffle orderings.
+    for _ in range(20):
+        assert movies._pick_backdrop(m) == alive
+
+
+def test_pick_backdrop_returns_none_when_all_dead(monkeypatch):
+    monkeypatch.setattr(tmdb, "url_is_alive", lambda url, **_: False)
+    m = {
+        "backdrops": [
+            "https://image.tmdb.org/t/p/w300/a.jpg",
+            "https://image.tmdb.org/t/p/w300/b.jpg",
+        ],
+    }
+    assert movies._pick_backdrop(m) is None
+
+
 def test_backdrop_urls_filters_portrait_and_sorts_by_vote(monkeypatch):
     from app import tmdb
     images_block = {
@@ -434,8 +465,8 @@ def test_backdrop_urls_filters_portrait_and_sorts_by_vote(monkeypatch):
     }
     out = tmdb._backdrop_urls(images_block)
     assert out == [
-        "https://image.tmdb.org/t/p/w780/hi.jpg",
-        "https://image.tmdb.org/t/p/w780/lo.jpg",
+        "https://image.tmdb.org/t/p/w300/hi.jpg",
+        "https://image.tmdb.org/t/p/w300/lo.jpg",
     ]
 
 

@@ -38,9 +38,10 @@ log = logging.getLogger(__name__)
 _BASE = "https://api.themoviedb.org/3"
 _IMG_BASE = "https://image.tmdb.org/t/p/w500"
 # Backdrop (landscape, 16:9) sizes available from TMDB are w300, w780, w1280,
-# original. w780 is a good fit for the daily edition's movie cards (wide
-# enough to look crisp on retina, small enough to keep PDF render cheap).
-_BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
+# original. We use the smallest (w300) — at the rail's 2.4in width and the
+# HTML card's column width, w300 is plenty crisp and keeps both bytes
+# downloaded and PDF render cost minimal.
+_BACKDROP_BASE = "https://image.tmdb.org/t/p/w300"
 _YT_WATCH = "https://www.youtube.com/watch?v="
 
 # US theatrical release types per TMDB:
@@ -274,7 +275,7 @@ def _backdrop_urls(images_block: dict, *, max_count: int = 8) -> list[str]:
     ``aspect_ratio``. We sort by ``vote_average`` desc to favour the
     community-curated "best" stills, drop near-square crops (some re-releases
     sneak vertical posters into the backdrop bucket) and prefix the file_path
-    with the w780 CDN base.
+    with the w300 CDN base.
     """
     items = images_block.get("backdrops") or []
     cleaned = []
@@ -290,6 +291,18 @@ def _backdrop_urls(images_block: dict, *, max_count: int = 8) -> list[str]:
         cleaned.append((float(it.get("vote_average") or 0), path))
     cleaned.sort(key=lambda x: x[0], reverse=True)
     return [_BACKDROP_BASE + p for _, p in cleaned[:max_count]]
+
+
+def url_is_alive(url: str, *, timeout: float = 1.5) -> bool:
+    """Best-effort HEAD check that a TMDB image URL still resolves to an
+    actual image. Returns ``True`` on a 2xx, ``False`` on anything else
+    (4xx, 5xx, network error, timeout). Used by the movie-card renderer
+    to skip stale backdrop URLs at service time."""
+    try:
+        r = httpx.head(url, timeout=timeout, follow_redirects=True)
+    except httpx.HTTPError:
+        return False
+    return 200 <= r.status_code < 300
 
 
 def _us_release_info(release_dates_block: dict) -> tuple[str | None, date | None]:

@@ -17,11 +17,16 @@ log = logging.getLogger(__name__)
 # without limit.
 _FONT_CACHE_KEY = "linh_news:pdf_font_cache"
 _FONT_CACHE_MAX_SAMPLES = 30
-_FONT_MIN = 7.0   # readable on a 31" 4K monitor
-_FONT_MAX = 14.0  # newspaper sanity ceiling
-_FONT_STEP = 0.5  # render fonts at 0.5pt resolution
-_DEFAULT_FONT_GUESS = 10.0
-_BLANK_TARGET = 0.10  # tolerate up to 10% blank space
+# Body font window: 12pt floor (≈30% larger than the original 9pt) up to
+# 16pt ceiling. The fit loop binary-searches inside this window and tries
+# to grow the body font as much as 1-page layout allows. _BLANK_TARGET=0
+# makes the grow-to-fill step always run when the page isn't completely
+# full, so we use the available 16pt ceiling whenever content permits.
+_FONT_MIN = 12.0
+_FONT_MAX = 24.0
+_FONT_STEP = 0.1
+_DEFAULT_FONT_GUESS = 16.0
+_BLANK_TARGET = 0.01  # grow-to-fill until fill_ratio >= 0.99
 
 
 def _round_half(x: float) -> float:
@@ -52,6 +57,8 @@ def _load_font_samples() -> list[tuple[int, float]]:
         for it in items:
             try:
                 w, f = int(it[0]), float(it[1])
+                # Skip stale samples below the current floor — they would
+                # otherwise pin the predicted seed to a too-small font.
                 if w > 0 and _FONT_MIN <= f <= _FONT_MAX:
                     out.append((w, f))
             except (TypeError, ValueError, IndexError):
@@ -253,9 +260,8 @@ def html_to_pdf(html: str) -> bytes:
     )
 
     def _url_fetcher(url, *args, **kwargs):
-        # Log every external resource WeasyPrint asks for — the lead-image
-        # failures we've been seeing usually look like a silent fetch error
-        # here, so we want a trace for every attempt and outcome.
+        # Log every external resource WeasyPrint asks for so silent fetch
+        # errors (font, image, css) are easy to trace.
         is_data = url.startswith("data:")
         if not is_data:
             log.info("WeasyPrint fetch: %s", url[:200])
@@ -285,15 +291,18 @@ def html_to_pdf(html: str) -> bytes:
             raise
 
     def _make_css(base_pt: float) -> CSS:
-        # Cap masthead independently so it stays readable even at large body sizes.
-        h1_pt = min(base_pt * 3.75, 36.0)
+        # Masthead size: 12x base, cap 115.2pt (-20% from the previous 15x/144pt).
+        h1_pt = min(base_pt * 12.0, 115.2)
+        # 2560 × 1440 px portrait at 94.14 PPI ⇒ 15.296in × 27.193in.
+        # Stays in portrait orientation (taller than wide).
         return CSS(string=f"""
-        @page {{ size: 12in 22in; margin: 0.4in; }}
+        @page {{ size: 15.296in 27.193in; margin: 0.4in; }}
         html, body {{ font-family: "Times New Roman", Georgia, serif; }}
         body {{ font-size: {base_pt:.2f}pt !important; line-height: 1.15 !important; }}
         h1 {{ font-size: {h1_pt:.2f}pt !important; margin: 0 0 2pt !important;
-              text-align: center; font-weight: bold;
-              font-family: "Times New Roman", Georgia, serif; }}
+              text-align: center; font-weight: normal;
+              font-family: "Linh Times Masthead", "Times New Roman",
+                           Georgia, serif; }}
         h2 {{ font-size: {base_pt * 1.375:.2f}pt !important; margin: 4pt 0 2pt !important;
               font-weight: bold; }}
         h3, h4, h5, h6 {{ font-size: {base_pt * 1.125:.2f}pt !important;

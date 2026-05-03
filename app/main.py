@@ -217,6 +217,23 @@ def view_date(
     return _render_viewer(request, _parse_date(day), s, email)
 
 
+def _pdf_token_valid(request: Request, token: str | None) -> bool:
+    """True iff the request presents a valid PDF_LATEST_TOKEN, either as
+    ``?token=…`` or as ``Authorization: Bearer …``. An unset/empty
+    expected token always fails (token auth disabled)."""
+    expected = get_settings().pdf_latest_token
+    auth_header = request.headers.get("authorization", "")
+    bearer = (
+        auth_header[len("Bearer "):].strip()
+        if auth_header.lower().startswith("bearer ")
+        else ""
+    )
+    presented = (token or bearer or "").strip()
+    if not expected or not presented:
+        return False
+    return secrets.compare_digest(presented, expected)
+
+
 @app.get("/pdf/latest")
 def pdf_latest(
     request: Request,
@@ -228,15 +245,7 @@ def pdf_latest(
     ``?token=…`` (handy for bookmarks / home-screen shortcuts) or as
     ``Authorization: Bearer …`` (preferred — query strings end up in
     proxy and Fly access logs)."""
-    expected = get_settings().pdf_latest_token
-    auth_header = request.headers.get("authorization", "")
-    bearer = (
-        auth_header[len("Bearer "):].strip()
-        if auth_header.lower().startswith("bearer ")
-        else ""
-    )
-    presented = (token or bearer or "").strip()
-    if not expected or not presented or not secrets.compare_digest(presented, expected):
+    if not _pdf_token_valid(request, token):
         raise HTTPException(401, "Invalid or missing token")
     edition = s.execute(
         select(Edition)
@@ -257,9 +266,12 @@ def pdf_latest(
 @app.get("/pdf/{day}")
 def view_pdf(
     day: str,
+    request: Request,
+    token: str | None = None,
     s: Session = Depends(get_session),
-    email: str = Depends(auth.require_viewer),
 ):
+    if not _pdf_token_valid(request, token):
+        auth.require_viewer(request, s)
     edition = s.execute(
         select(Edition)
         .where(Edition.date == _parse_date(day))

@@ -35,16 +35,32 @@ def test_builder_assembles_print_document():
     )
     # Weather placeholder is substituted before the rest of the build.
     assert "<!-- WEATHER_PLACEHOLDER -->" not in out
-    assert "Now 12°C" in out
+    # "Now"/"Today"/"Tomorrow" labels are bolded inside the weather corner.
+    assert "<strong>Now</strong>" in out
+    assert "12°C" in out
     assert out.startswith("<!DOCTYPE html>")
     # Masthead + dateline
     assert "The Linh Times" in out
     assert "Saturday, May 2, 2026" in out
-    # Weather row 1, stocks row 2
-    weather_idx = out.index('class="weather-row"')
-    stocks_idx = out.index('class="stocks-row"')
+    # New NYT-style masthead: motto box on left, weather on right of title.
+    assert 'class="motto"' in out
+    assert "All the News" in out
+    assert "Fit for Linh" in out
+    assert 'class="weather-corner"' in out
+    # VOL. line uses Roman numerals for the day-of-year (May 2, 2026 = day 122).
+    assert "VOL. CXXII" in out
+    # Masthead precedes the content (flow + rail), and stocks anchor as footer.
+    masthead_idx = out.index('class="masthead"')
     flow_idx = out.index('class="flow"')
-    assert weather_idx < stocks_idx < flow_idx
+    stocks_idx = out.index('class="stocks-footer"')
+    assert masthead_idx < flow_idx < stocks_idx
+    # Old standalone weather row is gone.
+    assert 'class="weather-row"' not in out
+    # Old top-of-page stocks row is gone.
+    assert 'class="stocks-row"' not in out
+    # Chomsky @font-face is wired in for the masthead title.
+    assert "@font-face" in out
+    assert "Linh Times Masthead" in out
     # Stocks colour span survives lift
     assert "#0a7d1f" in out
     assert "+2.3%" in out
@@ -57,7 +73,7 @@ def test_builder_assembles_print_document():
     # Calendar + movies substituted into sidebar
     assert "📅 Calendar" in out
     assert "🎬 Movies" in out
-    # <h2> section titles preserved (needed by _inject_lead_image and _drop_one_section)
+    # <h2> section titles preserved (needed by _drop_one_section)
     assert "🇺🇸 US Politics" in out
     assert "<section>" in out
 
@@ -74,7 +90,9 @@ def test_builder_handles_empty_optional_blocks():
         today=date(2026, 5, 2),
     )
     assert "The Linh Times" in out
-    assert "Now 0°C" in out
+    assert "<strong>Now</strong>" in out  # bolded label
+    assert "0°C" in out
+    assert 'class="weather-corner"' in out
     # No rail in input → no aside in output
     assert "<aside" not in out
 
@@ -88,6 +106,7 @@ def test_column_count_scales_with_word_count():
     out_s = pdf_html_builder.build(short, pdf_calendar_html="", pdf_movies_html="", today=today)
     out_m = pdf_html_builder.build(medium, pdf_calendar_html="", pdf_movies_html="", today=today)
     out_h = pdf_html_builder.build(huge, pdf_calendar_html="", pdf_movies_html="", today=today)
+    # Flow always uses 4 inner columns; rail makes 5 visible total.
     assert "column-count:4" in out_s
-    assert "column-count:5" in out_m
-    assert "column-count:6" in out_h
+    assert "column-count:4" in out_m
+    assert "column-count:4" in out_h

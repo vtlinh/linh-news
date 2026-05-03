@@ -395,22 +395,31 @@ def render_pdf_html(
     allowed_ratings: set[str],
     favorite_titles: set[str] | None = None,
     max_items: int = 8,
+    min_items: int = 5,
 ) -> str:
-    """Render a compact Movies block for the Linh Times PDF."""
+    """Render the Movies block for the Linh Times PDF rail.
+
+    Always renders at least ``min_items`` cards (when available), each with
+    title, release-date subtitle, and the short ``summary`` description.
+    """
     in_theaters, coming_soon = filter_for_edition(
         movies, today,
         hidden_titles=hidden_titles, allowed_ratings=allowed_ratings,
         favorite_titles=favorite_titles,
     )
-    items = (in_theaters + coming_soon)[:max_items]
+    pool = in_theaters + coming_soon
+    target = max(min_items, 0)
+    items = pool[: max(target, max_items)] if pool else []
     if not items:
         return ""
     label_style = (
-        "font-size:7pt;letter-spacing:.05em;text-transform:uppercase;"
-        "border-bottom:0.5pt solid #000;margin:0 0 2pt;padding-bottom:1pt"
+        "font-size:11pt;letter-spacing:.05em;text-transform:uppercase;"
+        "border-bottom:0.5pt solid #000;margin:0 0 3pt;padding-bottom:1pt;"
+        "font-weight:bold"
     )
-    row_style = "margin:0 0 2pt;font-size:8pt;line-height:1.15"
-    sub_style = "font-size:7pt;color:#555"
+    row_style = "margin:0 0 6pt;font-size:10pt;line-height:1.25"
+    sub_style = "font-size:9pt;color:#555"
+    desc_style = "font-size:9.5pt;color:#222;margin-top:2pt;line-height:1.3"
     parts = [f'<div style="{label_style}">Movies</div>']
     for m in items:
         title = (m.get("title") or "").strip()
@@ -422,8 +431,14 @@ def render_pdf_html(
             f"In theaters {_format_release_label(rd)}" if is_past
             else f"Opens {_format_release_label(rd)}"
         )
+        summary = (m.get("summary") or "").strip()
+        desc_html = (
+            f'<div style="{desc_style}">{html.escape(summary)}</div>'
+            if summary else ""
+        )
         parts.append(
             f'<div style="{row_style}"><strong>{html.escape(title)}</strong> '
-            f'<span style="{sub_style}">— {html.escape(sub)}</span></div>'
+            f'<span style="{sub_style}">— {html.escape(sub)}</span>'
+            f'{desc_html}</div>'
         )
     return "\n".join(parts)

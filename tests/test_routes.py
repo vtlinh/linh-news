@@ -171,6 +171,52 @@ def test_pdf_latest_bearer_header(client, db_session, monkeypatch):
     assert r.status_code == 401
 
 
+def test_pdf_day_with_token_query(client, db_session, monkeypatch):
+    _seed_edition(db_session, date(2026, 4, 30))
+    from app.settings import get_settings
+    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+
+    client.cookies.clear()
+    r = client.get("/pdf/2026-04-30?token=s3cret", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.content.startswith(b"%PDF")
+
+
+def test_pdf_day_with_bearer_header(client, db_session, monkeypatch):
+    _seed_edition(db_session, date(2026, 4, 30))
+    from app.settings import get_settings
+    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+
+    client.cookies.clear()
+    r = client.get(
+        "/pdf/2026-04-30",
+        headers={"Authorization": "Bearer s3cret"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200
+    assert r.content.startswith(b"%PDF")
+
+
+def test_pdf_day_wrong_token_falls_back_to_login(client, db_session, monkeypatch):
+    _seed_edition(db_session, date(2026, 4, 30))
+    from app.settings import get_settings
+    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+
+    client.cookies.clear()
+    # Browser-style request → require_viewer redirects to /login.
+    r = client.get(
+        "/pdf/2026-04-30?token=wrong",
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert r.status_code in (307, 302)
+    assert "/login" in r.headers.get("location", "")
+
+    # Non-browser request → 401.
+    r = client.get("/pdf/2026-04-30?token=wrong", follow_redirects=False)
+    assert r.status_code == 401
+
+
 def test_pdf_latest_does_not_require_login(client, db_session, monkeypatch):
     """Sanity check: hitting /pdf/latest with the right token works without
     any session cookie — confirms no Google login redirect on this route."""

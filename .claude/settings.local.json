@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000,15432 -State Listen -ErrorAction SilentlyContinue)",
+      "PowerShell($req = Measure-Command { try { Invoke-WebRequest http://127.0.0.1:8000/ -MaximumRedirection 0 -ErrorAction SilentlyContinue | Out-Null } catch {} }; \"{0:N0}ms\" -f $req.TotalMilliseconds)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess; Get-Process -Id \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime)",
+      "PowerShell($now = Get-Date; for \\($i = 1; $i -le 3; $i++\\) { $sw = [Diagnostics.Stopwatch]::StartNew\\(\\); try { $r = Invoke-WebRequest -Uri http://localhost:8000/ -Headers @{\"Accept\"=\"text/html\"} -TimeoutSec 30 -MaximumRedirection 0 } catch { $r = $_.Exception.Response }; $sw.Stop\\(\\); \"{0}: status={1} time={2}ms loc={3}\" -f $i, $r.StatusCode, $sw.ElapsedMilliseconds, $r.Headers['Location'] })",
+      "Bash(grep -q \"^done$\" \"C:/Users/Linh/AppData/Local/Temp/claude/C--Users-Linh-Workspace-linh-news/11dca120-bcdd-411a-95c8-bed78b3ede4b/tasks/b9l6r2a1o.output\")",
+      "Bash(grep -q \"^done$\" \"C:/Users/Linh/AppData/Local/Temp/claude/C--Users-Linh-Workspace-linh-news/11dca120-bcdd-411a-95c8-bed78b3ede4b/tasks/bt8y7qnwb.output\")",
+      "mcp__pdf-viewer__display_pdf",
+      "mcp__pdf-viewer__list_pdfs"
+    ]
+  }
+}

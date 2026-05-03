@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import logging
 import re
@@ -82,10 +81,6 @@ def run(slot: Slot, today: date | None = None) -> date:
             weather_strip_html=pdf_weather_strip,
             today=today,
         )
-    with _step("inject_lead_image"):
-        pdf_html = _inject_lead_image(pdf_html, today)
-    with _step("ensure_lead_image"):
-        pdf_html = _ensure_lead_image(pdf_html)
     # Snapshot the print HTML *exactly* as it goes into WeasyPrint, so we
     # can inspect missing-image and overflow problems after the fact.
     try:
@@ -168,6 +163,16 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
             )
             events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
 
+            seen: set[tuple[str, str]] = set()
+            deduped: list[dict] = []
+            for e in events:
+                key = (e.get("ical_uid") or "", e.get("start") or "")
+                if key[0] and key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(e)
+            events = deduped
+
         # Auto-mark important events and collect their uids for PDF calendar.
         for ev in events:
             cn = cal_names.get(ev.get("calendar_id"), "")
@@ -239,185 +244,6 @@ _HEAD_LEAK_RE = re.compile(
 # passages and inline citation references. We use our own SOURCES popup at
 # the end of each item, so these wrappers just clutter the body text.
 _CITE_RE = re.compile(r"<cite[^>]*>(.*?)</cite\s*>", re.IGNORECASE | re.DOTALL)
-
-
-_IMG_TAG_RE = re.compile(
-    r'(<img\b[^>]*\bsrc\s*=\s*)(["\'])([^"\']+)\2([^>]*>)',
-    re.IGNORECASE,
-)
-_UA = "Linh-News/1.0 (https://github.com/vtlinh/linh-news; vtlinh87+linhnews@gmail.com)"
-# Inline SVG fallback (data URI) so we never depend on the network. Renders
-# as a generic newspaper graphic in the lead column when no real image is
-# available.
-_FALLBACK_SVG = (
-    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 200'>"
-    "<rect width='320' height='200' fill='#f4f0e8'/>"
-    "<rect x='20' y='20' width='280' height='28' fill='#1a1a1a'/>"
-    "<text x='160' y='40' font-family='Times New Roman, serif' font-size='22' "
-    "font-weight='bold' fill='#f4f0e8' text-anchor='middle'>HEADLINE</text>"
-    "<rect x='20' y='62' width='280' height='4' fill='#1a1a1a'/>"
-    "<rect x='20' y='80' width='130' height='100' fill='#cdbfa9'/>"
-    "<line x1='160' y1='80' x2='300' y2='80' stroke='#444' stroke-width='1'/>"
-    "<line x1='160' y1='95' x2='300' y2='95' stroke='#888' stroke-width='1'/>"
-    "<line x1='160' y1='110' x2='300' y2='110' stroke='#888' stroke-width='1'/>"
-    "<line x1='160' y1='125' x2='280' y2='125' stroke='#888' stroke-width='1'/>"
-    "<line x1='160' y1='140' x2='300' y2='140' stroke='#888' stroke-width='1'/>"
-    "<line x1='160' y1='155' x2='270' y2='155' stroke='#888' stroke-width='1'/>"
-    "<line x1='160' y1='170' x2='300' y2='170' stroke='#888' stroke-width='1'/>"
-    "</svg>"
-)
-_FALLBACK_IMG_URL = (
-    "data:image/svg+xml;base64,"
-    + base64.b64encode(_FALLBACK_SVG.encode("utf-8")).decode("ascii")
-)
-
-
-def _url_alive(url: str, timeout: float = 8.0) -> bool:
-    """Verify a URL serves an image. Uses a tiny ranged GET instead of HEAD
-    because Wikimedia's thumbnail server frequently returns 404 on HEAD for
-    not-yet-cached thumbnails (HEAD is technically supported but stale-cache
-    behaviour differs from GET). One-byte range keeps bandwidth minimal."""
-    import urllib.error
-    import urllib.request
-
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": _UA, "Range": "bytes=0-0"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
-            ctype = (
-                r.headers.get_content_type()
-                if hasattr(r.headers, "get_content_type")
-                else r.headers.get("Content-Type", "")
-            )
-            # Range requests succeed with 206; servers that ignore Range
-            # return 200. Both are fine here.
-            ok_status = r.status in (200, 206)
-            return ok_status and (ctype or "").startswith("image/")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
-        log.info("URL preflight failed (%s): %s", e, url[:200])
-        return False
-
-
-_H2_RE = re.compile(r"<h2[^>]*>(.*?)</h2\s*>", re.IGNORECASE | re.DOTALL)
-_TAG_RE = re.compile(r"<[^>]+>")
-
-_LEAD_IMAGE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "image_url": {
-            "type": "string",
-            "description": (
-                "Direct URL to a real, publicly accessible image for the headline. "
-                "Prefer Wikimedia Commons thumbnails: "
-                "https://upload.wikimedia.org/wikipedia/commons/thumb/.../NNNpx-file.jpg. "
-                "Must be a working image URL — verify via web_search before returning."
-            ),
-        },
-        "alt_text": {"type": "string", "description": "Brief alt text for the image."},
-    },
-    "required": ["image_url", "alt_text"],
-    "additionalProperties": False,
-}
-
-
-def _extract_lead_headline(pdf_html: str) -> str | None:
-    """Return the text of the first <h2> in the PDF HTML (the lead story)."""
-    m = _H2_RE.search(pdf_html)
-    if not m:
-        return None
-    return _TAG_RE.sub("", m.group(1)).strip() or None
-
-
-def _inject_lead_image(pdf_html: str, today: date) -> str:
-    """Ask Claude (with web_search) for a real image matching the lead headline,
-    then replace/inject an <img> at the top of the PDF HTML."""
-    headline = _extract_lead_headline(pdf_html)
-    if not headline:
-        log.warning("Could not extract lead headline — skipping image lookup")
-        return pdf_html
-
-    log.info("Fetching lead image for headline: %r", headline[:120])
-    try:
-        result = claude_client.call_with_schema(
-            system=(
-                "You are finding a single real image for a newspaper PDF. "
-                "Use web_search to locate a publicly accessible, directly embeddable "
-                "image URL. Prefer Wikimedia Commons thumbnails. "
-                "Never invent URLs."
-            ),
-            user=(
-                f"Date: {today.isoformat()}\n"
-                f"Lead headline: {headline}\n\n"
-                "Search for the most appropriate real image for this story. "
-                "Return a working direct image URL (not a page URL, not a search URL). "
-                "Verify the URL is reachable via web_search before calling return_image."
-            ),
-            schema=_LEAD_IMAGE_SCHEMA,
-            schema_name="return_image",
-            schema_description="Return the verified image URL for the lead story.",
-            extra_tools=[claude_client.WEB_SEARCH_TOOL],
-            max_tokens=4000,
-            model="claude-haiku-4-5-20251001",
-        )
-    except Exception as e:  # noqa: BLE001
-        log.warning("Lead-image lookup failed: %s", e)
-        return pdf_html
-
-    image_url = (result.get("image_url") or "").strip()
-    alt_text = (result.get("alt_text") or headline[:80]).strip()
-
-    if not image_url:
-        log.warning("Claude returned no image_url for headline %r", headline[:80])
-        return pdf_html
-
-    log.info("Lead image URL: %s", image_url)
-
-    img_tag = (
-        f'<img src="{image_url}" alt="{alt_text}" '
-        f'style="width:100%; max-height:1.6in; object-fit:cover; margin:0 0 4pt;">'
-    )
-    # Replace any existing <img> tag(s) that appear before the first <h2>,
-    # then inject our verified image immediately before the lead headline.
-    before_h2 = _H2_RE.split(pdf_html)[0]
-    stripped = _IMG_TAG_RE.sub("", before_h2)  # remove old lead images
-    return stripped + img_tag + pdf_html[len(before_h2):]
-
-
-def _ensure_lead_image(pdf_html: str) -> str:
-    """Validate every <img src=...> in the print HTML and replace any that
-    don't load with a stable fallback. If Claude omitted images entirely,
-    inject the fallback at the very top of the document so the PDF still
-    leads with an image as required."""
-    found_any = False
-    bad_urls: list[str] = []
-
-    def _replace(m: re.Match[str]) -> str:
-        nonlocal found_any
-        found_any = True
-        url = m.group(3)
-        if _url_alive(url):
-            return m.group(0)
-        bad_urls.append(url)
-        return f'{m.group(1)}{m.group(2)}{_FALLBACK_IMG_URL}{m.group(2)}{m.group(4)}'
-
-    rewritten = _IMG_TAG_RE.sub(_replace, pdf_html)
-    if bad_urls:
-        log.warning(
-            "Lead-image URL(s) failed preflight, swapping in fallback: %s",
-            ", ".join(bad_urls),
-        )
-    if not found_any:
-        log.warning(
-            "Claude omitted the lead-story <img> entirely — injecting fallback image."
-        )
-        injection = (
-            f'<img src="{_FALLBACK_IMG_URL}" alt="" '
-            f'style="width:100%; max-height:1.6in; object-fit:cover; margin:0 0 4pt;">'
-        )
-        rewritten = injection + rewritten
-    return rewritten
 
 
 def _strip_document_wrapper(html: str) -> str:

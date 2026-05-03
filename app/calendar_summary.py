@@ -577,45 +577,72 @@ def build_dorchester_event_list(
 
 
 def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]) -> str:
-    """Format a compact calendar block for the PDF — no LLM.
+    """Format the calendar block for the PDF rail — no LLM.
 
-    Includes timed events for today and tomorrow. All-day events are included
-    only if their ical_uid is in ``important_uids`` or they match the
-    auto-important rule (the caller populates ``important_uids`` accordingly).
+    Always includes today and tomorrow. Then extends out to 7 days for any
+    timed event, and out to 30 days for events flagged as important
+    (``important_uids``). All-day non-important events outside today/tomorrow
+    are filtered out so the block stays focused on actionable items.
     """
-    tomorrow = today + timedelta(days=1)
-    target_days = {today.isoformat(), tomorrow.isoformat()}
+    week_horizon = today + timedelta(days=7)
+    month_horizon = today + timedelta(days=30)
 
     day_groups: dict[str, list[dict]] = defaultdict(list)
     for ev in events:
         start = ev.get("start", "")
         day_str = start[:10]
-        if day_str not in target_days:
+        if not day_str:
+            continue
+        try:
+            d = date.fromisoformat(day_str)
+        except ValueError:
+            continue
+        if d < today or d > month_horizon:
             continue
         is_timed = "T" in start
         is_important = ev.get("ical_uid", "") in important_uids
-        if not is_timed and not is_important:
-            continue
+        # Within the next 7 days: include all timed events + any important.
+        # Past 7 days, up to 30: only important events surface.
+        if d <= week_horizon:
+            if not (is_timed or is_important):
+                continue
+        else:
+            if not is_important:
+                continue
         day_groups[day_str].append(ev)
 
+    # Skip days with no events entirely — only render headers we'll fill.
     if not day_groups:
         return ""
 
     label_style = (
-        "font-size:7pt;letter-spacing:.05em;text-transform:uppercase;"
-        "border-bottom:0.5pt solid #000;margin:0 0 2pt;padding-bottom:1pt"
+        "font-size:10pt;letter-spacing:.05em;text-transform:uppercase;"
+        "border-bottom:0.5pt solid #000;margin:0 0 2pt;padding-bottom:1pt;"
+        "font-weight:bold"
     )
-    row_style = "margin:0 0 1pt"
-    parts: list[str] = []
+    row_style = "margin:0 0 1pt;font-size:9pt"
+    parts: list[str] = [
+        f'<div style="{label_style}">Calendar</div>'
+    ]
 
     for day_str in sorted(day_groups):
         d = date.fromisoformat(day_str)
-        label = "Today" if d == today else "Tomorrow"
-        parts.append(
-            f'<div style="{label_style}">'
-            f"{label} — {d.strftime('%b')} {d.day}</div>"
+        if d == today:
+            label = "Today"
+        elif d == today + timedelta(days=1):
+            label = "Tomorrow"
+        else:
+            label = d.strftime("%A")  # full day name, e.g. "Friday"
+        sub_label_style = (
+            "font-size:9pt;letter-spacing:.05em;text-transform:uppercase;"
+            "margin:4pt 0 1pt;font-weight:bold;color:#000"
         )
-        for ev in sorted(day_groups[day_str], key=lambda x: x.get("start", "")):
+        parts.append(
+            f'<div style="{sub_label_style}">'
+            f"<strong>{label} — {d.strftime('%b')} {d.day}</strong></div>"
+        )
+        evs = sorted(day_groups[day_str], key=lambda x: x.get("start", ""))
+        for ev in evs:
             start = ev.get("start", "")
             title = ev.get("summary", "(untitled)")
             if "T" in start:

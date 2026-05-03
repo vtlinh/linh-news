@@ -1,0 +1,82 @@
+"""Rebuild today's PDF from the stored Edition.html — no LLM call.
+
+Reads Edition.html for ``today``, fetches calendar (Google) and movie cache
+(DB), runs the deterministic ``pdf_html_builder``, renders via WeasyPrint,
+and updates Edition.pdf + Edition.pdf_html in place.
+"""
+from __future__ import annotations
+
+import logging
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app import calendar_oauth, calendar_summary, overlays, pdf, pdf_html_builder, prefs
+from app import movies as movies_mod
+from app.db import Edition, session_factory
+from app.settings import local_today
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+log = logging.getLogger("rebuild_pdf")
+
+
+def main(target: date) -> int:
+    Maker = session_factory()
+    with Maker() as s:
+        e = s.get(Edition, target)
+        if not e or not e.html:
+            log.error("No edition html for %s", target)
+            return 1
+        log.info("Loaded edition html for %s (%d bytes)", target, len(e.html))
+
+        # Calendar (Google API, no LLM)
+        hidden_cals = overlays.hidden_calendar_ids(s)
+        suppressed = overlays.suppressed_event_uids(s)
+        important = overlays.important_events_from(s, target)
+        important_uids = {x["ical_uid"] for x in important if x.get("ical_uid")}
+        cals = calendar_oauth.list_calendars(s)
+        hidden_ids = {c["id"] for c in hidden_cals}
+        active = [c["id"] for c in cals if c["id"] not in hidden_ids]
+        cal_names = {c["id"]: c["name"] for c in cals}
+        events = calendar_oauth.fetch_events(
+            s, active, target, target + timedelta(days=30), calendar_names=cal_names,
+        )
+        events = [ev for ev in events if ev.get("ical_uid") not in suppressed]
+        for ev in events:
+            cn = cal_names.get(ev.get("calendar_id"), "")
+            if calendar_oauth.is_auto_important(cn, ev.get("summary", "")):
+                important_uids.add(ev.get("ical_uid", ""))
+        pdf_cal = calendar_summary.build_pdf_calendar(events, target, important_uids)
+        log.info("Calendar block: %d bytes", len(pdf_cal))
+
+        # Movies (cached, no LLM)
+        cached = movies_mod.get_movies()
+        hidden = set(overlays.active_hidden_movie_titles(s, target))
+        allowed = set(prefs.get_allowed_ratings(target))
+        pdf_mov = movies_mod.render_pdf_html(
+            cached, target, hidden_titles=hidden, allowed_ratings=allowed,
+        )
+        log.info("Movies block: %d bytes", len(pdf_mov))
+
+        pdf_html = pdf_html_builder.build(
+            e.html, pdf_calendar_html=pdf_cal, pdf_movies_html=pdf_mov, today=target,
+        )
+        log.info("Print HTML: %d bytes", len(pdf_html))
+
+        pdf_bytes = pdf.html_to_pdf(pdf_html)
+        log.info("PDF rendered: %d bytes (header=%r)", len(pdf_bytes), pdf_bytes[:8])
+
+        e.pdf = pdf_bytes
+        e.pdf_html = pdf_html
+        s.commit()
+        log.info("Upserted edition %s", target)
+    return 0
+
+
+if __name__ == "__main__":
+    target = (
+        date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else local_today()
+    )
+    sys.exit(main(target))

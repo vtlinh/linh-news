@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from datetime import date, datetime
 
@@ -8,6 +9,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings import get_settings
+
+log = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -176,8 +179,65 @@ _SessionLocal: sessionmaker[Session] | None = None
 def _init_engine() -> None:
     global _engine, _SessionLocal
     if _engine is None:
-        _engine = create_engine(get_settings().database_url, pool_pre_ping=True, future=True)
+        url = get_settings().database_url
+        # Postgres connections through the local Fly proxy stall on an
+        # optional libpq handshake step for ~130s on cold connect; a short
+        # connect_timeout cleanly skips that step and the connection works
+        # normally afterwards. libpq enforces a 2-second minimum, so 2 is
+        # the lowest useful value. Only applies to the postgres dialect —
+        # sqlite used in tests doesn't accept connect_timeout.
+        connect_args: dict = {}
+        is_pg = url.startswith(("postgres://", "postgresql://", "postgresql+"))
+        if is_pg:
+            connect_args["connect_timeout"] = 2
+        _engine = create_engine(
+            url, pool_pre_ping=True, future=True, connect_args=connect_args,
+        )
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
+        if is_pg:
+            _attach_connect_backoff(_engine)
+
+
+_BACKOFF_BUDGET_SECONDS = 20.0
+
+
+def _attach_connect_backoff(engine: Engine) -> None:
+    """Retry psycopg connect failures with exponential backoff (1s, 2s, 4s,
+    8s, …) up to ~20s of cumulative wait, then re-raise.
+
+    The short ``connect_timeout`` is a workaround for a libpq handshake
+    stall — under normal conditions it returns a working connection. But
+    if the proxy is genuinely down, psycopg raises OperationalError
+    immediately. Without backoff, the first request after a brief proxy
+    hiccup would surface a hard failure to the user; with backoff we
+    ride out short outages while still failing fast on real outages."""
+    import time as _time
+
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "do_connect")
+    def _retry(dialect, conn_rec, cargs, cparams):  # noqa: ARG001
+        delay = 1.0
+        elapsed = 0.0
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return dialect.connect(*cargs, **cparams)
+            except Exception as e:  # noqa: BLE001 — DBAPI exception type varies
+                if elapsed + delay > _BACKOFF_BUDGET_SECONDS:
+                    log.error(
+                        "DB connect failed after %d attempts (%.1fs total): %s",
+                        attempt, elapsed, e,
+                    )
+                    raise
+                log.warning(
+                    "DB connect attempt %d failed (%s) — retrying in %.1fs",
+                    attempt, e, delay,
+                )
+                _time.sleep(delay)
+                elapsed += delay
+                delay = min(delay * 2, 8.0)
 
 
 def engine() -> Engine:

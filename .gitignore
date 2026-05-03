@@ -37,6 +37,9 @@ client_secret*.json
 # Claude scheduled-task locks
 .claude/scheduled_tasks.lock
 
+# Claude Code per-user local settings
+.claude/settings.local.json
+
 # Editors / OS
 .vscode/
 .idea/

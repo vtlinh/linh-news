@@ -183,6 +183,9 @@
       transform: rotate(-90deg);
     }
     main section.sec-collapsed > *:not(h2) { display: none !important; }
+    /* Sibling story sections belonging to a collapsed category header.
+       JS tags them with this class on toggle (see viewer.html). */
+    main section.sec-collapsed-follower { display: none !important; }
 
     /* Hover-revealed Sources popup OR direct anchor when there is exactly
        one source. Both forms use the same `.sources` class so they look

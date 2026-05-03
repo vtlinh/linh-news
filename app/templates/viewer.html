@@ -135,13 +135,23 @@
   // chevron that collapses/expands its body. Weather is a <div>, not a
   // <section>, so it is naturally excluded. State is preserved in
   // sessionStorage so navigating back doesn't re-collapse everything.
+  //
+  // Flow structure note: the LLM emits a flat list of <section> siblings —
+  // category-header sections contain just the <h2>, and the stories that
+  // belong to that category live in the *next* sibling sections (each with
+  // an <h3>, no <h2>) up until the next <h2> section. So toggling the
+  // category h2 must also hide those follower sections, not just the
+  // category section's own (empty) body. Self-contained sections in the
+  // rail (stocks / calendar / movies) have their content as direct
+  // children — for those the followers list is naturally empty and the
+  // existing `> *:not(h2)` rule does the work.
   function initCollapsible() {
     if (window.innerWidth > 768) return;
     const STORE_KEY = 'sec-collapsed-' + editionDate;
     let saved;
     try { saved = JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null'); } catch { saved = null; }
 
-    document.querySelectorAll('main section').forEach((sec, i) => {
+    document.querySelectorAll('main section').forEach((sec) => {
       const h2 = sec.querySelector(':scope > h2');
       if (!h2) return;
 
@@ -152,12 +162,32 @@
       chev.textContent = '›';
       h2.appendChild(chev);
 
+      // Collect sibling story sections that belong to this category — i.e.
+      // contiguous following <section> siblings without a direct-child h2.
+      const followers = [];
+      let cursor = sec.nextElementSibling;
+      while (
+        cursor && cursor.tagName === 'SECTION'
+        && !cursor.querySelector(':scope > h2')
+      ) {
+        followers.push(cursor);
+        cursor = cursor.nextElementSibling;
+      }
+
+      const setFollowerState = (collapsed) => {
+        followers.forEach(f => f.classList.toggle('sec-collapsed-follower', collapsed));
+      };
+
       const key = h2.textContent.trim().slice(0, 40);
       const startCollapsed = saved ? !!saved[key] : false; // default: all expanded
-      if (startCollapsed) sec.classList.add('sec-collapsed');
+      if (startCollapsed) {
+        sec.classList.add('sec-collapsed');
+        setFollowerState(true);
+      }
 
       h2.addEventListener('click', () => {
         const collapsed = sec.classList.toggle('sec-collapsed');
+        setFollowerState(collapsed);
         try {
           const state = JSON.parse(sessionStorage.getItem(STORE_KEY) || '{}');
           state[key] = collapsed;

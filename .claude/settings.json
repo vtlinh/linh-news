@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push*)",
+            "command": "uv run ruff check --fix --exit-non-zero-on-fix",
+            "statusMessage": "ruff --fix before push",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

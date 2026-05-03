@@ -23,7 +23,33 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
+      # Dedup: skip if Claude already has an open CI-fix PR. Branch names are
+      # keyed off the failing commit SHA so the same root cause across reruns
+      # collides on the same branch instead of spawning a new one.
+      - name: Skip if a CI-fix PR is already open
+        id: dedup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          short_sha="${HEAD_SHA:0:12}"
+          branch="claude/ci-fix-${short_sha}"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+
+          # Any open PR on this exact branch?
+          existing_same=$(gh pr list --state open --head "$branch" --json number --jq 'length')
+          # Any open PR from a prior claude/ci-fix-* branch (different SHA, still pending)?
+          existing_any=$(gh pr list --state open --search 'head:claude/ci-fix- author:app/github-actions' --json number --jq 'length' || echo 0)
+
+          if [ "$existing_same" != "0" ] || [ "$existing_any" != "0" ]; then
+            echo "An open CI-fix PR already exists; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download failing CI logs
+        if: steps.dedup.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.event.workflow_run.id }}
@@ -35,6 +61,7 @@ jobs:
           echo "FAILED_LOG_PATH=/tmp/ci-logs/failed.tail.log" >> "$GITHUB_ENV"
 
       - name: Run Claude to propose a fix
+        if: steps.dedup.outputs.skip == 'false'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -51,9 +78,11 @@ jobs:
             2. Read CLAUDE.md and orient yourself in the repo.
             3. Make the smallest correct fix. Do not refactor unrelated code.
             4. Run `uv sync --frozen`, then `uv run ruff check` and `uv run pytest -q` locally to confirm the fix.
-            5. Create a new branch `claude/ci-fix-${{ github.event.workflow_run.id }}`,
-               commit, push, and open a PR against main titled
-               "CI fix: <one-line summary>".
+            5. Create branch `${{ steps.dedup.outputs.branch }}` (or reuse
+               it if it already exists on origin), commit, push, and open a
+               PR against main titled "CI fix: <one-line summary>".
+               If a PR is already open for this branch, push the additional
+               commit to it instead of opening a new one.
             6. In the PR body: explain the root cause, the fix, and any risks.
                Link back to the failing run.
 

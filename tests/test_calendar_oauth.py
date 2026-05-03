@@ -19,10 +19,13 @@ def _fake_service_with_events(events_by_cal: dict[str, list[dict]]):
     return svc
 
 
-def test_fetch_events_drops_past_and_cancelled(monkeypatch, db_session):
+def test_fetch_events_drops_cancelled_keeps_past(monkeypatch, db_session):
+    # fetch_events no longer filters on "already ended" — earlier-today and
+    # past-but-in-window events stay so a refresh can't wipe them from
+    # per-day persistence. Cancelled events are still dropped.
     now = datetime(2026, 4, 30, 12, 0, tzinfo=UTC)
     items = [
-        {  # already ended -> drop
+        {  # already ended -> still kept (in-window)
             "summary": "Old",
             "start": {"dateTime": "2026-04-28T10:00:00+00:00"},
             "end": {"dateTime": "2026-04-28T11:00:00+00:00"},
@@ -44,9 +47,9 @@ def test_fetch_events_drops_past_and_cancelled(monkeypatch, db_session):
         lambda s: _fake_service_with_events({"primary": items}),
     )
     out = calendar_oauth.fetch_events(
-        db_session, ["primary"], now.date(), now.date().replace(day=15), now=now,
+        db_session, ["primary"], now.date(), now.date().replace(day=15),
     )
-    assert [e["summary"] for e in out] == ["Future"]
+    assert sorted(e["summary"] for e in out) == ["Future", "Old"]
 
 
 def test_current_kid_grade_advances_in_august():

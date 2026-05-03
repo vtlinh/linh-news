@@ -30,7 +30,11 @@ _CAL_PLACEHOLDER = "<!-- CALENDAR_PLACEHOLDER -->"
 _MOV_PLACEHOLDER = "<!-- MOVIES_PLACEHOLDER -->"
 _WEATHER_PLACEHOLDER = "<!-- WEATHER_PLACEHOLDER -->"
 
-_INTERACTIVE_TAGS = ("button", "script", "form", "input", "select", "textarea", "img")
+# Note: ``img`` is intentionally NOT stripped — the server-rendered movies
+# block injects backdrops via <img class="movie-backdrop">, and the LLM's
+# body HTML doesn't generate <img> tags (news.pr forbids embedded images
+# in the flow).
+_INTERACTIVE_TAGS = ("button", "script", "form", "input", "select", "textarea")
 _STRIP_CLASSES = (
     # NOTE: do NOT strip "tooltip" — the visible ticker text on stock rows
     # lives directly inside <span class="tooltip">; only the inner
@@ -312,11 +316,11 @@ def build(
                  border:0.5pt solid #000; padding:8pt 20pt;
                  text-align:center;
                  font-style:italic;
-                 font-family:"Times New Roman", Georgia, serif; }}
+                 font-family:"Times New Roman", Georgia, serif, "Noto Color Emoji"; }}
     /* Weather block: padded, narrow enough to wrap into 2-3 lines on the
        right of the masthead. No outline. */
     .masthead .weather-corner {{ text-align:center;
-                 font-family:"Times New Roman", Georgia, serif;
+                 font-family:"Times New Roman", Georgia, serif, "Noto Color Emoji";
                  max-width:2.6in; min-width:1.6in;
                  padding:6pt 8pt;
                  line-height:1.3; }}
@@ -326,7 +330,7 @@ def build(
                  font-size:10pt; margin:0 0 4pt; text-align:center; }}
     .masthead .title {{ flex:1 1 auto; text-align:center; margin:0;
                  font-family:"{_MASTHEAD_FONT_FAMILY}", "Times New Roman",
-                              Georgia, serif;
+                              Georgia, serif, "Noto Color Emoji";
                  font-weight:normal; letter-spacing:0;
                  white-space:nowrap; overflow:visible; }}
     .dateline {{ display:flex; justify-content:space-between; align-items:baseline;

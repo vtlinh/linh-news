@@ -225,6 +225,28 @@ def test_builder_section_separators_distinguish_stories_and_groups():
     assert "break-before:avoid" in out
 
 
+def test_builder_preserves_movie_backdrops():
+    """Server-rendered movie backdrops use ``<img class="movie-backdrop">``;
+    they must survive the interactive-strip pass that drops buttons / forms /
+    scripts."""
+    body = (
+        '<div class="flow"><section><h2>x</h2><p>x</p></section></div>'
+        '<aside class="rail"><!-- MOVIES_PLACEHOLDER --></aside>'
+    )
+    movies_html = (
+        '<div>Movies</div>'
+        '<div><img class="movie-backdrop" '
+        'src="https://image.tmdb.org/t/p/w780/abc.jpg" alt="">'
+        '<strong>Demo</strong></div>'
+    )
+    out = pdf_html_builder.build(
+        body, pdf_calendar_html="", pdf_movies_html=movies_html,
+        today=date(2026, 5, 2),
+    )
+    assert 'class="movie-backdrop"' in out
+    assert "image.tmdb.org/t/p/w780/abc.jpg" in out
+
+
 def test_column_count_scales_with_word_count():
     base_section = '<section><h2>X</h2><p>{}</p></section>'
     short = '<div class="flow">' + base_section.format("word " * 100) + "</div>"

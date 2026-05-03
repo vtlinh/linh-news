@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import html
 import logging
+import random
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
@@ -64,6 +65,22 @@ _DISCOVER_PAST = timedelta(weeks=3)
 _DISCOVER_FUTURE = timedelta(days=365)
 
 _VALID_TRAILER_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[\w-]{8,}")
+_VALID_BACKDROP_RE = re.compile(r"^https://image\.tmdb\.org/t/p/[\w]+/[\w./-]+$")
+
+
+def _pick_backdrop(m: dict, *, rng: random.Random | None = None) -> str | None:
+    """Return one backdrop URL chosen uniformly at random, or ``None`` when
+    the movie has no usable backdrops. Validates the URL shape so a
+    malformed cache entry can't slip an arbitrary string into the rendered
+    page."""
+    raw = m.get("backdrops") or []
+    valid = [
+        u for u in raw
+        if isinstance(u, str) and _VALID_BACKDROP_RE.match(u)
+    ]
+    if not valid:
+        return None
+    return (rng or random).choice(valid)
 
 
 def fetch_year_movie_list() -> list[dict]:
@@ -133,6 +150,7 @@ def fetch_year_movie_list() -> list[dict]:
             "summary": d.get("summary") or "",
             "trailers": d.get("trailers") or [],
             "poster_url": d.get("poster_url"),
+            "backdrops": d.get("backdrops") or [],
             "fetched_at": now,
         })
 
@@ -327,7 +345,9 @@ def _trailer_button_html(trailers: list[str]) -> str:
     return "".join(parts)
 
 
-def _render_card_html(m: dict, today: date) -> str:
+def _render_card_html(
+    m: dict, today: date, *, rng: random.Random | None = None,
+) -> str:
     title = (m.get("title") or "").strip()
     rd = _parse_release(m)
     if not title or rd is None:
@@ -341,10 +361,17 @@ def _render_card_html(m: dict, today: date) -> str:
     title_esc = html.escape(title)
     summary_html = f'<p>{html.escape(summary)}</p>' if summary else ""
     trailer_html = _trailer_button_html(m.get("trailers") or [])
+    backdrop = _pick_backdrop(m, rng=rng)
+    backdrop_html = (
+        f'<img class="movie-backdrop" src="{html.escape(backdrop)}" '
+        f'alt="" loading="lazy">'
+        if backdrop else ""
+    )
     return (
         '<article class="movie-card">'
         f'<button class="hide-movie" data-title="{title_esc}" '
         f'aria-label="Hide {title_esc}">×</button>'
+        f'{backdrop_html}'
         f'<div class="movie-title">{title_esc}</div>'
         f'<div class="movie-subtitle">{html.escape(sub)}</div>'
         f'{summary_html}{trailer_html}'
@@ -416,9 +443,17 @@ def render_pdf_html(
         "border-bottom:0.5pt solid #000;margin:0 0 3pt;padding-bottom:1pt;"
         "font-weight:bold"
     )
-    row_style = "margin:0 0 6pt;font-size:10pt;line-height:1.25"
+    row_style = (
+        "margin:0 0 8pt;font-size:10pt;line-height:1.25;break-inside:avoid"
+    )
     sub_style = "font-size:9pt;color:#555"
     desc_style = "font-size:12pt;color:#222;margin-top:2pt;line-height:1.3"
+    # Backdrop sits flush with the row above the title. Rail width is 2.4in;
+    # at 16:9 the backdrop is ~1.35in tall — compact enough that 5–8 movies
+    # still fit comfortably in the rail.
+    backdrop_style = (
+        "display:block;width:100%;height:auto;margin:0 0 3pt"
+    )
     parts = [f'<div style="{label_style}">Movies</div>']
     for m in items:
         title = (m.get("title") or "").strip()
@@ -435,8 +470,15 @@ def render_pdf_html(
             f'<div style="{desc_style}">{html.escape(summary)}</div>'
             if summary else ""
         )
+        backdrop = _pick_backdrop(m)
+        backdrop_html = (
+            f'<img class="movie-backdrop" src="{html.escape(backdrop)}" '
+            f'alt="" style="{backdrop_style}">'
+            if backdrop else ""
+        )
         parts.append(
-            f'<div style="{row_style}"><strong>{html.escape(title)}</strong> '
+            f'<div style="{row_style}">{backdrop_html}'
+            f'<strong>{html.escape(title)}</strong> '
             f'<span style="{sub_style}">— {html.escape(sub)}</span>'
             f'{desc_html}</div>'
         )

@@ -73,6 +73,27 @@ def test_pdf_streams_when_present(client, login_as, db_session):
     r = client.get("/pdf/2026-04-30")
     assert r.status_code == 200
     assert r.content.startswith(b"%PDF")
+    # Download filename includes a 10-hex-char content-hash suffix so each
+    # newly generated edition gets a unique name.
+    import hashlib
+    expected = hashlib.sha256(r.content).hexdigest()[:10]
+    cd = r.headers["content-disposition"]
+    assert f"linh-times-2026-04-30-{expected}.pdf" in cd
+
+
+def test_pdf_filename_changes_when_content_changes(client, login_as, db_session):
+    """Two editions with different bytes must produce different filenames."""
+    _seed_edition(db_session, date(2026, 4, 30))
+    login_as("friend@example.com")
+    r1 = client.get("/pdf/2026-04-30")
+    fn1 = r1.headers["content-disposition"]
+    # Mutate the stored bytes and re-download.
+    edition = db_session.get(Edition, date(2026, 4, 30))
+    edition.pdf = b"%PDF-1.4 different-bytes"
+    db_session.commit()
+    r2 = client.get("/pdf/2026-04-30")
+    fn2 = r2.headers["content-disposition"]
+    assert fn1 != fn2
 
 
 def test_hide_movie_admin_only(client, login_as, db_session):

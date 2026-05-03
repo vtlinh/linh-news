@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 import subprocess
@@ -219,6 +220,16 @@ def view_date(
     return _render_viewer(request, _parse_date(day), s, email)
 
 
+def _pdf_filename(day: date | str, pdf_bytes: bytes) -> str:
+    """Build the user-facing PDF download name with a 10-char content-hash
+    suffix. Each newly generated edition gets a distinct filename even when
+    a same-day refresh overwrites the previous version, which makes saved
+    copies easy to tell apart and defeats stale browser caches.
+    """
+    digest = hashlib.sha256(pdf_bytes).hexdigest()[:10]
+    return f"linh-times-{day}-{digest}.pdf"
+
+
 def _pdf_token_valid(request: Request, token: str | None) -> bool:
     """True iff the request presents a valid PDF_LATEST_TOKEN, either as
     ``?token=…`` or as ``Authorization: Bearer …``. An unset/empty
@@ -257,7 +268,7 @@ def pdf_latest(
     ).scalar_one_or_none()
     if not edition:
         raise HTTPException(404, "No editions available yet")
-    filename = f"linh-times-{edition.date}.pdf"
+    filename = _pdf_filename(edition.date, edition.pdf)
     return Response(
         edition.pdf,
         media_type="application/pdf",
@@ -281,10 +292,11 @@ def view_pdf(
     ).scalar_one_or_none()
     if not edition:
         raise HTTPException(404, "No edition for that date")
+    filename = _pdf_filename(day, edition.pdf)
     return Response(
         edition.pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="linh-times-{day}.pdf"'},
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 

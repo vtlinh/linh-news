@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import logging
 import re
 import sys
@@ -103,7 +104,11 @@ def run(slot: Slot, today: date | None = None) -> date:
         snap_dir = Path(__file__).resolve().parent.parent / "logs"
         snap_dir.mkdir(exist_ok=True)
         ts = int(datetime.now(UTC).timestamp())
-        pdf_snap = snap_dir / f"pdf-{slot}-{ts}.pdf"
+        # Same 10-char content hash that the download endpoint appends to
+        # the user-facing filename, so a saved copy can be matched back to
+        # its on-disk snapshot.
+        digest = hashlib.sha256(pdf_bytes).hexdigest()[:10]
+        pdf_snap = snap_dir / f"pdf-{slot}-{ts}-{digest}.pdf"
         pdf_snap.write_bytes(pdf_bytes)
         log.info("Saved generated PDF: %s (%d bytes)", pdf_snap, len(pdf_bytes))
     except Exception:

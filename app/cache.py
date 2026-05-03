@@ -21,8 +21,12 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from app.settings import get_settings
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
 
@@ -41,18 +45,39 @@ _REFRESH_STALE_AFTER = 12 * 60  # seconds (12 minutes)
 
 
 class _SqlBackend:
-    """Persistent cache backed by the project's SQL database (kv_cache table)."""
+    """Persistent cache backed by the project's SQL database (kv_cache table).
 
-    def get(self, key: str) -> str | None:
+    ``get``/``set`` accept an optional caller-owned ``Session``. When
+    provided, the backend reuses that session's connection instead of
+    checking out another one from the pool — important when a fresh
+    connection to the database is expensive (e.g. the local Fly proxy
+    can take ~130s to establish a new TCP/SSL session). When omitted,
+    the backend opens its own short-lived session as before.
+    """
+
+    def get(self, key: str, *, session: Session | None = None) -> str | None:
         from app.db import KvCache, session_factory
 
+        if session is not None:
+            row = session.get(KvCache, key)
+            return row.value if row else None
         with session_factory()() as s:
             row = s.get(KvCache, key)
             return row.value if row else None
 
-    def set(self, key: str, value: str) -> None:
+    def set(
+        self, key: str, value: str, *, session: Session | None = None,
+    ) -> None:
         from app.db import KvCache, session_factory
 
+        if session is not None:
+            row = session.get(KvCache, key)
+            if row:
+                row.value = value
+            else:
+                session.add(KvCache(key=key, value=value))
+            session.flush()
+            return
         with session_factory()() as s:
             row = s.get(KvCache, key)
             if row:
@@ -68,10 +93,12 @@ class _RedisBackend:
 
         self._r = redis.Redis.from_url(url, decode_responses=True)
 
-    def get(self, key: str) -> str | None:
+    def get(self, key: str, *, session: Session | None = None) -> str | None:
         return self._r.get(key)
 
-    def set(self, key: str, value: str) -> None:
+    def set(
+        self, key: str, value: str, *, session: Session | None = None,
+    ) -> None:
         self._r.set(key, value)
 
 

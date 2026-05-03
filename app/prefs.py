@@ -16,8 +16,12 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
+from typing import TYPE_CHECKING
 
 from app import cache
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
 
@@ -30,12 +34,18 @@ _VALID_RATINGS = {"G", "PG", "PG-13", "R", "NC-17", "Unrated"}
 _RATINGS_KEY = "linh_news:allowed_ratings"
 
 
-def get_allowed_ratings(today: date | None = None) -> list[str]:
+def get_allowed_ratings(
+    today: date | None = None, *, session: Session | None = None,
+) -> list[str]:
     """The persisted MPAA-rating selection (set via the admin Movies page).
 
     Falls back to :func:`app.calendar_oauth.allowed_movie_ratings` so a
-    fresh deploy or unset preference behaves the same as before."""
-    raw = cache._get_backend().get(_RATINGS_KEY)  # noqa: SLF001
+    fresh deploy or unset preference behaves the same as before. Pass
+    ``session`` to reuse an already-open SQLAlchemy session for the
+    underlying KV read — useful when opening a fresh DB connection is
+    expensive (e.g. the Fly Postgres tunnel pays a ~130s cold-establish
+    cost per new connection)."""
+    raw = cache._get_backend().get(_RATINGS_KEY, session=session)  # noqa: SLF001
     if raw:
         try:
             data = json.loads(raw)

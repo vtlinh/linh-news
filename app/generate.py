@@ -135,7 +135,8 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     # generation cycle and render its PDF block server-side. The HTML page
     # block is rendered at view-time (see ``main._inject_movies``) so admin
     # hides apply immediately without waiting for the next refresh.
-    allowed_ratings = set(prefs.get_allowed_ratings(today))
+    with _step("prefs.get_allowed_ratings"):
+        allowed_ratings = set(prefs.get_allowed_ratings(today, session=s))
     hidden_set = set(hidden_movies)
     pdf_movies_html = ""
     try:

@@ -63,6 +63,10 @@ class Movie(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     trailers: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     poster_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Up to N landscape (16:9) still URLs from TMDB, highest-rated first.
+    # The daily edition picks one at random per generation to display above
+    # the movie title in both the HTML page and the PDF rail.
+    backdrops: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
     )
@@ -77,6 +81,7 @@ class Movie(Base):
             "summary": self.summary or "",
             "trailers": list(self.trailers or []),
             "poster_url": self.poster_url,
+            "backdrops": list(self.backdrops or []),
         }
 
 

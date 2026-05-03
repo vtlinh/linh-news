@@ -37,6 +37,10 @@ log = logging.getLogger(__name__)
 
 _BASE = "https://api.themoviedb.org/3"
 _IMG_BASE = "https://image.tmdb.org/t/p/w500"
+# Backdrop (landscape, 16:9) sizes available from TMDB are w300, w780, w1280,
+# original. w780 is a good fit for the daily edition's movie cards (wide
+# enough to look crisp on retina, small enough to keep PDF render cheap).
+_BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
 _YT_WATCH = "https://www.youtube.com/watch?v="
 
 # US theatrical release types per TMDB:
@@ -217,7 +221,10 @@ def fetch_movie_detail(tmdb_id: int, client: httpx.Client | None = None) -> dict
             f"{_BASE}/movie/{tmdb_id}",
             params={
                 "api_key": key,
-                "append_to_response": "videos,release_dates",
+                "append_to_response": "videos,release_dates,images",
+                # Restrict images to language-agnostic (no embedded text) so
+                # we don't end up showing a foreign-title backdrop card.
+                "include_image_language": "null,en",
             },
         )
         if r.status_code != 200:
@@ -245,6 +252,7 @@ def _normalize_detail(body: dict) -> dict:
     release_date = us_theatrical_date or fallback_date
 
     trailers = _youtube_trailers(body.get("videos") or {})
+    backdrops = _backdrop_urls(body.get("images") or {})
 
     return {
         "tmdb_id": int(body.get("id")),
@@ -254,7 +262,34 @@ def _normalize_detail(body: dict) -> dict:
         "release_date": release_date,
         "trailers": trailers,
         "poster_url": poster_url,
+        "backdrops": backdrops,
     }
+
+
+def _backdrop_urls(images_block: dict, *, max_count: int = 8) -> list[str]:
+    """Return up to ``max_count`` landscape backdrop URLs, highest-rated first.
+
+    TMDB's ``/movie/{id}/images`` (or ``append_to_response=images``) returns a
+    ``backdrops`` list with each entry's ``file_path``, ``vote_average`` and
+    ``aspect_ratio``. We sort by ``vote_average`` desc to favour the
+    community-curated "best" stills, drop near-square crops (some re-releases
+    sneak vertical posters into the backdrop bucket) and prefix the file_path
+    with the w780 CDN base.
+    """
+    items = images_block.get("backdrops") or []
+    cleaned = []
+    for it in items:
+        path = (it.get("file_path") or "").strip()
+        if not path:
+            continue
+        ar = float(it.get("aspect_ratio") or 0)
+        # Genuine 16:9 stills sit at ar≈1.78. Anything below 1.5 is
+        # almost certainly a misfiled portrait poster.
+        if ar and ar < 1.5:
+            continue
+        cleaned.append((float(it.get("vote_average") or 0), path))
+    cleaned.sort(key=lambda x: x[0], reverse=True)
+    return [_BACKDROP_BASE + p for _, p in cleaned[:max_count]]
 
 
 def _us_release_info(release_dates_block: dict) -> tuple[str | None, date | None]:

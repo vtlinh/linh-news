@@ -354,14 +354,19 @@ def html_to_pdf(html: str) -> bytes:
         h1_pt = min(base_pt * 12.0, 115.2)
         # 2560 × 1440 px portrait at 94.14 PPI ⇒ 15.296in × 27.193in.
         # Stays in portrait orientation (taller than wide).
+        # Append "Noto Color Emoji" (COLRv1) as the last fallback on every
+        # body/heading rule so emoji codepoints render in color via the
+        # Debian fonts-noto-color-emoji package installed in the image,
+        # rather than falling back to a monochrome glyph from DejaVu.
         return CSS(string=f"""
         @page {{ size: 15.296in 27.193in; margin: 0.4in; }}
-        html, body {{ font-family: "Times New Roman", Georgia, serif; }}
+        html, body {{ font-family: "Times New Roman", Georgia, serif,
+                                   "Noto Color Emoji"; }}
         body {{ font-size: {base_pt:.2f}pt !important; line-height: 1.15 !important; }}
         h1 {{ font-size: {h1_pt:.2f}pt !important; margin: 0 0 2pt !important;
               text-align: center; font-weight: normal;
               font-family: "Linh Times Masthead", "Times New Roman",
-                           Georgia, serif; }}
+                           Georgia, serif, "Noto Color Emoji"; }}
         h2 {{ font-size: {base_pt * 1.375:.2f}pt !important; margin: 4pt 0 2pt !important;
               font-weight: bold; }}
         h3, h4, h5, h6 {{ font-size: {base_pt * 1.125:.2f}pt !important;

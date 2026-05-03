@@ -14,6 +14,7 @@ def _make(
     *,
     summary: str = "Plot.",
     trailers: list[str] | None = None,
+    backdrops: list[str] | None = None,
 ) -> dict:
     return {
         "title": title,
@@ -22,6 +23,7 @@ def _make(
         "status": "in_theaters" if rd <= date(2026, 5, 1) else "upcoming",
         "summary": summary,
         "trailers": trailers or [],
+        "backdrops": backdrops or [],
     }
 
 
@@ -197,6 +199,7 @@ def _fake_detail(
     *, tmdb_id: int, title: str, rating: str, rd: date,
     summary: str = "Plot.", trailers: list[str] | None = None,
     poster_url: str | None = "https://image.tmdb.org/t/p/w500/x.jpg",
+    backdrops: list[str] | None = None,
 ) -> dict:
     return {
         "tmdb_id": tmdb_id,
@@ -206,6 +209,7 @@ def _fake_detail(
         "release_date": rd,
         "trailers": trailers or [],
         "poster_url": poster_url,
+        "backdrops": backdrops or [],
     }
 
 
@@ -356,6 +360,111 @@ def test_hidden_title_filtered_without_touching_table(db_session):
     assert in_theaters == [] and coming_soon == []
     # Row still exists in the table — hide is a service-time overlay only.
     assert db_session.query(Movie).filter_by(tmdb_id=20).count() == 1
+
+
+def test_render_html_section_includes_random_backdrop():
+    today = date(2026, 5, 1)
+    items = [
+        _make(
+            "Now Showing", "PG", today - timedelta(days=5),
+            backdrops=[
+                "https://image.tmdb.org/t/p/w780/aaa.jpg",
+                "https://image.tmdb.org/t/p/w780/bbb.jpg",
+            ],
+        ),
+    ]
+    rendered = movies.render_html_section(
+        items, today,
+        hidden_titles=set(), allowed_ratings={"PG"},
+    )
+    assert 'class="movie-backdrop"' in rendered
+    # Picked URL must be one of the candidates.
+    assert (
+        "image.tmdb.org/t/p/w780/aaa.jpg" in rendered
+        or "image.tmdb.org/t/p/w780/bbb.jpg" in rendered
+    )
+
+
+def test_render_html_section_no_backdrop_when_empty():
+    today = date(2026, 5, 1)
+    items = [_make("No Backdrops", "PG", today, backdrops=[])]
+    rendered = movies.render_html_section(
+        items, today,
+        hidden_titles=set(), allowed_ratings={"PG"},
+    )
+    assert 'class="movie-backdrop"' not in rendered
+
+
+def test_render_pdf_html_includes_backdrop():
+    today = date(2026, 5, 1)
+    items = [
+        _make(
+            "PDF Movie", "PG", today,
+            backdrops=["https://image.tmdb.org/t/p/w780/zzz.jpg"],
+        ),
+    ]
+    pdf = movies.render_pdf_html(
+        items, today,
+        hidden_titles=set(), allowed_ratings={"PG"},
+    )
+    assert 'class="movie-backdrop"' in pdf
+    assert "image.tmdb.org/t/p/w780/zzz.jpg" in pdf
+
+
+def test_pick_backdrop_rejects_malformed_urls():
+    m = {
+        "backdrops": [
+            "not a url",
+            "javascript:alert(1)",
+            "https://evil.example/x.jpg",  # not the TMDB CDN
+        ],
+    }
+    assert movies._pick_backdrop(m) is None
+
+
+def test_backdrop_urls_filters_portrait_and_sorts_by_vote(monkeypatch):
+    from app import tmdb
+    images_block = {
+        "backdrops": [
+            {"file_path": "/lo.jpg", "aspect_ratio": 1.78, "vote_average": 1.0},
+            {"file_path": "/hi.jpg", "aspect_ratio": 1.78, "vote_average": 9.0},
+            # Misfiled portrait poster — should be dropped.
+            {"file_path": "/portrait.jpg", "aspect_ratio": 0.66, "vote_average": 7.0},
+        ],
+    }
+    out = tmdb._backdrop_urls(images_block)
+    assert out == [
+        "https://image.tmdb.org/t/p/w780/hi.jpg",
+        "https://image.tmdb.org/t/p/w780/lo.jpg",
+    ]
+
+
+def test_fetch_year_movie_list_persists_backdrops(db_session):
+    today = date.today()
+    candidates = [{"id": 1}]
+    details = {
+        1: _fake_detail(
+            tmdb_id=1, title="With Backdrops", rating="PG",
+            rd=today + timedelta(days=10),
+            backdrops=[
+                "https://image.tmdb.org/t/p/w780/a.jpg",
+                "https://image.tmdb.org/t/p/w780/b.jpg",
+            ],
+        ),
+    }
+    with patch.object(movies.tmdb, "now_playing_and_upcoming", return_value=candidates), \
+         patch.object(movies.tmdb, "discover_us_theatrical", return_value=[]), \
+         patch.object(movies.tmdb, "discover_popular_upcoming", return_value=[]), \
+         patch.object(
+             movies.tmdb, "fetch_movie_detail",
+             side_effect=lambda i, client=None: details[i],
+         ):
+        out = movies.fetch_year_movie_list()
+    by_title = {m["title"]: m for m in out}
+    assert by_title["With Backdrops"]["backdrops"] == [
+        "https://image.tmdb.org/t/p/w780/a.jpg",
+        "https://image.tmdb.org/t/p/w780/b.jpg",
+    ]
 
 
 def test_trailer_button_skips_invalid_urls():

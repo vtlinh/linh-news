@@ -13,6 +13,7 @@ generic site banner served as og:image on a homepage or section page.
 
 from __future__ import annotations
 
+import http.client
 import logging
 import re
 import urllib.error
@@ -87,7 +88,13 @@ def fetch_og_image(article_url: str) -> OgImage | None:
         with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:  # noqa: S310
             head = resp.read(_MAX_BYTES)
             final_url = resp.url
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        ValueError,
+        http.client.HTTPException,
+    ) as e:
         log.info("og:image fetch failed (%s): %s", article_url, e)
         return None
 

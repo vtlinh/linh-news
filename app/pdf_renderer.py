@@ -143,17 +143,15 @@ def _render_story_html(
         entry = image_bytes_by_id.get(int(image_id)) if image_id else None
         if entry is not None:
             from app import images as _images
-            # Stored bytes are 400px wide (storage cap). Downscale to the
-            # PDF column width here so WeasyPrint embeds + lays out the
-            # smaller image directly — no width:100% guesswork.
+            # Match the movie-card path: physically downscale to one
+            # column-width (272px / 2.83in) and embed as a data URI so
+            # WeasyPrint never has to scale via CSS width:100%.
             resized = _images.resize_for_pdf(entry[0])
             data, mime = resized if resized is not None else entry
-            b64 = base64.b64encode(data).decode("ascii")
+            src = _images.to_data_uri(data, mime)
             alt_src = (sub.get("images") or [{}])[0].get("alt", "") if sub.get("images") else ""
-            image_html = (
-                f'<img class="story-image" src="data:{mime};base64,{b64}" alt="{_esc(alt_src)}" />'
-            )
-    return f"<h3>{title}</h3>{image_html}{body}"
+            image_html = f'<img class="story-image" src="{src}" alt="{_esc(alt_src)}" />'
+    return f"{image_html}<h3>{title}</h3>{body}"
 
 
 def _render_section_for_pdf(
@@ -319,15 +317,12 @@ def build_pdf_html(
     .flow section.news-story ul,
     .flow section.news-story li {{
                  font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILY}; }}
-    /* Subsection image: cap at one flow-column width. The page geometry
-       (15.296in × 0.4in margins, 2.4in rail, 14pt content gap, 14pt
-       column-gap × 3, 4 columns) gives ~2.83in per column; 2.6in keeps
-       the image safely inside its column even when WeasyPrint resolves
-       width:100% against the multi-column container instead of the
-       column. */
+    /* Image is physically resized to 272px (2.83in @ 96 PPI) before
+       embedding (see app/images.resize_for_pdf), so we let it draw at
+       its natural width and just cap at 100% of the column as a guard. */
     .flow section.news-story img.story-image {{
                  display:block;
-                 width:100%; max-width:2.6in;
+                 width:auto; max-width:100%;
                  height:auto;
                  margin:0 0 4pt; }}
     .masthead {{ display:flex; align-items:center; justify-content:space-between;

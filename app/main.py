@@ -134,7 +134,7 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     prose_html = forecast.get("prose_html") or ""
     if prose_html:
         refreshed_html = weather.build_refreshed_span(refreshed_at)
-        replacement = f'<div class="weather">{prose_html}{refreshed_html}</div>'
+        replacement = f'<div class="weather">{refreshed_html}{prose_html}</div>'
     else:
         coords = get_settings().weather_coords
         now = weather.get_now_cached(s, coords)

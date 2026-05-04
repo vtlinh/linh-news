@@ -83,15 +83,9 @@ class Source(TypedDict):
     title: str
 
 
-class ImageRef(TypedDict, total=False):
-    url: str
-    alt: str
-
-
 class Subsection(TypedDict, total=False):
     title: str
     text: str
-    images: list[ImageRef]
     sources: list[Source]
     # Set by app.images after download/resize, not by the LLM.
     image_id: int | None
@@ -135,19 +129,6 @@ _SOURCE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_IMAGE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "url": {
-            "type": "string",
-            "description": "Direct image URL (jpg/png/webp). Landscape preferred.",
-        },
-        "alt": {"type": "string", "description": "Short caption / alt text."},
-    },
-    "required": ["url"],
-    "additionalProperties": False,
-}
-
 _SUBSECTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -162,14 +143,6 @@ _SUBSECTION_SCHEMA: dict[str, Any] = {
                 "bullet on its own line prefixed with '- ' (dash space). "
                 "Paragraphs are separated by a blank line."
             ),
-        },
-        "images": {
-            "type": "array",
-            "description": (
-                "0..N candidate image URLs surfaced by web_search. The server "
-                "picks one at random (landscape preferred) and downloads it."
-            ),
-            "items": _IMAGE_SCHEMA,
         },
         "sources": {
             "type": "array",

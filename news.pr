@@ -17,9 +17,6 @@ LinhNews
       text:        plain-text body, paragraphs separated by blank lines.
                    Bullet points are written as lines beginning with "- " (dash space).
                    NO HTML — no <p>, <ul>, <li>, <a>, <span>, etc. The server renders the markup.
-      images:      Leave empty `[]`. The server scrapes the article's
-                   og:image tag from `sources[*].url` and uses that.
-                   Inventing image URLs caused 100% 404s — don't try.
       sources:     ≥1 source per item, each {url, title}, sorted most-relevant first.
                    `url` must point directly to the article so it stays readable
                    for several days. `title` is "Outlet: Headline".

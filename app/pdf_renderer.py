@@ -149,8 +149,7 @@ def _render_story_html(
             resized = _images.resize_for_pdf(entry[0])
             data, mime = resized if resized is not None else entry
             src = _images.to_data_uri(data, mime)
-            alt_src = (sub.get("images") or [{}])[0].get("alt", "") if sub.get("images") else ""
-            image_html = f'<img class="story-image" src="{src}" alt="{_esc(alt_src)}" />'
+            image_html = f'<img class="story-image" src="{src}" alt="" />'
     return f"{image_html}<h3>{title}</h3>{body}"
 
 

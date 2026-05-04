@@ -390,14 +390,13 @@ def _ensure_edition_stub(s: Session, day: date) -> None:
 
 
 def _candidate_image_urls(sub: dict) -> list[str]:
-    """Build the candidate image URL list for one subsection.
+    """Scrape og:image from each source URL, in order. Deduped.
 
-    Server-side og:image scraping is the primary signal: the LLM can't
-    invent CDN paths reliably (~100% 404). We scrape og:image from each
-    source URL in order. Any LLM-supplied ``images[]`` URLs are appended
-    as a low-priority fallback so old prompts keep working.
+    The LLM no longer supplies image URLs — it hallucinated 100% 404s.
+    We only trust og:image meta tags from the article pages themselves.
     """
     urls: list[str] = []
+    seen: set[str] = set()
     for src in sub.get("sources") or []:
         if not isinstance(src, dict):
             continue
@@ -405,14 +404,10 @@ def _candidate_image_urls(sub: dict) -> list[str]:
         if not article_url:
             continue
         og = og_image.fetch_og_image(article_url)
-        if og:
+        if og and og not in seen:
+            seen.add(og)
             urls.append(og)
-    for img in sub.get("images") or []:
-        if isinstance(img, dict) and img.get("url"):
-            urls.append(img["url"])
-    # Deduplicate while preserving order.
-    seen: set[str] = set()
-    return [u for u in urls if not (u in seen or seen.add(u))]
+    return urls
 
 
 def _fetch_and_persist_images(

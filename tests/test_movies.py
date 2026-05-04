@@ -167,7 +167,8 @@ def test_render_html_section_basic():
     assert "Coming Soon" in html
     assert "In theaters since" in html
     assert "Opens" in html
-    assert 'class="hide-movie"' in html
+    # The inline ✕ hide button was removed from cards (admins use /movies).
+    assert "hide-movie" not in html
     # Single-trailer renders as a direct anchor
     assert "▶ Trailer" in html
     # Multi-trailer renders the popup
@@ -419,6 +420,29 @@ def test_render_pdf_html_includes_backdrop():
     )
     assert 'class="movie-backdrop"' in pdf
     assert "image.tmdb.org/t/p/w780/zzz.jpg" in pdf
+
+
+def test_render_html_section_links_title_to_tmdb():
+    today = date(2026, 5, 1)
+    items = [_make("Linkable", "PG", today)]
+    items[0]["tmdb_id"] = 12345
+    rendered = movies.render_html_section(
+        items, today,
+        hidden_titles=set(), allowed_ratings={"PG"},
+    )
+    assert 'href="https://www.themoviedb.org/movie/12345"' in rendered
+    assert 'target="_blank"' in rendered
+    assert "Linkable</a>" in rendered
+
+
+def test_render_html_section_no_link_when_tmdb_id_missing():
+    today = date(2026, 5, 1)
+    items = [_make("No Id", "PG", today)]  # _make does not set tmdb_id
+    rendered = movies.render_html_section(
+        items, today,
+        hidden_titles=set(), allowed_ratings={"PG"},
+    )
+    assert "themoviedb.org" not in rendered
 
 
 def test_pick_backdrop_rejects_malformed_urls():

@@ -383,12 +383,23 @@ def _render_card_html(
         f'alt="" loading="lazy">'
         if backdrop else ""
     )
+    # The title links out to the movie's TMDB page when we know the id;
+    # otherwise it renders as plain text.
+    tmdb_id = m.get("tmdb_id")
+    if tmdb_id:
+        title_inner = (
+            f'<a href="https://www.themoviedb.org/movie/{int(tmdb_id)}" '
+            f'target="_blank" rel="noopener">{title_esc}</a>'
+        )
+    else:
+        title_inner = title_esc
+    # No inline ✕ on the card — the X visually attaches to the backdrop
+    # image and reads as "discard this image", which we don't support.
+    # Admins still hide movies from the dedicated /movies admin page.
     return (
         '<article class="movie-card">'
-        f'<button class="hide-movie" data-title="{title_esc}" '
-        f'aria-label="Hide {title_esc}">×</button>'
         f'{backdrop_html}'
-        f'<div class="movie-title">{title_esc}</div>'
+        f'<div class="movie-title">{title_inner}</div>'
         f'<div class="movie-subtitle">{html.escape(sub)}</div>'
         f'{summary_html}{trailer_html}'
         '</article>'
@@ -464,11 +475,15 @@ def render_pdf_html(
     )
     sub_style = "font-size:9pt;color:#555"
     desc_style = "font-size:12pt;color:#222;margin-top:2pt;line-height:1.3"
-    # Backdrop sits flush with the row above the title. Rail width is 2.4in;
-    # at 16:9 the backdrop is ~1.35in tall — compact enough that 5–8 movies
-    # still fit comfortably in the rail.
+    # Rail width is 2.4in, so a free 16:9 image is ~1.35in tall — eight
+    # cards × 1.35in = 10.8in of just backdrops, which the one-page fit
+    # logic can't recover from (it drops every news section and still
+    # ships a placeholder). Cap height at 0.6in with object-fit:cover so
+    # the image crops instead of stretching; total backdrop area for 8
+    # cards becomes ~4.8in, comfortably inside the page budget.
     backdrop_style = (
-        "display:block;width:100%;height:auto;margin:0 0 3pt"
+        "display:block;width:100%;height:0.6in;object-fit:cover;"
+        "margin:0 0 3pt"
     )
     parts = [f'<div style="{label_style}">Movies</div>']
     for m in items:

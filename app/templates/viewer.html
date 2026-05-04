@@ -197,20 +197,8 @@
     });
   }
   initCollapsible();
-  if (isAdmin) {
-    document.querySelectorAll('button.hide-movie').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const title = btn.dataset.title;
-        if (!title) return;
-        const r = await fetch('/hide-movie', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({title})
-        });
-        if (r.ok) btn.closest('article,.movie,section')?.remove() ?? btn.remove();
-      });
-    });
-  }
-  // Non-admins: hide-movie buttons are hidden via body.viewer CSS rule.
+  // Movie cards no longer carry an inline ✕ — admins hide titles from the
+  // dedicated /movies admin page (the X visually attaches to the backdrop
+  // image and reads as "discard the image", which we don't support).
 </script>
 {% endblock %}

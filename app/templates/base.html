@@ -106,10 +106,8 @@
       .toolbar-actions::-webkit-scrollbar { display: none; }
     }
     main { padding: 16px; max-width: 1600px; margin: 0 auto; }
-    /* Movie card with corner ✕ close button. */
     .movie-card {
-      position: relative;
-      padding: 8px 28px 8px 8px;
+      padding: 8px;
       margin: 0 0 1em;
     }
     .movie-backdrop {
@@ -121,26 +119,6 @@
       margin: 0 0 6px;
       background: #eee;
     }
-    button.hide-movie {
-      position: absolute;
-      top: 4px; right: 4px;
-      width: 28px; height: 28px; min-height: 28px;
-      padding: 0;
-      border: 1px solid var(--rule);
-      background: transparent; color: var(--muted);
-      border-radius: 50%;
-      font-size: 16px; line-height: 1;
-      cursor: pointer;
-      opacity: 0; transition: opacity 0.15s;
-    }
-    .movie-card:hover button.hide-movie,
-    button.hide-movie:focus { opacity: 1; }
-    button.hide-movie:hover {
-      background: var(--accent); color: #fff; border-color: var(--accent);
-    }
-    /* Hide-movie button is admin-only — never even render for viewers,
-       so no flash before JS runs. */
-    body.viewer button.hide-movie { display: none !important; }
 
     details.collapsible {
       border: 1px solid var(--rule);

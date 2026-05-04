@@ -337,7 +337,16 @@
     body.className = 'movie-body';
     const title = document.createElement('div');
     title.className = 'movie-title';
-    title.textContent = m.title;
+    if (m.tmdb_id) {
+      const a = document.createElement('a');
+      a.href = `https://www.themoviedb.org/movie/${m.tmdb_id}`;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = m.title;
+      title.appendChild(a);
+    } else {
+      title.textContent = m.title;
+    }
     body.appendChild(title);
 
     if (m.release_date) {

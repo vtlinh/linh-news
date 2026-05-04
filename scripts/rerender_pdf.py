@@ -21,6 +21,7 @@ Examples:
 The output PDF is written to logs/repro-<date>-<ts>.pdf with a side-by-side
 report of <img> tag count (HTML) and embedded image count (rendered PDF).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -76,23 +77,30 @@ def _load_from_db(day: date_cls) -> tuple[str, str]:
                 f"after this row was generated). Re-run a refresh first, or "
                 f"use --snapshot latest if logs/pdf-html-*.html exists."
             )
-        log.info("Loaded edition %s (generated_at=%s, pdf_html len=%d)",
-                 day, e.generated_at, len(e.pdf_html))
+        log.info(
+            "Loaded edition %s (generated_at=%s, pdf_html len=%d)",
+            day,
+            e.generated_at,
+            len(e.pdf_html),
+        )
         return f"db-{day.isoformat()}", e.pdf_html
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--date", default=None,
-                   help="Edition date to load from DB (YYYY-MM-DD). Default: today.")
-    p.add_argument("--snapshot", default=None,
-                   help="Path to a logs/pdf-html-*.html snapshot, or 'latest'.")
+    p.add_argument(
+        "--date", default=None, help="Edition date to load from DB (YYYY-MM-DD). Default: today."
+    )
+    p.add_argument(
+        "--snapshot", default=None, help="Path to a logs/pdf-html-*.html snapshot, or 'latest'."
+    )
     args = p.parse_args()
 
     if args.snapshot:
         label, pdf_html = _load_from_snapshot(args.snapshot)
     else:
         from app.settings import local_today
+
         target = date_cls.fromisoformat(args.date) if args.date else local_today()
         label, pdf_html = _load_from_db(target)
 
@@ -116,13 +124,17 @@ def main() -> int:
     log.info("=" * 60)
     log.info("Output: %s", out)
     log.info("HTML <img> tags : %d", len(img_tags))
-    log.info("PDF image XObjects: %d  (these are the images WeasyPrint actually embedded)",
-             embedded)
+    log.info(
+        "PDF image XObjects: %d  (these are the images WeasyPrint actually embedded)", embedded
+    )
     log.info("PDF pages       : %d", pages)
     if embedded < len(img_tags):
-        log.warning("MISMATCH — %d HTML images but only %d in PDF. "
-                    "Look for 'WeasyPrint fetch FAILED' lines above.",
-                    len(img_tags), embedded)
+        log.warning(
+            "MISMATCH — %d HTML images but only %d in PDF. "
+            "Look for 'WeasyPrint fetch FAILED' lines above.",
+            len(img_tags),
+            embedded,
+        )
     return 0
 
 

@@ -4,6 +4,7 @@ Revision ID: 0009_movies
 Revises: 0008_event_emojis
 Create Date: 2026-05-02
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

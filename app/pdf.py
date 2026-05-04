@@ -49,6 +49,7 @@ def _count_words(html: str) -> int:
 def _load_font_samples() -> list[tuple[int, float]]:
     try:
         from app import cache
+
         raw = cache._get_backend().get(_FONT_CACHE_KEY)  # noqa: SLF001
         if not raw:
             return []
@@ -72,6 +73,7 @@ def _load_font_samples() -> list[tuple[int, float]]:
 def _save_font_sample(word_count: int, font_pt: float) -> None:
     try:
         from app import cache
+
         samples = _load_font_samples()
         # Bucket by 100 words: latest sample in each bucket wins. Keeps
         # entries diverse without unbounded growth.
@@ -139,13 +141,13 @@ _PLACEHOLDER_PDF = (
 # Each entry is a regex matched against the <h2> text of the section.
 # Lowest priority first.
 _DROP_PRIORITY = [
-    re.compile(r"movie|film",                    re.IGNORECASE),
-    re.compile(r"dorchester|school|elementary",  re.IGNORECASE),
-    re.compile(r"financial|finance",             re.IGNORECASE),
+    re.compile(r"movie|film", re.IGNORECASE),
+    re.compile(r"dorchester|school|elementary", re.IGNORECASE),
+    re.compile(r"financial|finance", re.IGNORECASE),
     re.compile(r"\bai\b|artificial intelligence|coding ai", re.IGNORECASE),
-    re.compile(r"nj|new jersey|new york",        re.IGNORECASE),
-    re.compile(r"us\s+political|united states",  re.IGNORECASE),
-    re.compile(r"global|world|international",    re.IGNORECASE),
+    re.compile(r"nj|new jersey|new york", re.IGNORECASE),
+    re.compile(r"us\s+political|united states", re.IGNORECASE),
+    re.compile(r"global|world|international", re.IGNORECASE),
 ]
 
 # Matches a complete <section>...</section> block (handles nested tags crudely
@@ -185,12 +187,22 @@ def _drop_one_section(html: str) -> str | None:
         """Drop sections[idx] (a category header) plus all immediately
         following non-header sibling sections."""
         end_idx = idx + 1
-        while end_idx < len(sections) and not _is_category_header(
-            sections[end_idx].group()
-        ):
+        while end_idx < len(sections) and not _is_category_header(sections[end_idx].group()):
             end_idx += 1
         start = sections[idx].start()
         end = sections[end_idx - 1].end()
+        # Also swallow the section's *own* preceding ``<div class="sep-group">``
+        # rule (the heavy black bar pdf_renderer emits between categories).
+        # Without this, dropping the dorch section would leave its sep-group
+        # in front of the next section, doubling-up with that section's own
+        # sep-group rule.
+        prev = re.search(
+            r'\s*<div\s+class="sep-group"[^>]*>\s*</div\s*>\s*$',
+            html[:start],
+            re.IGNORECASE,
+        )
+        if prev:
+            start = prev.start()
         # Eat any whitespace between this group and what follows so we
         # don't leave an empty gap.
         return html[:start] + html[end:].lstrip()
@@ -205,43 +217,45 @@ def _drop_one_section(html: str) -> str | None:
                 title = _h2_text(sec_html)[:60]
                 trailing = 0
                 k = i + 1
-                while k < len(sections) and not _is_category_header(
-                    sections[k].group()
-                ):
+                while k < len(sections) and not _is_category_header(sections[k].group()):
                     trailing += 1
                     k += 1
                 log.info(
                     "PDF: dropping category %r (header + %d stories) to fit one page",
-                    title, trailing,
+                    title,
+                    trailing,
                 )
                 return _drop_group(i)
 
     # No pattern matched — drop the very last section as a last resort.
     last_idx = len(sections) - 1
     log.info("PDF: dropping last section (no priority match) to fit one page")
-    return html[: sections[last_idx].start()] + html[sections[last_idx].end():]
-
-
-# Children inside a <section> we consider "articles" — droppable items.
-_ARTICLE_CHILD_RE = re.compile(
-    r"<(article|li)(?:\s[^>]*)?>.*?</\1\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
+    return html[: sections[last_idx].start()] + html[sections[last_idx].end() :]
 
 
 def _drop_one_article(html: str) -> str | None:
-    """Drop one <article>/<li> from a section, keeping subsection counts
-    balanced across sections. Returns trimmed HTML, or None.
+    """Drop one news subsection (a story sibling) to fit one page.
 
-    Selection rule: among sections with ≥2 articles, prefer the one with
-    the most articles (so we shave the fattest section first and keep
-    sections balanced). Ties broken by drop priority — the lowest-priority
-    section in ``_DROP_PRIORITY`` loses an article first. The dropped
-    article is the LAST one in the chosen section.
+    The structured pdf_renderer emits each news section as a flat run of
+    sibling ``<section>``s: an h2-only ``news-header`` followed by N
+    ``news-story`` siblings. To shrink content we pick the section with
+    the most stories (so we shave the fattest section first and keep
+    counts balanced), tiebreak by ``_DROP_PRIORITY`` (lowest-priority
+    section loses a story first), then drop that section's *last* story.
+
+    When that last story was also the only story in its section, also
+    drop the now-orphaned header + its preceding sep-group rule so the
+    flow doesn't end on a content-less h2.
+
+    Returns the trimmed HTML, or ``None`` when there is nothing left to
+    drop (every section is already empty).
     """
     sections = list(_SECTION_RE.finditer(html))
     if not sections:
         return None
+
+    def _is_header(sec_html: str) -> bool:
+        return bool(_H2_TEXT_RE.search(sec_html))
 
     def _h2_text(sec_html: str) -> str:
         m = _H2_TEXT_RE.search(sec_html)
@@ -255,31 +269,124 @@ def _drop_one_article(html: str) -> str | None:
                 return i
         return len(_DROP_PRIORITY)
 
-    candidates = []
-    for sec in sections:
-        sec_html = sec.group()
-        title = _h2_text(sec_html)
-        if not title:
-            continue
-        articles = list(_ARTICLE_CHILD_RE.finditer(sec_html))
-        if len(articles) < 2:
-            continue
-        candidates.append((sec, title, articles))
+    # Bucket sections into groups: each header collects following non-header
+    # siblings as its stories.
+    groups: list[tuple[re.Match[str], list[re.Match[str]], str]] = []
+    i = 0
+    while i < len(sections):
+        sec = sections[i]
+        if _is_header(sec.group()):
+            title = _h2_text(sec.group())
+            stories: list[re.Match[str]] = []
+            j = i + 1
+            while j < len(sections) and not _is_header(sections[j].group()):
+                stories.append(sections[j])
+                j += 1
+            groups.append((sec, stories, title))
+            i = j
+        else:
+            i += 1
 
+    # Only consider sections that still have ≥2 stories — we always keep
+    # at least one news item per section so the section header isn't
+    # orphaned. When every section is down to 1, the caller falls through
+    # to other trim strategies (movies, then last-resort section drop).
+    candidates = [g for g in groups if len(g[1]) >= 2]
     if not candidates:
         return None
 
-    # Sort: most articles first (balance), then by drop priority.
-    candidates.sort(key=lambda c: (-len(c[2]), _drop_rank(c[1])))
-    sec, title, articles = candidates[0]
-    sec_html = sec.group()
-    last = articles[-1]
-    new_sec = sec_html[: last.start()] + sec_html[last.end():]
+    # Most stories first (shave the fattest); tiebreak by drop priority.
+    candidates.sort(key=lambda g: (-len(g[1]), _drop_rank(g[2])))
+    _header, stories, title = candidates[0]
+    last = stories[-1]  # within the chosen section, drop its LAST story
     log.info(
-        "PDF: dropping one article from section %r (%d → %d items)",
-        title[:60], len(articles), len(articles) - 1,
+        "PDF: dropping last story of %r (%d → %d stories)",
+        title[:60],
+        len(stories),
+        len(stories) - 1,
     )
-    return html[: sec.start()] + new_sec + html[sec.end():]
+    return html[: last.start()] + html[last.end() :]
+
+
+# Movie cards in the rail are wrapped in <div style="margin:0 0 8pt;...
+# break-inside:avoid">…</div> by app.movies.render_pdf_html. We tag those
+# wrappers with a distinguishing class via the matcher below.
+_MOVIE_CARD_RE = re.compile(
+    r'<div\s+style="[^"]*break-inside:avoid[^"]*">(?:(?!</div\s*>).)*'
+    r"(?:<img\s[^>]*movie-backdrop|Opens|In theaters)"
+    r"(?:(?!</div\s*>).)*</div\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+# Movie title sits inside the card as
+#   <div style="font-size:13pt;font-weight:bold;line-height:1.2">{title}</div>
+_MOVIE_TITLE_RE = re.compile(
+    r'<div\s+style="font-size:13pt;font-weight:bold[^"]*">(.*?)</div\s*>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _drop_one_movie(html: str) -> str | None:
+    """Strip the last movie card from the rail. Returns None when the rail
+    has no movie cards left."""
+    matches = list(_MOVIE_CARD_RE.finditer(html))
+    if not matches:
+        return None
+    last = matches[-1]
+    title_m = _MOVIE_TITLE_RE.search(last.group())
+    title = _TAG_STRIP_RE.sub("", title_m.group(1)).strip() if title_m else "?"
+    log.info(
+        "PDF: dropping movie %r (%d → %d cards)",
+        title[:60],
+        len(matches),
+        len(matches) - 1,
+    )
+    return html[: last.start()] + html[last.end() :]
+
+
+# Calendar event rows are produced by app.calendar_summary.build_pdf_calendar
+# as ``<div style="margin:0 0 1pt;font-size:12pt;font-weight:bold…">…</div>``.
+_CALENDAR_EVENT_RE = re.compile(
+    r'<div\s+style="margin:0 0 1pt;font-size:12pt;font-weight:bold[^"]*">'
+    r"((?:(?!</div\s*>).)*)</div\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+# Non-greedy match for the news flow div used by Phase 1 to render
+# rail + chrome only (without any news content) so the rail height can
+# be measured against the page in isolation.
+_FLOW_DIV_RE = re.compile(
+    r'(<div\s+class="flow"[^>]*>)(.*?)(</div\s*>)',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_news_flow(html: str) -> str:
+    """Return ``html`` with the contents of ``<div class="flow">…</div>``
+    emptied. Used by Phase 1 to fit the rail (calendar + movies) + chrome
+    against the page without any news content competing for vertical
+    space — Phase 2 then proves the news flow against the full page once
+    Phase 1 has locked the rail size."""
+    return _FLOW_DIV_RE.sub(r"\1\3", html, count=1)
+
+
+def _drop_one_calendar_event(html: str) -> str | None:
+    """Strip the last calendar event row from the rail. Returns None when
+    the rail has no calendar event rows left."""
+    matches = list(_CALENDAR_EVENT_RE.finditer(html))
+    if not matches:
+        return None
+    last = matches[-1]
+    text = _TAG_STRIP_RE.sub("", last.group(1)).strip()
+    log.info(
+        "PDF: dropping calendar event %r (%d → %d events)",
+        text[:60],
+        len(matches),
+        len(matches) - 1,
+    )
+    return html[: last.start()] + html[last.end() :]
 
 
 def html_to_pdf(html: str) -> bytes:
@@ -313,24 +420,28 @@ def html_to_pdf(html: str) -> bytes:
 
     from weasyprint import default_url_fetcher
 
-    ua = (
-        "Linh-News/1.0 (https://github.com/vtlinh/linh-news; "
-        "vtlinh87+linhnews@gmail.com)"
-    )
+    ua = "Linh-News/1.0 (https://github.com/vtlinh/linh-news; vtlinh87+linhnews@gmail.com)"
+
+    # Per-call URL cache. The fit loop renders the same document many times
+    # at different font sizes, and re-runs after every drop. Without this
+    # cache, each render re-downloads the masthead font + every movie
+    # backdrop, adding ~9 HTTPS round-trips per render — minutes of
+    # latency over a typical 20-render fit. Cache only successful fetches
+    # so transient failures still get retried.
+    fetch_cache: dict[str, dict] = {}
 
     def _url_fetcher(url, *args, **kwargs):
-        # Log every external resource WeasyPrint asks for so silent fetch
-        # errors (font, image, css) are easy to trace.
         is_data = url.startswith("data:")
+        if not is_data and url in fetch_cache:
+            return fetch_cache[url]
         if not is_data:
             log.info("WeasyPrint fetch: %s", url[:200])
         try:
             try:
-                result = default_url_fetcher(
-                    url, *args, headers={"User-Agent": ua}, **kwargs
-                )
+                result = default_url_fetcher(url, *args, headers={"User-Agent": ua}, **kwargs)
             except TypeError:
                 import urllib.request
+
                 req = urllib.request.Request(url, headers={"User-Agent": ua})
                 with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310
                     result = {
@@ -340,9 +451,13 @@ def html_to_pdf(html: str) -> bytes:
                     }
             if not is_data:
                 size = len(result.get("string", b"")) if "string" in result else "stream"
-                log.info("WeasyPrint fetch ok: %s [%s, %s bytes]",
-                         result.get("redirected_url", url)[:200],
-                         result.get("mime_type"), size)
+                log.info(
+                    "WeasyPrint fetch ok: %s [%s, %s bytes]",
+                    result.get("redirected_url", url)[:200],
+                    result.get("mime_type"),
+                    size,
+                )
+                fetch_cache[url] = result
             return result
         except Exception as e:  # noqa: BLE001
             if not is_data:
@@ -358,15 +473,21 @@ def html_to_pdf(html: str) -> bytes:
         # body/heading rule so emoji codepoints render in color via the
         # Debian fonts-noto-color-emoji package installed in the image,
         # rather than falling back to a monochrome glyph from DejaVu.
-        return CSS(string=f"""
+        return CSS(
+            string=f"""
         @page {{ size: 15.296in 27.193in; margin: 0.4in; }}
+        /* Color-emoji fallbacks (Noto = Linux/Docker, Segoe UI = Windows,
+           Apple = macOS) so flag/icon glyphs render in colour rather than
+           falling through to monochrome DejaVu. */
         html, body {{ font-family: "Times New Roman", Georgia, serif,
-                                   "Noto Color Emoji"; }}
+                                   "Noto Color Emoji", "Segoe UI Emoji",
+                                   "Apple Color Emoji", emoji; }}
         body {{ font-size: {base_pt:.2f}pt !important; line-height: 1.15 !important; }}
         h1 {{ font-size: {h1_pt:.2f}pt !important; margin: 0 0 2pt !important;
               text-align: center; font-weight: normal;
               font-family: "Linh Times Masthead", "Times New Roman",
-                           Georgia, serif, "Noto Color Emoji"; }}
+                           Georgia, serif, "Noto Color Emoji",
+                           "Segoe UI Emoji", "Apple Color Emoji", emoji; }}
         h2 {{ font-size: {base_pt * 1.375:.2f}pt !important; margin: 4pt 0 2pt !important;
               font-weight: bold; }}
         h3, h4, h5, h6 {{ font-size: {base_pt * 1.125:.2f}pt !important;
@@ -378,12 +499,11 @@ def html_to_pdf(html: str) -> bytes:
         br + br {{ display: none !important; }}
         img {{ max-width: 100% !important; }}
         section, article, header, footer, div {{ margin: 0 0 3pt !important; }}
-        """)
+        """
+        )
 
     # ── render-and-measure helpers ──────────────────────────────────────
-    def _render_and_measure(
-        content: str, font_pt: float
-    ) -> tuple[bytes, int, float]:
+    def _render_and_measure(content: str, font_pt: float) -> tuple[bytes, int, float]:
         """Render at ``font_pt`` and return (pdf_bytes, page_count, fill_ratio).
 
         ``fill_ratio`` is the fraction of the first page covered by content
@@ -427,102 +547,107 @@ def html_to_pdf(html: str) -> bytes:
         _walk(root)
         return pdf_bytes, n_pages, max(0.0, min(1.0, deepest / page_h))
 
-    def _fit(content: str) -> tuple[bytes, float, float] | None:
-        """Two-sided binary search over [_FONT_MIN, _FONT_MAX] in 0.5pt steps.
+    def _fit_at_min_then_grow(content: str) -> tuple[bytes, float, float] | None:
+        """Per the user's spec:
 
-        Returns (pdf_bytes, font_pt, blank_ratio) for the chosen render, or
-        ``None`` if even ``_FONT_MIN`` overflows (caller should drop content).
+        1. Render at the MIN font. If it still overflows → return ``None``
+           so the caller can trim content and retry.
+        2. If MIN fits → binary-search ``[MIN, MAX]`` for the LARGEST font
+           that still fits one page (grow-to-fill).
 
-        Step 1: shrink to fit (if seeded font overflows).
-        Step 2: grow to fill (if blank > _BLANK_TARGET), keeping it on 1 page.
+        Returns ``(pdf_bytes, font_pt, blank_ratio)`` of the chosen render.
+        Logs every font size tried and whether it fit.
         """
-        # Seed from the (words → font) cache.
-        words = _count_words(content)
-        samples = _load_font_samples()
-        seed = max(_FONT_MIN, min(_FONT_MAX, _predict_font(words, samples)))
-        seed = _round_half(seed)
-
+        tried: list[str] = []
         try:
-            seed_bytes, seed_pages, seed_fill = _render_and_measure(content, seed)
+            min_bytes, min_pages, min_fill = _render_and_measure(content, _FONT_MIN)
         except Exception:
-            log.exception("Seed render failed at %.1fpt", seed)
-            seed_bytes, seed_pages, seed_fill = b"", 99, 0.0
+            log.exception("MIN-font render failed")
+            return None
+        tried.append(f"{_FONT_MIN:.1f}{'✓' if min_pages <= 1 else '✗'}")
+        if min_pages > 1:
+            log.info("Font search: %s — MIN doesn't fit, trim needed", " ".join(tried))
+            return None
 
-        # ── Step 1: shrink-to-fit if the seed overflowed ───────────────
-        if seed_pages > 1:
+        # MIN font fits. Binary-search upward for the biggest font that
+        # still fits — gives us the densest one-page layout.
+        best_bytes, best_pt, best_fill = min_bytes, _FONT_MIN, min_fill
+        lo, hi = _FONT_MIN, _FONT_MAX
+        while hi - lo > _FONT_STEP:
+            mid = _round_half((lo + hi) / 2)
+            if mid <= lo or mid >= hi:
+                break
             try:
-                lo_bytes, lo_pages, lo_fill = _render_and_measure(content, _FONT_MIN)
+                b, p, f = _render_and_measure(content, mid)
             except Exception:
-                log.exception("Floor render failed at %.1fpt", _FONT_MIN)
-                return None
-            if lo_pages > 1:
-                # Even at the readable floor it overflows — caller must drop.
-                return None
-            best_bytes, best_pt, best_fill = lo_bytes, _FONT_MIN, lo_fill
-            lo, hi = _FONT_MIN, seed
-            while hi - lo > _FONT_STEP:
-                mid = _round_half((lo + hi) / 2)
-                if mid <= lo or mid >= hi:
-                    break
-                try:
-                    b, p, f = _render_and_measure(content, mid)
-                except Exception:
-                    log.exception("Shrink render failed at %.1fpt", mid)
-                    break
-                if p <= 1:
-                    best_bytes, best_pt, best_fill = b, mid, f
-                    lo = mid
-                else:
-                    hi = mid
-            seed_bytes, seed, seed_fill, seed_pages = best_bytes, best_pt, best_fill, 1
-            log.info("Shrink-to-fit: chose %.1fpt (fill=%.1f%%)",
-                     seed, seed_fill * 100)
+                log.exception("Grow render failed at %.1fpt", mid)
+                break
+            tried.append(f"{mid:.1f}{'✓' if p <= 1 else '✗'}")
+            if p <= 1:
+                best_bytes, best_pt, best_fill = b, mid, f
+                lo = mid
+            else:
+                hi = mid
 
-        # ── Step 2: grow-to-fill if too much blank ─────────────────────
-        blank = 1.0 - seed_fill
-        if seed_pages == 1 and blank > _BLANK_TARGET and seed < _FONT_MAX:
-            best_bytes, best_pt, best_fill = seed_bytes, seed, seed_fill
-            lo, hi = seed, _FONT_MAX
-            while hi - lo > _FONT_STEP:
-                mid = _round_half((lo + hi) / 2)
-                if mid <= lo or mid >= hi:
-                    break
-                try:
-                    b, p, f = _render_and_measure(content, mid)
-                except Exception:
-                    log.exception("Grow render failed at %.1fpt", mid)
-                    break
-                if p <= 1:
-                    best_bytes, best_pt, best_fill = b, mid, f
-                    lo = mid
-                else:
-                    hi = mid
-            log.info("Grow-to-fill: chose %.1fpt (fill=%.1f%%, blank=%.1f%%)",
-                     best_pt, best_fill * 100, (1.0 - best_fill) * 100)
-            seed_bytes, seed, seed_fill = best_bytes, best_pt, best_fill
+        _save_font_sample(_count_words(content), best_pt)
+        log.info(
+            "Font search: %s → chose %.1fpt (blank=%.1f%%)",
+            " ".join(tried), best_pt, (1.0 - best_fill) * 100,
+        )
+        return best_bytes, best_pt, 1.0 - best_fill
 
-        _save_font_sample(_count_words(content), seed)
-        return seed_bytes, seed, 1.0 - seed_fill
-
-    # ── Driver: fit, then drop articles/sections only if floor overflows ──
+    # ── Phase 1: rail-only fit (no news flow yet) ──
+    # Render the document with the news flow content stripped — only the
+    # masthead/dateline/rail/stocks-footer compete for vertical space. If
+    # this rail+chrome layout doesn't fit at MIN font, drop a movie (last
+    # first); if no movies left, drop a calendar event. Repeat until MIN
+    # fits OR the rail is empty. Phase 1 never returns the rail-only PDF
+    # — the trimmed `current` (which still has news) is what feeds Phase
+    # 2.
+    import time as _time
+    phase1_t0 = _time.monotonic()
+    log.info("PDF: ── phase 1 begin (rail-only fit; news flow stripped) ──")
     current = html
+    for _ in range(40):
+        rail_only = _strip_news_flow(current)
+        result = _fit_at_min_then_grow(rail_only)
+        if result is not None:
+            log.info(
+                "PDF: ── phase 1 end in %.2fs (rail+chrome fits at MIN) ──",
+                _time.monotonic() - phase1_t0,
+            )
+            break
+        trimmed = _drop_one_movie(current) or _drop_one_calendar_event(current)
+        if trimmed is None:
+            log.info(
+                "PDF: ── phase 1 end in %.2fs (rail emptied; rail+chrome "
+                "still overflows — Phase 2 will drop news on the full doc) ──",
+                _time.monotonic() - phase1_t0,
+            )
+            break
+        current = trimmed
+
+    # ── Phase 2: full content (rail-locked from Phase 1 + news flow) ──
+    # Same MIN-then-grow strategy, but on overflow we drop news content:
+    # balance subsection counts first, then last-resort whole-section drop.
+    phase2_t0 = _time.monotonic()
+    log.info("PDF: ── phase 2 begin (news trim + font fit on full doc) ──")
     for attempt in range(20):
-        result = _fit(current)
+        result = _fit_at_min_then_grow(current)
         if result is not None:
             pdf_bytes, font_pt, blank = result
             log.info(
-                "PDF fit: %.1fpt, blank=%.1f%% (after %d trim(s))",
-                font_pt, blank * 100, attempt,
+                "PDF fit (phase 2): %.1fpt, blank=%.1f%% (after %d news trim(s)) in %.2fs",
+                font_pt, blank * 100, attempt, _time.monotonic() - phase2_t0,
             )
             return pdf_bytes
-        # Floor still overflowed → trim. Article-level first, section-level last.
         trimmed = _drop_one_article(current) or _drop_one_section(current)
         if trimmed is None:
             log.warning("PDF: nothing left to drop — shipping placeholder")
             return _PLACEHOLDER_PDF
         current = trimmed
 
-    log.error("PDF: still overflowing after 20 trim attempts — placeholder")
+    log.error("PDF: still overflowing after 20 news-trim attempts — placeholder")
     return _PLACEHOLDER_PDF
 
 

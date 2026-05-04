@@ -14,7 +14,7 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 
 - Python 3.12, managed with **uv**. `pyproject.toml` declares deps; `uv.lock` is committed.
 - Database: Postgres on Fly.io.
-- LLM: Anthropic API (`claude-opus-4-7`) with the `web_search_20250305` tool. Use prompt caching on the static `news.pr` block.
+- LLM: Anthropic API with the `web_search_20250305` tool. Model name comes from `settings.anthropic_model`. Use prompt caching on the static `news.pr` block. The LLM returns a structured `LinhNews` object (see `app/llm_schema.py`); the server renders both the HTML page (`app/html_renderer.py`) and the PDF (`app/pdf_renderer.py`) from that data — the LLM never produces HTML.
 - PDF: WeasyPrint (system serif fonts, 15.296in × 27.193in broadsheet page, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
 - Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) once daily at 11:00 UTC (6 AM EST / 7 AM EDT).
@@ -52,9 +52,11 @@ Pipeline (`app/generate.py`):
 1. Read `news.pr` from the repo (single source of truth for the prompt).
 2. Overlay DB state: `hidden_movies`, `hidden_calendars`, `important_events`.
 3. Live-list Google calendars (so newly subscribed ones appear automatically) and fetch events for `[today, today+30d]` from non-hidden calendars; drop past events.
-4. Substitute `{{...}}` placeholders into `news.pr` and call Claude with `web_search`.
-5. Parse the strict-JSON response into `html` + `pdf_html`. Render `pdf_html` through WeasyPrint.
-6. **Latest-wins upsert** into `editions` keyed by `date` — no `slot` column. The 7 PM run overwrites the 7 AM run; a manual refresh after that overwrites that.
+4. Substitute `{{...}}` placeholders into `news.pr` and call Claude with `web_search`. The response is a structured `LinhNews` object (see `app/llm_schema.py`).
+5. Detect any of the 8 required sections the model omitted and re-roll each in a focused single-section call.
+6. For each subsection that supplied candidate image URLs, download one (landscape preferred), resize to ≤400px wide via Pillow, persist the bytes in `subsection_images`. The viewer serves them via `GET /edition-image/{id}`.
+7. Render the HTML body via `app/html_renderer.py` and the PDF input via `app/pdf_renderer.py`; pipe the PDF input through WeasyPrint.
+8. **Latest-wins upsert** into `editions` keyed by `date` — no `slot` column. The 7 PM run overwrites the 7 AM run; a manual refresh after that overwrites that. The structured response is also persisted on `editions.content_json` so a re-render doesn't require another LLM call.
 
 ## Auth model (two tiers)
 
@@ -67,7 +69,7 @@ Server-side enforcement via `require_viewer` and `require_admin` FastAPI depende
 
 `news.pr` at the repo root is the prompt template, with `{{...}}` placeholders filled at generation time. The fenced `<!-- CUSTOM_TOPICS_BEGIN --> ... <!-- CUSTOM_TOPICS_END -->` block is a freeform area the user edits to add new topic instructions; everything inside it is forwarded verbatim into the prompt. Keep the fence intact when editing.
 
-Sources rendering is HTML-only — never include source citations in `pdf_html`.
+Sources rendering is HTML-only — `app/html_renderer.py` adds source links to news items; `app/pdf_renderer.py` deliberately omits them from the PDF.
 
 ## Push hygiene
 
@@ -85,7 +87,7 @@ Whenever you trigger a new edition (e.g. `python -m app.generate refresh`, calli
 2. **Sections present and sensible**:
    - Each requested section (politics, NJ/NY, Dorchester, finance, AI, stocks, movies, weather, calendar) appears only if it has fresh, dated content.
    - News items end with a `Sources:` line; tooltips hold the URL.
-   - Stocks: a "why it moved" blurb appears **only** when the daily move is > ±5%.
+   - Stocks: every ticker carries a "why it moved" tooltip with ≥5 sources sorted most-trusted first; the depth of the explanation scales with the size of the move.
    - Movies: hidden titles are absent; early-access vs. wide-release dedupe is correct; old re-releases (>1 year old) skipped.
    - Weather is for Woodcliff Lake 07677.
    - Calendar: no past events, hidden calendars excluded, important all-day events surface with appropriate lead time.
@@ -97,8 +99,8 @@ If any of the above fails, fix the underlying issue (prompt, overlays, calendar 
 ## Things to be careful about
 
 - Movie dedup: early-access vs wide-release entries for the same film. Show early-access while its date is in the future; switch to wide-release once past. Skip re-releases of films originally released > 1 year ago, and any title in `hidden_movies` whose `hidden_until >= today`.
-- Stocks "why it moved" blurb appears **only** when `|daily %| > 5`.
-- Weather is for **15 Hunter Ridge, Woodcliff Lake, NJ 07677**; coordinates are passed via `{{WEATHER_COORDS}}`.
+- Every stock carries a "why it moved" tooltip with ≥5 sources, depth scaled to the move size; the renderer produces the tooltip from `Stock.why_it_moved` in the LinhNews response.
+- Weather is for **15 Hunter Ridge, Woodcliff Lake, NJ 07677**; coordinates are read from `settings.weather_coords` and passed directly to the NWS client. The LLM has no role in weather generation.
 - Calendar fetch always drops past events and must include calendars added to Google after deploy (re-list `calendarList` each run; do not cache the calendar list across runs).
 - Mobile-first responsive layout (375px / 768px / 1200px breakpoints, `clamp()` typography, ≥44px touch targets).
 

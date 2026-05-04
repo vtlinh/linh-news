@@ -4,6 +4,7 @@ Revision ID: 0004_kv_cache
 Revises: 0003_suppressed_events
 Create Date: 2026-04-30
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

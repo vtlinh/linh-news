@@ -4,6 +4,7 @@ Revision ID: 0008_event_emojis
 Revises: 0007_edition_pdf_html
 Create Date: 2026-05-01
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

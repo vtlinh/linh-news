@@ -4,6 +4,7 @@ Revision ID: 0010_favorite_movies
 Revises: 0009_movies
 Create Date: 2026-05-02
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

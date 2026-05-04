@@ -4,6 +4,7 @@ Revision ID: 0005_watchlist_stocks
 Revises: 0004_kv_cache
 Create Date: 2026-04-30
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

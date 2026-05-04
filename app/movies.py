@@ -25,6 +25,7 @@ applied at service time:
 
 The admin Movies page calls :func:`get_movies` directly and applies its own
 rating filter from the query string."""
+
 from __future__ import annotations
 
 import html
@@ -83,10 +84,7 @@ def _pick_backdrop(
     each candidate in turn; the first 2xx wins. ``liveness_check=False``
     short-circuits the HEAD checks (used by tests to keep them offline)."""
     raw = m.get("backdrops") or []
-    valid = [
-        u for u in raw
-        if isinstance(u, str) and _VALID_BACKDROP_RE.match(u)
-    ]
+    valid = [u for u in raw if isinstance(u, str) and _VALID_BACKDROP_RE.match(u)]
     if not valid:
         return None
     if not liveness_check:
@@ -138,15 +136,16 @@ def fetch_year_movie_list() -> list[dict]:
     log.info(
         "TMDB candidates: %d from now_playing+upcoming, %d from cert-gated "
         "discover, %d from popularity-sorted discover, %d unique after merge.",
-        len(feed), len(discover), len(popular), len(candidates),
+        len(feed),
+        len(discover),
+        len(popular),
+        len(candidates),
     )
 
     ids = [int(c["id"]) for c in candidates if c.get("id") is not None]
 
     with tmdb._client() as client, ThreadPoolExecutor(max_workers=8) as pool:  # noqa: SLF001 — same module family
-        details = list(pool.map(
-            lambda i: tmdb.fetch_movie_detail(i, client=client), ids
-        ))
+        details = list(pool.map(lambda i: tmdb.fetch_movie_detail(i, client=client), ids))
 
     rows: list[dict] = []
     now = datetime.now(UTC)
@@ -154,21 +153,21 @@ def fetch_year_movie_list() -> list[dict]:
         if not d or not d.get("title"):
             continue
         rd = d.get("release_date")
-        status = (
-            "in_theaters" if (rd is not None and rd <= today) else "upcoming"
+        status = "in_theaters" if (rd is not None and rd <= today) else "upcoming"
+        rows.append(
+            {
+                "tmdb_id": d["tmdb_id"],
+                "title": d["title"],
+                "release_date": rd,
+                "rating": d.get("rating") or "",
+                "status": status,
+                "summary": d.get("summary") or "",
+                "trailers": d.get("trailers") or [],
+                "poster_url": d.get("poster_url"),
+                "backdrops": d.get("backdrops") or [],
+                "fetched_at": now,
+            }
         )
-        rows.append({
-            "tmdb_id": d["tmdb_id"],
-            "title": d["title"],
-            "release_date": rd,
-            "rating": d.get("rating") or "",
-            "status": status,
-            "summary": d.get("summary") or "",
-            "trailers": d.get("trailers") or [],
-            "poster_url": d.get("poster_url"),
-            "backdrops": d.get("backdrops") or [],
-            "fetched_at": now,
-        })
 
     _upsert_movies(rows, today=today)
     return _read_all_as_dicts()
@@ -210,9 +209,9 @@ def _should_refresh() -> bool:
 def _read_all_as_dicts() -> list[dict]:
     Maker = session_factory()
     with Maker() as s:
-        rows = s.execute(
-            select(Movie).order_by(Movie.release_date.asc().nullslast())
-        ).scalars().all()
+        rows = (
+            s.execute(select(Movie).order_by(Movie.release_date.asc().nullslast())).scalars().all()
+        )
         return [m.to_dict() for m in rows]
 
 
@@ -237,7 +236,8 @@ def _upsert_movies(rows: list[dict], *, today: date) -> None:
                 if c.name != "tmdb_id"
             }
             stmt = stmt.on_conflict_do_update(
-                index_elements=["tmdb_id"], set_=update_cols,
+                index_elements=["tmdb_id"],
+                set_=update_cols,
             )
             s.execute(stmt)
         else:
@@ -333,10 +333,7 @@ def _format_release_label(d: date) -> str:
 
 
 def _valid_trailers(trailers) -> list[str]:
-    return [
-        t for t in (trailers or [])
-        if isinstance(t, str) and _VALID_TRAILER_RE.match(t)
-    ]
+    return [t for t in (trailers or []) if isinstance(t, str) and _VALID_TRAILER_RE.match(t)]
 
 
 def _trailer_button_html(trailers: list[str]) -> str:
@@ -349,20 +346,21 @@ def _trailer_button_html(trailers: list[str]) -> str:
             'target="_blank" rel="noopener" '
             'title="Watch the trailer on YouTube">▶ Trailer</a>'
         )
-    parts = ['<span class="sources" tabindex="0">▶ Trailers'
-             '<span class="sources-popup">']
+    parts = ['<span class="sources" tabindex="0">▶ Trailers<span class="sources-popup">']
     for i, url in enumerate(valid):
         label = "Official Trailer" if i == 0 else f"Trailer {i + 1}"
         parts.append(
-            f'<a href="{html.escape(url)}" target="_blank" rel="noopener">'
-            f'{html.escape(label)}</a>'
+            f'<a href="{html.escape(url)}" target="_blank" rel="noopener">{html.escape(label)}</a>'
         )
-    parts.append('</span></span>')
+    parts.append("</span></span>")
     return "".join(parts)
 
 
 def _render_card_html(
-    m: dict, today: date, *, rng: random.Random | None = None,
+    m: dict,
+    today: date,
+    *,
+    rng: random.Random | None = None,
 ) -> str:
     title = (m.get("title") or "").strip()
     rd = _parse_release(m)
@@ -371,17 +369,18 @@ def _render_card_html(
     summary = (m.get("summary") or "").strip()
     is_past = rd <= today
     sub = (
-        f"In theaters since {_format_release_label(rd)}" if is_past
+        f"In theaters since {_format_release_label(rd)}"
+        if is_past
         else f"Opens {_format_release_label(rd)}"
     )
     title_esc = html.escape(title)
-    summary_html = f'<p>{html.escape(summary)}</p>' if summary else ""
+    summary_html = f"<p>{html.escape(summary)}</p>" if summary else ""
     trailer_html = _trailer_button_html(m.get("trailers") or [])
     backdrop = _pick_backdrop(m, rng=rng)
     backdrop_html = (
-        f'<img class="movie-backdrop" src="{html.escape(backdrop)}" '
-        f'alt="" loading="lazy">'
-        if backdrop else ""
+        f'<img class="movie-backdrop" src="{html.escape(backdrop)}" alt="" loading="lazy">'
+        if backdrop
+        else ""
     )
     # The title links out to the movie's TMDB page when we know the id;
     # otherwise it renders as plain text.
@@ -398,11 +397,11 @@ def _render_card_html(
     # Admins still hide movies from the dedicated /movies admin page.
     return (
         '<article class="movie-card">'
-        f'{backdrop_html}'
+        f"{backdrop_html}"
         f'<div class="movie-title">{title_inner}</div>'
         f'<div class="movie-subtitle">{html.escape(sub)}</div>'
-        f'{summary_html}{trailer_html}'
-        '</article>'
+        f"{summary_html}{trailer_html}"
+        "</article>"
     )
 
 
@@ -419,25 +418,23 @@ def render_html_section(
     Returns an empty string when no movies match — the caller should drop
     the section entirely in that case."""
     in_theaters, coming_soon = filter_for_edition(
-        movies, today,
-        hidden_titles=hidden_titles, allowed_ratings=allowed_ratings,
+        movies,
+        today,
+        hidden_titles=hidden_titles,
+        allowed_ratings=allowed_ratings,
         favorite_titles=favorite_titles,
     )
     if not in_theaters and not coming_soon:
         return ""
-    parts: list[str] = ['<section><h2>🎬 Movies</h2>']
+    parts: list[str] = ["<section><h2>🎬 Movies</h2>"]
     if in_theaters:
-        parts.append(
-            '<h3 style="font-size:1em;margin:8px 0 4px">Now in theaters</h3>'
-        )
+        parts.append('<h3 style="font-size:1em;margin:8px 0 4px">Now in theaters</h3>')
         parts.extend(_render_card_html(m, today) for m in in_theaters)
     if coming_soon:
-        parts.append(
-            '<h3 style="font-size:1em;margin:12px 0 4px">Coming soon</h3>'
-        )
+        parts.append('<h3 style="font-size:1em;margin:12px 0 4px">Coming soon</h3>')
         parts.extend(_render_card_html(m, today) for m in coming_soon)
-    parts.append('</section>')
-    return ''.join(parts)
+    parts.append("</section>")
+    return "".join(parts)
 
 
 def render_pdf_html(
@@ -456,8 +453,10 @@ def render_pdf_html(
     title, release-date subtitle, and the short ``summary`` description.
     """
     in_theaters, coming_soon = filter_for_edition(
-        movies, today,
-        hidden_titles=hidden_titles, allowed_ratings=allowed_ratings,
+        movies,
+        today,
+        hidden_titles=hidden_titles,
+        allowed_ratings=allowed_ratings,
         favorite_titles=favorite_titles,
     )
     pool = in_theaters + coming_soon
@@ -470,21 +469,17 @@ def render_pdf_html(
         "border-bottom:0.5pt solid #000;margin:0 0 3pt;padding-bottom:1pt;"
         "font-weight:bold"
     )
-    row_style = (
-        "margin:0 0 8pt;font-size:10pt;line-height:1.25;break-inside:avoid"
-    )
-    sub_style = "font-size:9pt;color:#555"
-    desc_style = "font-size:12pt;color:#222;margin-top:2pt;line-height:1.3"
-    # Rail width is 2.4in, so a free 16:9 image is ~1.35in tall — eight
-    # cards × 1.35in = 10.8in of just backdrops, which the one-page fit
-    # logic can't recover from (it drops every news section and still
-    # ships a placeholder). Cap height at 0.6in with object-fit:cover so
-    # the image crops instead of stretching; total backdrop area for 8
-    # cards becomes ~4.8in, comfortably inside the page budget.
-    backdrop_style = (
-        "display:block;width:100%;height:0.6in;object-fit:cover;"
-        "margin:0 0 3pt"
-    )
+    row_style = "margin:0 0 8pt;line-height:1.25;break-inside:avoid"
+    # Movie title: larger + bold, on its own line above the release subtitle.
+    title_style = "font-size:13pt;font-weight:bold;line-height:1.2"
+    sub_style = "font-size:9pt;color:#555;font-weight:bold"
+    # Description: bold so it carries the same visual weight as the title.
+    desc_style = "font-size:11pt;color:#222;margin-top:2pt;line-height:1.3;font-weight:bold"
+    # Backdrops keep their original aspect ratio (no cover-cropping). With a
+    # 2.4in rail and ~16:9 TMDB stills this is ~1.35in tall per card. The
+    # two-phase fit loop in app/pdf.py drops movie cards (last first) and
+    # then calendar events when the rail can't fit at the minimum font.
+    backdrop_style = "display:block;width:100%;height:auto;margin:0 0 3pt"
     parts = [f'<div style="{label_style}">Movies</div>']
     for m in items:
         title = (m.get("title") or "").strip()
@@ -493,24 +488,23 @@ def render_pdf_html(
             continue
         is_past = rd <= today
         sub = (
-            f"In theaters {_format_release_label(rd)}" if is_past
+            f"In theaters {_format_release_label(rd)}"
+            if is_past
             else f"Opens {_format_release_label(rd)}"
         )
         summary = (m.get("summary") or "").strip()
-        desc_html = (
-            f'<div style="{desc_style}">{html.escape(summary)}</div>'
-            if summary else ""
-        )
+        desc_html = f'<div style="{desc_style}">{html.escape(summary)}</div>' if summary else ""
         backdrop = _pick_backdrop(m)
         backdrop_html = (
             f'<img class="movie-backdrop" src="{html.escape(backdrop)}" '
             f'alt="" style="{backdrop_style}">'
-            if backdrop else ""
+            if backdrop
+            else ""
         )
         parts.append(
             f'<div style="{row_style}">{backdrop_html}'
-            f'<strong>{html.escape(title)}</strong> '
-            f'<span style="{sub_style}">— {html.escape(sub)}</span>'
-            f'{desc_html}</div>'
+            f'<div style="{title_style}">{html.escape(title)}</div>'
+            f'<div style="{sub_style}">{html.escape(sub)}</div>'
+            f"{desc_html}</div>"
         )
     return "\n".join(parts)

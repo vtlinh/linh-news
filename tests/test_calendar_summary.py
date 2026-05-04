@@ -40,11 +40,13 @@ def test_render_day_html_uses_emoji_map_and_bullet_separator():
 
 
 def test_emojis_for_titles_uses_db_cache_and_skips_llm(db_session):
-    db_session.add(EventEmoji(
-        title_norm="library visit",
-        emoji="📚",
-        generated_at=datetime.now(UTC),
-    ))
+    db_session.add(
+        EventEmoji(
+            title_norm="library visit",
+            emoji="📚",
+            generated_at=datetime.now(UTC),
+        )
+    )
     db_session.commit()
 
     with patch.object(calendar_summary, "_emoji_lookup_single_call") as llm:
@@ -55,11 +57,13 @@ def test_emojis_for_titles_uses_db_cache_and_skips_llm(db_session):
 
 def test_emojis_for_titles_calls_llm_once_for_missing_then_persists(db_session):
     with patch.object(
-        calendar_summary, "_emoji_lookup_single_call",
+        calendar_summary,
+        "_emoji_lookup_single_call",
         return_value={"Soccer practice": "⚽"},
     ) as llm:
         result = calendar_summary.emojis_for_titles(
-            db_session, ["Soccer practice"],
+            db_session,
+            ["Soccer practice"],
         )
     llm.assert_called_once_with(["Soccer practice"])
     assert result == {"Soccer practice": "⚽"}
@@ -67,7 +71,8 @@ def test_emojis_for_titles_calls_llm_once_for_missing_then_persists(db_session):
     # Second call with the same title must hit the DB, not the LLM.
     with patch.object(calendar_summary, "_emoji_lookup_single_call") as llm2:
         result2 = calendar_summary.emojis_for_titles(
-            db_session, ["soccer practice"],
+            db_session,
+            ["soccer practice"],
         )
     llm2.assert_not_called()
     assert result2 == {"soccer practice": "⚽"}
@@ -76,14 +81,18 @@ def test_emojis_for_titles_calls_llm_once_for_missing_then_persists(db_session):
 def test_emojis_for_titles_leaves_uncached_when_llm_fails(db_session):
     """LLM failure is non-fatal: missing titles are simply absent from
     the result and are NOT persisted (so the next refresh retries)."""
+
     def boom(_titles):
         raise RuntimeError("network is down")
 
     with patch.object(
-        calendar_summary, "_emoji_lookup_single_call", side_effect=boom,
+        calendar_summary,
+        "_emoji_lookup_single_call",
+        side_effect=boom,
     ):
         result = calendar_summary.emojis_for_titles(
-            db_session, ["School pickup"],
+            db_session,
+            ["School pickup"],
         )
     assert result == {}
     assert db_session.get(EventEmoji, "school pickup") is None
@@ -93,16 +102,21 @@ def test_persist_events_for_days_writes_events_and_loads_inline(db_session):
     """Refresh persists raw events; load_calendar_section renders inline
     from persisted events + the DB emoji map (no LLM at view time)."""
     from app.db import CalendarDaySummary
-    db_session.add_all([
-        EventEmoji(
-            title_norm="library visit", emoji="📚",
-            generated_at=datetime.now(UTC),
-        ),
-        EventEmoji(
-            title_norm="dad's birthday", emoji="🎂",
-            generated_at=datetime.now(UTC),
-        ),
-    ])
+
+    db_session.add_all(
+        [
+            EventEmoji(
+                title_norm="library visit",
+                emoji="📚",
+                generated_at=datetime.now(UTC),
+            ),
+            EventEmoji(
+                title_norm="dad's birthday",
+                emoji="🎂",
+                generated_at=datetime.now(UTC),
+            ),
+        ]
+    )
     db_session.commit()
 
     events_by_day = {
@@ -131,10 +145,14 @@ def test_load_calendar_section_re_renders_after_renderer_change(db_session):
     day, then change the emoji for one of its titles and confirm the
     next view picks up the new emoji without any cache invalidation."""
     from app.db import CalendarDaySummary
-    db_session.add(EventEmoji(
-        title_norm="soccer practice", emoji="⚽",
-        generated_at=datetime.now(UTC),
-    ))
+
+    db_session.add(
+        EventEmoji(
+            title_norm="soccer practice",
+            emoji="⚽",
+            generated_at=datetime.now(UTC),
+        )
+    )
     db_session.commit()
 
     events_by_day = {
@@ -161,10 +179,13 @@ def test_load_calendar_section_re_renders_after_renderer_change(db_session):
 
 
 def test_read_emoji_map_is_pure_db_read(db_session):
-    db_session.add(EventEmoji(
-        title_norm="dentist", emoji="🦷",
-        generated_at=datetime.now(UTC),
-    ))
+    db_session.add(
+        EventEmoji(
+            title_norm="dentist",
+            emoji="🦷",
+            generated_at=datetime.now(UTC),
+        )
+    )
     db_session.commit()
     out = calendar_summary.read_emoji_map(db_session, ["Dentist", "Unknown"])
     assert out == {"Dentist": "🦷"}

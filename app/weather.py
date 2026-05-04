@@ -1,9 +1,10 @@
-"""Real-time current-conditions fetch from the NWS (National Weather Service) API.
+"""Weather is sourced entirely from the NWS (National Weather Service) API.
 
-NWS is free, no API key required, and authoritative for US locations.
-Only the 'Now' observation (temperature + condition + wind) comes from here.
-Today/tomorrow forecast high/low is still handled by Claude via web_search.
+NWS is free, no API key required, and authoritative for US locations. We
+fetch the current observation, today/tomorrow forecast highs/lows, and
+active alerts here. The LLM has no role in weather generation.
 """
+
 from __future__ import annotations
 
 import json
@@ -63,8 +64,24 @@ def _emoji(desc: str) -> str:
 
 
 def _wind_dir(degrees: float) -> str:
-    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dirs = [
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW",
+    ]
     return dirs[round(degrees / 22.5) % 16]
 
 
@@ -81,8 +98,8 @@ def fetch_current_now(lat_lon: str) -> str:
     """Return a formatted 'Now' string from NWS latest observation.
 
     Format: '12°C ⛅ · Wind NW 10 mph'
-    Returns '' on any error — the caller should then let Claude fall back to
-    web_search for the current observation.
+    Returns '' on any error — the caller falls back to the previously
+    cached value (see ``get_now_cached``).
     """
     try:
         lat, lon = [p.strip() for p in lat_lon.split(",", 1)]
@@ -100,9 +117,7 @@ def fetch_current_now(lat_lon: str) -> str:
         station_id = features[0]["properties"]["stationIdentifier"]
 
         # 3. Fetch latest observation.
-        obs = _get_json(
-            f"https://api.weather.gov/stations/{station_id}/observations/latest"
-        )
+        obs = _get_json(f"https://api.weather.gov/stations/{station_id}/observations/latest")
         props = obs["properties"]
 
         temp_raw = (props.get("temperature") or {}).get("value")
@@ -128,8 +143,15 @@ def fetch_current_now(lat_lon: str) -> str:
         log.info("NWS now: %s (station %s)", result, station_id)
         return result
 
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
-            KeyError, ValueError, json.JSONDecodeError) as e:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        OSError,
+        KeyError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as e:
         log.warning("NWS current-conditions fetch failed: %s", e)
         return ""
 
@@ -179,27 +201,34 @@ def fetch_forecast(lat_lon: str) -> dict:
 
         out: dict = {}
         if today_day:
-            out["today_h"] = round(_to_celsius(
-                today_day["temperature"], today_day.get("temperatureUnit", "C")
-            ))
+            out["today_h"] = round(
+                _to_celsius(today_day["temperature"], today_day.get("temperatureUnit", "C"))
+            )
             out["today_em"] = _emoji(today_day.get("shortForecast", ""))
         if nights:
-            out["today_l"] = round(_to_celsius(
-                nights[0]["temperature"], nights[0].get("temperatureUnit", "C")
-            ))
+            out["today_l"] = round(
+                _to_celsius(nights[0]["temperature"], nights[0].get("temperatureUnit", "C"))
+            )
         if len(days) >= 2:
-            out["tomorrow_h"] = round(_to_celsius(
-                days[1]["temperature"], days[1].get("temperatureUnit", "C")
-            ))
+            out["tomorrow_h"] = round(
+                _to_celsius(days[1]["temperature"], days[1].get("temperatureUnit", "C"))
+            )
             out["tomorrow_em"] = _emoji(days[1].get("shortForecast", ""))
         if len(nights) >= 2:
-            out["tomorrow_l"] = round(_to_celsius(
-                nights[1]["temperature"], nights[1].get("temperatureUnit", "C")
-            ))
+            out["tomorrow_l"] = round(
+                _to_celsius(nights[1]["temperature"], nights[1].get("temperatureUnit", "C"))
+            )
         return out
 
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
-            KeyError, ValueError, json.JSONDecodeError) as e:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        OSError,
+        KeyError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as e:
         log.warning("NWS forecast fetch failed: %s", e)
         return {}
 
@@ -215,9 +244,8 @@ def fetch_alerts(lat_lon: str) -> list[str]:
     """
     try:
         lat, lon = [p.strip() for p in lat_lon.split(",", 1)]
-        url = (
-            "https://api.weather.gov/alerts/active?"
-            + urllib.parse.urlencode({"point": f"{lat},{lon}"})
+        url = "https://api.weather.gov/alerts/active?" + urllib.parse.urlencode(
+            {"point": f"{lat},{lon}"}
         )
         data = _get_json(url)
         out: list[str] = []
@@ -237,8 +265,15 @@ def fetch_alerts(lat_lon: str) -> list[str]:
                     pass
             out.append(f"{event}{suffix}")
         return out
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
-            KeyError, ValueError, json.JSONDecodeError) as e:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        OSError,
+        KeyError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as e:
         log.warning("NWS alerts fetch failed: %s", e)
         return []
 
@@ -247,7 +282,9 @@ def fetch_alerts(lat_lon: str) -> list[str]:
 
 
 def get_now_cached(
-    s: Session, coords: str, max_age: timedelta = timedelta(hours=1),
+    s: Session,
+    coords: str,
+    max_age: timedelta = timedelta(hours=1),
 ) -> str:
     """Return the cached 'Now' string, refreshing if older than ``max_age``.
 
@@ -283,14 +320,25 @@ def get_now_cached(
 
 
 def build_weather_strip(
-    now: str, forecast: dict, alerts: list[str],
+    now: str,
+    forecast: dict,
+    alerts: list[str],
+    refreshed_at: datetime | None = None,
 ) -> str:
     """Assemble the one-line weather strip HTML.
 
     Format::
-        <div class="weather-strip">Now 12°C 🌤 · Today H 14° / L 7° ☀️
-            · Tomorrow H 16° / L 9° ☁️ · ⚠ Wind advisory until 6 PM</div>
+        <div class="weather-strip">
+          <span class="weather-main">Now 12°C 🌤 · Today H 14° / L 7° ☀️
+            · Tomorrow H 16° / L 9° ☁️ · ⚠ Wind advisory until 6 PM</span>
+          <span class="weather-refreshed">Refreshed at 14:00 EDT</span>
+        </div>
+
+    The CSS pins ``.weather-refreshed`` to the right edge of the row,
+    mirroring the masthead-corner refreshed label in the PDF.
     """
+    from app.settings import LOCAL_TZ
+
     parts: list[str] = []
     if now:
         parts.append(f"Now {now}")
@@ -322,4 +370,20 @@ def build_weather_strip(
     for a in alerts or []:
         parts.append(f"⚠ {a}")
     inner = " · ".join(p for p in parts if p)
-    return f'<div class="weather-strip">{inner}</div>'
+    refreshed_html = ""
+    if refreshed_at is not None:
+        ts = refreshed_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        ts = ts.astimezone(LOCAL_TZ)
+        tz_abbrev = ts.tzname() or "EST"
+        refreshed_html = (
+            f'<span class="weather-refreshed">Refreshed at '
+            f"{ts.hour:02d}:{ts.minute:02d} {tz_abbrev}</span>"
+        )
+    return (
+        f'<div class="weather-strip">'
+        f'<span class="weather-main">{inner}</span>'
+        f"{refreshed_html}"
+        f"</div>"
+    )

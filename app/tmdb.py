@@ -24,6 +24,7 @@ Public helpers:
 * :func:`fetch_movie_detail` — ``/movie/{id}?append_to_response=videos,
   release_dates`` for one movie, returning the fields we store.
 """
+
 from __future__ import annotations
 
 import logging
@@ -188,7 +189,9 @@ def discover_popular_upcoming(
             )
             if r.status_code != 200:
                 log.warning(
-                    "TMDB discover-popular page %s -> %s", page, r.status_code,
+                    "TMDB discover-popular page %s -> %s",
+                    page,
+                    r.status_code,
                 )
                 break
             body = r.json()

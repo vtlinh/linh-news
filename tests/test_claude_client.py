@@ -35,8 +35,10 @@ def test_call_with_schema_returns_tool_input():
     p = _patch_stream(fake)
     try:
         out = call_with_schema(
-            system="sys", user="u",
-            schema={"type": "object"}, schema_name="my_tool",
+            system="sys",
+            user="u",
+            schema={"type": "object"},
+            schema_name="my_tool",
             schema_description="desc",
         )
     finally:
@@ -55,23 +57,41 @@ def test_call_with_schema_raises_when_tool_not_invoked():
     try:
         with pytest.raises(ValueError, match="did not invoke"):
             call_with_schema(
-                system="sys", user="u",
-                schema={"type": "object"}, schema_name="my_tool",
+                system="sys",
+                user="u",
+                schema={"type": "object"},
+                schema_name="my_tool",
                 schema_description="desc",
             )
     finally:
         p.stop()
 
 
-def test_generate_edition_returns_html():
-    fake = _fake_response("return_edition", {"html": "<p>h</p>"})
+def test_generate_edition_returns_structured_dict():
+    payload = {
+        "sections": [
+            {
+                "key": "us",
+                "title": "🇺🇸 Top US Political News",
+                "subsections": [
+                    {
+                        "title": "h",
+                        "text": "body",
+                        "sources": [{"url": "https://x", "title": "T"}],
+                    }
+                ],
+            }
+        ],
+        "stocks": [],
+    }
+    fake = _fake_response("return_edition", payload)
     p = _patch_stream(fake)
     try:
         out = generate_edition("template {{DATE}}", {"DATE": "2026-04-30"})
     finally:
         p.stop()
-    assert out == {"html": "<p>h</p>"}
+    assert out == payload
 
 
 def test_edition_schema_has_required_keys():
-    assert EDITION_SCHEMA["required"] == ["html"]
+    assert set(EDITION_SCHEMA["required"]) == {"sections", "stocks"}

@@ -35,15 +35,20 @@ def test_home_substitutes_weather_placeholder(client, login_as, db_session):
     """The view-time `_inject_weather` injector must replace the placeholder
     using the per-edition forecast/alerts JSON and the cached 'Now' string."""
     from app import weather
+
     db_session.add(
         Edition(
             date=date(2026, 5, 2),
-            html='<!-- WEATHER_PLACEHOLDER --><div>x</div>',
+            html="<!-- WEATHER_PLACEHOLDER --><div>x</div>",
             pdf=b"%PDF-1.4 fake",
             generated_at=datetime.now(UTC),
             weather_forecast_json={
-                "today_h": 14, "today_l": 7, "today_em": "☀️",
-                "tomorrow_h": 16, "tomorrow_l": 9, "tomorrow_em": "☁️",
+                "today_h": 14,
+                "today_l": 7,
+                "today_em": "☀️",
+                "tomorrow_h": 16,
+                "tomorrow_l": 9,
+                "tomorrow_em": "☁️",
             },
             weather_alerts_json=["Wind Advisory until 6 PM"],
         )
@@ -51,14 +56,19 @@ def test_home_substitutes_weather_placeholder(client, login_as, db_session):
     db_session.commit()
 
     login_as("friend@example.com")
-    with patch("app.settings.local_today", return_value=date(2026, 5, 2)), \
-            patch.object(weather, "get_now_cached", return_value="12°C ⛅"):
+    with (
+        patch("app.settings.local_today", return_value=date(2026, 5, 2)),
+        patch.object(weather, "get_now_cached", return_value="12°C ⛅"),
+    ):
         r = client.get("/d/2026-05-02")
     assert r.status_code == 200
     assert "<!-- WEATHER_PLACEHOLDER -->" not in r.text
     assert "Now 12°C ⛅" in r.text
     assert "Today H 14° / L 7° ☀️" in r.text
     assert "⚠ Wind Advisory until 6 PM" in r.text
+    # The view-time injector passes the edition's generated_at so the
+    # "Refreshed at HH:MM TZ" badge renders on the right of the strip.
+    assert 'class="weather-refreshed"' in r.text
 
 
 def test_pdf_404_when_missing(client, login_as):
@@ -76,6 +86,7 @@ def test_pdf_streams_when_present(client, login_as, db_session):
     # Download filename includes a 10-hex-char content-hash suffix so each
     # newly generated edition gets a unique name.
     import hashlib
+
     expected = hashlib.sha256(r.content).hexdigest()[:10]
     cd = r.headers["content-disposition"]
     assert f"linh-times-2026-04-30-{expected}.pdf" in cd
@@ -126,8 +137,10 @@ def test_refresh_spawns_detached_subprocess(client, login_as):
 
 def test_refresh_returns_409_when_lock_held(client, login_as):
     login_as("vtlinh87@gmail.com")
-    with patch("app.main.cache.begin_edition_refresh", return_value=False), \
-         patch("app.main.subprocess.Popen") as popen:
+    with (
+        patch("app.main.cache.begin_edition_refresh", return_value=False),
+        patch("app.main.subprocess.Popen") as popen,
+    ):
         r = client.post("/refresh")
     assert r.status_code == 409
     popen.assert_not_called()
@@ -166,6 +179,7 @@ def test_pdf_latest_401_when_token_unset(client, db_session):
 def test_pdf_latest_query_param(client, db_session, monkeypatch):
     _seed_latest(db_session, date(2026, 4, 30))
     from app.settings import get_settings
+
     monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
 
     r = client.get("/pdf/latest?token=s3cret")
@@ -182,6 +196,7 @@ def test_pdf_latest_query_param(client, db_session, monkeypatch):
 def test_pdf_latest_bearer_header(client, db_session, monkeypatch):
     _seed_latest(db_session, date(2026, 4, 30))
     from app.settings import get_settings
+
     monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
 
     r = client.get("/pdf/latest", headers={"Authorization": "Bearer s3cret"})
@@ -195,6 +210,7 @@ def test_pdf_latest_bearer_header(client, db_session, monkeypatch):
 def test_pdf_day_with_token_query(client, db_session, monkeypatch):
     _seed_edition(db_session, date(2026, 4, 30))
     from app.settings import get_settings
+
     monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
 
     client.cookies.clear()
@@ -206,6 +222,7 @@ def test_pdf_day_with_token_query(client, db_session, monkeypatch):
 def test_pdf_day_with_bearer_header(client, db_session, monkeypatch):
     _seed_edition(db_session, date(2026, 4, 30))
     from app.settings import get_settings
+
     monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
 
     client.cookies.clear()
@@ -221,6 +238,7 @@ def test_pdf_day_with_bearer_header(client, db_session, monkeypatch):
 def test_pdf_day_wrong_token_falls_back_to_login(client, db_session, monkeypatch):
     _seed_edition(db_session, date(2026, 4, 30))
     from app.settings import get_settings
+
     monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
 
     client.cookies.clear()
@@ -243,12 +261,14 @@ def test_pdf_latest_does_not_require_login(client, db_session, monkeypatch):
     any session cookie — confirms no Google login redirect on this route."""
     _seed_latest(db_session, date(2026, 4, 30))
     from app.settings import get_settings
+
     monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
 
     # Make absolutely sure we have no session cookie set on the client.
     client.cookies.clear()
     r = client.get(
-        "/pdf/latest", headers={"Authorization": "Bearer s3cret"},
+        "/pdf/latest",
+        headers={"Authorization": "Bearer s3cret"},
         follow_redirects=False,
     )
     assert r.status_code == 200

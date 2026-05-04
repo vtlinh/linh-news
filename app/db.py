@@ -4,7 +4,17 @@ import logging
 from collections.abc import Iterator
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Integer, LargeBinary, String, Text, create_engine
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    create_engine,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -33,6 +43,35 @@ class Edition(Base):
     # separately on each view via the weather_now cache.
     weather_forecast_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     weather_alerts_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Structured LLM response (LinhNews from app.llm_schema). The renderer
+    # produces ``html`` from this; keeping it lets us re-render without
+    # re-calling Claude. ``NULL`` for legacy editions generated before the
+    # structured pipeline.
+    content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class SubsectionImage(Base):
+    """Image bytes belonging to a Subsection of an Edition.
+
+    The LLM returns candidate image URLs; the generation pipeline downloads
+    one (landscape preferred), resizes to ≤400px wide, and stores the bytes
+    here. The viewer references the row by id via ``/edition-image/{id}``.
+    """
+
+    __tablename__ = "subsection_images"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    edition_date: Mapped[date] = mapped_column(
+        Date,
+        ForeignKey("editions.date", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    section_key: Mapped[str] = mapped_column(String, nullable=False)
+    subsection_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    bytes_: Mapped[bytes] = mapped_column("bytes", LargeBinary, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class HiddenMovie(Base):
@@ -46,6 +85,7 @@ class FavoriteMovie(Base):
     admin Movies page (always visible) and force inclusion in the daily
     edition / PDF when their release date falls in the favorite window
     (today - 3 weeks, today + 1 month)."""
+
     __tablename__ = "favorite_movies"
     title: Mapped[str] = mapped_column(String, primary_key=True)
 
@@ -54,6 +94,7 @@ class Movie(Base):
     """The full TMDB-sourced movie list. Refreshed weekly; filtered to the
     user's allowed MPAA ratings + ``hidden_movies`` overlay at service time
     (admin Movies page, edition HTML injection, PDF generation)."""
+
     __tablename__ = "movies"
     tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -68,7 +109,8 @@ class Movie(Base):
     # the movie title in both the HTML page and the PDF rail.
     backdrops: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
     )
 
     def to_dict(self) -> dict:
@@ -94,6 +136,7 @@ class HiddenCalendar(Base):
 class SuppressedEvent(Base):
     """Events explicitly marked unimportant — excluded from both HTML and
     PDF generation, keyed by iCalUID."""
+
     __tablename__ = "suppressed_events"
     ical_uid: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
@@ -101,6 +144,7 @@ class SuppressedEvent(Base):
 
 class WatchlistStock(Base):
     """Stocks the user wants tracked in the daily edition's stocks section."""
+
     __tablename__ = "watchlist_stocks"
     symbol: Mapped[str] = mapped_column(String, primary_key=True)
 
@@ -108,6 +152,7 @@ class WatchlistStock(Base):
 class KvCache(Base):
     """Generic key/value persistence used by app.cache as the local fallback
     when Redis is not configured. Key is the cache key; value is JSON text."""
+
     __tablename__ = "kv_cache"
     key: Mapped[str] = mapped_column(String, primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
@@ -137,6 +182,7 @@ class CalendarDaySummary(Base):
     """Persisted raw calendar events per day, written by the refresh
     pipeline. The HTML summary is rendered inline at view time from
     ``events_json`` plus the ``event_emojis`` map — no cached HTML."""
+
     __tablename__ = "calendar_day_summaries"
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     events_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -147,11 +193,13 @@ class WeatherNow(Base):
     """Cached NWS 'Now' observation, keyed by coordinates. Refreshed on view
     when older than 1 hour so the page never blocks on NWS in the common
     case but the displayed temperature stays current."""
+
     __tablename__ = "weather_now"
     coords: Mapped[str] = mapped_column(String, primary_key=True)
     now_text: Mapped[str] = mapped_column(Text, nullable=False)
     observed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
     )
 
 
@@ -162,11 +210,13 @@ class EventEmoji(Base):
     title is missing we ask Claude (Haiku) for a single emoji once and store
     it. After that, the daily edition is built without any LLM call for
     calendar formatting."""
+
     __tablename__ = "event_emojis"
     title_norm: Mapped[str] = mapped_column(String, primary_key=True)
     emoji: Mapped[str] = mapped_column(String, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
     )
 
 
@@ -196,7 +246,10 @@ def _init_engine() -> None:
         if is_pg:
             connect_args["connect_timeout"] = 2
         _engine = create_engine(
-            url, pool_pre_ping=True, future=True, connect_args=connect_args,
+            url,
+            pool_pre_ping=True,
+            future=True,
+            connect_args=connect_args,
         )
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
         if is_pg:
@@ -233,12 +286,16 @@ def _attach_connect_backoff(engine: Engine) -> None:
                 if elapsed + delay > _BACKOFF_BUDGET_SECONDS:
                     log.error(
                         "DB connect failed after %d attempts (%.1fs total): %s",
-                        attempt, elapsed, e,
+                        attempt,
+                        elapsed,
+                        e,
                     )
                     raise
                 log.warning(
                     "DB connect attempt %d failed (%s) — retrying in %.1fs",
-                    attempt, e, delay,
+                    attempt,
+                    e,
+                    delay,
                 )
                 _time.sleep(delay)
                 elapsed += delay

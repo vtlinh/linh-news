@@ -13,6 +13,7 @@ Backend selection:
   ``kv_cache``). Persistent across server restarts so the events page is
   instant even after a redeploy.
 """
+
 from __future__ import annotations
 
 import json
@@ -66,7 +67,11 @@ class _SqlBackend:
             return row.value if row else None
 
     def set(
-        self, key: str, value: str, *, session: Session | None = None,
+        self,
+        key: str,
+        value: str,
+        *,
+        session: Session | None = None,
     ) -> None:
         from app.db import KvCache, session_factory
 
@@ -97,7 +102,11 @@ class _RedisBackend:
         return self._r.get(key)
 
     def set(
-        self, key: str, value: str, *, session: Session | None = None,
+        self,
+        key: str,
+        value: str,
+        *,
+        session: Session | None = None,
     ) -> None:
         self._r.set(key, value)
 

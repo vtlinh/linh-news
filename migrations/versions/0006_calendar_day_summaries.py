@@ -4,6 +4,7 @@ Revision ID: 0006_calendar_day_summaries
 Revises: 0005_watchlist_stocks
 Create Date: 2026-05-01
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

@@ -23,6 +23,7 @@ def local_now() -> datetime:
     """Current time in Linh's local timezone."""
     return datetime.now(LOCAL_TZ)
 
+
 # Load .env early with override=True so values in .env take precedence over
 # any pre-existing (possibly empty) shell variables.
 load_dotenv(REPO_ROOT / ".env", override=True)

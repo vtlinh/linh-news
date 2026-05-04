@@ -4,6 +4,7 @@ Revision ID: 0007_edition_pdf_html
 Revises: 0006_calendar_day_summaries
 Create Date: 2026-05-01
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

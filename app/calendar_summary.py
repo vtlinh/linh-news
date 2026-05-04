@@ -13,6 +13,7 @@ The output is a single ``<div>`` per day::
     <div><strong>Friday, May 2:</strong> 9:00 AM 📚 Library visit
         • 12:00 PM 🍕 Lunch with team • 🎂 Dad's birthday</div>
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -47,8 +48,10 @@ _FALLBACK_EMOJI_RULES: list[tuple[tuple[str, ...], str]] = [
     (("lunch",), "🍱"),
     (("breakfast",), "🥐"),
     (("flight", "travel", "trip"), "✈️"),
-    (("holiday", "labor day", "memorial day", "thanksgiving", "christmas",
-      "new year", "easter"), "🎉"),
+    (
+        ("holiday", "labor day", "memorial day", "thanksgiving", "christmas", "new year", "easter"),
+        "🎉",
+    ),
     (("water",), "💧"),
     (("delivery",), "📦"),
     (("photo",), "📷"),
@@ -145,8 +148,7 @@ def _emoji_lookup_single_call(missing: list[str]) -> dict[str, str]:
         user=(
             "Return one representative emoji for each of these calendar "
             "event titles. Output via the `return_emojis` tool with one "
-            "entry per title, in the same order:\n\n"
-            + "\n".join(f"- {t}" for t in missing)
+            "entry per title, in the same order:\n\n" + "\n".join(f"- {t}" for t in missing)
         ),
         schema=_EMOJI_SCHEMA,
         schema_name="return_emojis",
@@ -187,46 +189,49 @@ def _emoji_lookup_batch(missing: list[str]) -> dict[str, str]:
         cid = "e_" + hashlib.sha256(t.encode("utf-8")).hexdigest()[:32]
         id_for[t] = cid
         title_for[cid] = t
-        requests.append({
-            "custom_id": cid,
-            "params": {
-                "model": _EMOJI_MODEL,
-                "max_tokens": 50,
-                "system": _EMOJI_SYSTEM,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        f"Calendar event title: {t}\n\n"
-                        "Call the return_emoji tool with one representative "
-                        "emoji for this title."
-                    ),
-                }],
-                "tools": [{
-                    "name": "return_emoji",
-                    "description": "Return one emoji for the calendar event.",
-                    "input_schema": _EMOJI_ITEM_SCHEMA,
-                }],
-                "tool_choice": {"type": "tool", "name": "return_emoji"},
-            },
-        })
+        requests.append(
+            {
+                "custom_id": cid,
+                "params": {
+                    "model": _EMOJI_MODEL,
+                    "max_tokens": 50,
+                    "system": _EMOJI_SYSTEM,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Calendar event title: {t}\n\n"
+                                "Call the return_emoji tool with one representative "
+                                "emoji for this title."
+                            ),
+                        }
+                    ],
+                    "tools": [
+                        {
+                            "name": "return_emoji",
+                            "description": "Return one emoji for the calendar event.",
+                            "input_schema": _EMOJI_ITEM_SCHEMA,
+                        }
+                    ],
+                    "tool_choice": {"type": "tool", "name": "return_emoji"},
+                },
+            }
+        )
 
     batch = client.messages.batches.create(requests=requests)
-    log.info("Emoji batch %s submitted (%d titles), polling…",
-             batch.id, len(missing))
+    log.info("Emoji batch %s submitted (%d titles), polling…", batch.id, len(missing))
 
     deadline = time.monotonic() + 1800  # 30-min cap (Anthropic typically <10m)
     while True:
         if time.monotonic() > deadline:
-            log.warning("Emoji batch %s exceeded 30-min cap; cancelling",
-                        batch.id)
+            log.warning("Emoji batch %s exceeded 30-min cap; cancelling", batch.id)
             with contextlib.suppress(Exception):
                 client.messages.batches.cancel(batch.id)
             raise TimeoutError(f"emoji batch {batch.id} timed out")
         batch = client.messages.batches.retrieve(batch.id)
         if batch.processing_status == "ended":
             break
-        log.info("Emoji batch %s status=%s — sleeping 10s",
-                 batch.id, batch.processing_status)
+        log.info("Emoji batch %s status=%s — sleeping 10s", batch.id, batch.processing_status)
         time.sleep(10)
 
     log.info("Emoji batch %s ended, reading results", batch.id)
@@ -237,25 +242,27 @@ def _emoji_lookup_batch(missing: list[str]) -> dict[str, str]:
         if original is None:
             continue
         if getattr(entry.result, "type", None) != "succeeded":
-            log.warning("Emoji batch entry for %r: %s",
-                        original[:60], getattr(entry.result, "type", None))
+            log.warning(
+                "Emoji batch entry for %r: %s", original[:60], getattr(entry.result, "type", None)
+            )
             continue
         msg = entry.result.message
         for block in msg.content:
-            if (getattr(block, "type", None) == "tool_use"
-                    and block.name == "return_emoji"):
+            if getattr(block, "type", None) == "tool_use" and block.name == "return_emoji":
                 emoji = ((block.input or {}).get("emoji") or "").strip()
                 if emoji:
                     out[original] = emoji
                 break
 
-    log.info("Emoji batch %s: %d/%d titles produced an emoji",
-             batch.id, len(out), len(missing))
+    log.info("Emoji batch %s: %d/%d titles produced an emoji", batch.id, len(out), len(missing))
     return out
 
 
 def emojis_for_titles(
-    s: Session, titles: list[str], *, use_batch: bool = False,
+    s: Session,
+    titles: list[str],
+    *,
+    use_batch: bool = False,
 ) -> dict[str, str]:
     """Return ``{title: emoji}`` for every distinct title.
 
@@ -282,9 +289,7 @@ def emojis_for_titles(
     norms = list({norm_for[t] for t in distinct})
 
     # 1. Cache lookup.
-    rows = s.execute(
-        select(EventEmoji).where(EventEmoji.title_norm.in_(norms))
-    ).scalars().all()
+    rows = s.execute(select(EventEmoji).where(EventEmoji.title_norm.in_(norms))).scalars().all()
     cached: dict[str, str] = {row.title_norm: row.emoji for row in rows}
 
     missing = [t for t in distinct if norm_for[t] not in cached]
@@ -307,7 +312,8 @@ def emojis_for_titles(
         log.exception(
             "Emoji LLM lookup failed (use_batch=%s); %d titles will render "
             "without an emoji this run.",
-            use_batch, len(missing),
+            use_batch,
+            len(missing),
         )
 
     # 3. Persist ONLY successful lookups. Titles the LLM didn't answer are
@@ -325,17 +331,22 @@ def emojis_for_titles(
             existing.emoji = emoji
             existing.generated_at = now
         else:
-            s.add(EventEmoji(
-                title_norm=tn, emoji=emoji, generated_at=now,
-            ))
+            s.add(
+                EventEmoji(
+                    title_norm=tn,
+                    emoji=emoji,
+                    generated_at=now,
+                )
+            )
         persisted += 1
     if persisted:
         s.commit()
     if persisted < len(missing):
         log.info(
-            "Emoji lookup: %d/%d new titles got an emoji this run "
-            "(%d will retry next time).",
-            persisted, len(missing), len(missing) - persisted,
+            "Emoji lookup: %d/%d new titles got an emoji this run (%d will retry next time).",
+            persisted,
+            len(missing),
+            len(missing) - persisted,
         )
 
     # Titles still missing from `cached` will simply be absent from the
@@ -464,9 +475,11 @@ def read_emoji_map(s: Session, titles: list[str]) -> dict[str, str]:
     if not distinct:
         return {}
     norm_for = {t: _normalize_title(t) for t in distinct}
-    rows = s.execute(
-        select(EventEmoji).where(EventEmoji.title_norm.in_(list(norm_for.values())))
-    ).scalars().all()
+    rows = (
+        s.execute(select(EventEmoji).where(EventEmoji.title_norm.in_(list(norm_for.values()))))
+        .scalars()
+        .all()
+    )
     by_norm = {row.title_norm: row.emoji for row in rows}
     return {t: by_norm[norm_for[t]] for t in distinct if norm_for[t] in by_norm}
 
@@ -491,11 +504,15 @@ def load_calendar_section(s: Session, today: date) -> str:
     from app.db import CalendarDaySummary
 
     horizon = today + timedelta(days=30)
-    rows = s.execute(
-        select(CalendarDaySummary)
-        .where(CalendarDaySummary.day >= today, CalendarDaySummary.day <= horizon)
-        .order_by(CalendarDaySummary.day)
-    ).scalars().all()
+    rows = (
+        s.execute(
+            select(CalendarDaySummary)
+            .where(CalendarDaySummary.day >= today, CalendarDaySummary.day <= horizon)
+            .order_by(CalendarDaySummary.day)
+        )
+        .scalars()
+        .all()
+    )
 
     events_by_day: dict[date, list[dict]] = {}
     titles: list[str] = []
@@ -512,14 +529,14 @@ def load_calendar_section(s: Session, today: date) -> str:
 
     emoji_for = read_emoji_map(s, titles)
     day_htmls = {
-        day: render_day_html(day, events, emoji_for)
-        for day, events in events_by_day.items()
+        day: render_day_html(day, events, emoji_for) for day, events in events_by_day.items()
     }
     return build_calendar_section(day_htmls)
 
 
 def build_dorchester_event_list(
-    events: list[dict], cal_names: dict[str, str],
+    events: list[dict],
+    cal_names: dict[str, str],
 ) -> str:
     """Compact bullet list of Dorchester Parent Calendar events for the LLM.
 
@@ -608,10 +625,11 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
         "border-bottom:0.5pt solid #000;margin:0 0 2pt;padding-bottom:1pt;"
         "font-weight:bold"
     )
-    row_style = "margin:0 0 1pt;font-size:12pt"
-    parts: list[str] = [
-        f'<div style="{label_style}">Calendar</div>'
-    ]
+    # Event rows: bold so the rail block reads at a glance; per-row bold
+    # rather than on the wrapper so any inline child (like the time prefix)
+    # inherits the weight.
+    row_style = "margin:0 0 1pt;font-size:12pt;font-weight:bold"
+    parts: list[str] = [f'<div style="{label_style}">Calendar</div>']
 
     for day_str in sorted(day_groups):
         d = date.fromisoformat(day_str)
@@ -621,8 +639,10 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
             label = "Tomorrow"
         else:
             label = d.strftime("%A")  # full day name, e.g. "Friday"
+        # Date label: bigger + bold so each day-group's header stands out
+        # from the event rows below it.
         sub_label_style = (
-            "font-size:9pt;letter-spacing:.05em;text-transform:uppercase;"
+            "font-size:11pt;letter-spacing:.05em;text-transform:uppercase;"
             "margin:4pt 0 1pt;font-weight:bold;color:#000"
         )
         parts.append(
@@ -642,8 +662,6 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
                 except ValueError:
                     parts.append(f'<div style="{row_style}">{title}</div>')
             else:
-                parts.append(
-                    f'<div style="{row_style};color:#555">• {title}</div>'
-                )
+                parts.append(f'<div style="{row_style};color:#555">• {title}</div>')
 
     return "\n".join(parts)

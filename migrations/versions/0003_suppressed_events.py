@@ -4,6 +4,7 @@ Revision ID: 0003_suppressed_events
 Revises: 0002_ical_uid
 Create Date: 2026-04-30
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

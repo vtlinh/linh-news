@@ -43,11 +43,15 @@ def test_fetch_events_drops_cancelled_keeps_past(monkeypatch, db_session):
         },
     ]
     monkeypatch.setattr(
-        calendar_oauth, "_service",
+        calendar_oauth,
+        "_service",
         lambda s: _fake_service_with_events({"primary": items}),
     )
     out = calendar_oauth.fetch_events(
-        db_session, ["primary"], now.date(), now.date().replace(day=15),
+        db_session,
+        ["primary"],
+        now.date(),
+        now.date().replace(day=15),
     )
     assert sorted(e["summary"] for e in out) == ["Future", "Old"]
 
@@ -112,17 +116,33 @@ def test_dedupe_events_collapses_cross_calendar_duplicates():
     subscribed calendars under different iCalUIDs collapses to one.
     First-seen wins so order is preserved."""
     events = [
-        {"ical_uid": "u1@cal-a", "calendar_id": "cal-a",
-         "summary": "Racquetball weekly", "start": "2026-05-04T19:00:00-04:00"},
+        {
+            "ical_uid": "u1@cal-a",
+            "calendar_id": "cal-a",
+            "summary": "Racquetball weekly",
+            "start": "2026-05-04T19:00:00-04:00",
+        },
         # Mirror of the same occurrence on a second subscribed calendar.
-        {"ical_uid": "u1@cal-b", "calendar_id": "cal-b",
-         "summary": "Racquetball weekly", "start": "2026-05-04T19:00:00-04:00"},
+        {
+            "ical_uid": "u1@cal-b",
+            "calendar_id": "cal-b",
+            "summary": "Racquetball weekly",
+            "start": "2026-05-04T19:00:00-04:00",
+        },
         # Different occurrence (next week) — keep.
-        {"ical_uid": "u1@cal-a", "calendar_id": "cal-a",
-         "summary": "Racquetball weekly", "start": "2026-05-11T19:00:00-04:00"},
+        {
+            "ical_uid": "u1@cal-a",
+            "calendar_id": "cal-a",
+            "summary": "Racquetball weekly",
+            "start": "2026-05-11T19:00:00-04:00",
+        },
         # Different event at same time — keep.
-        {"ical_uid": "u2@cal-a", "calendar_id": "cal-a",
-         "summary": "Dinner", "start": "2026-05-04T19:00:00-04:00"},
+        {
+            "ical_uid": "u2@cal-a",
+            "calendar_id": "cal-a",
+            "summary": "Dinner",
+            "start": "2026-05-04T19:00:00-04:00",
+        },
     ]
     out = calendar_oauth.dedupe_events(events)
     assert len(out) == 3

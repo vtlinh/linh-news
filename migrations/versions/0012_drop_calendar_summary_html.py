@@ -7,6 +7,7 @@ Revision ID: 0012_drop_calendar_summary_html
 Revises: 0011_weather_native
 Create Date: 2026-05-02
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

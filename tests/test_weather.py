@@ -11,22 +11,44 @@ def test_build_weather_strip_full():
     out = weather.build_weather_strip(
         "12°C ⛅ · Wind NW 10 mph",
         {
-            "today_h": 14, "today_l": 7, "today_em": "☀️",
-            "tomorrow_h": 16, "tomorrow_l": 9, "tomorrow_em": "☁️",
+            "today_h": 14,
+            "today_l": 7,
+            "today_em": "☀️",
+            "tomorrow_h": 16,
+            "tomorrow_l": 9,
+            "tomorrow_em": "☁️",
         },
         ["Wind Advisory until 6 PM"],
     )
     assert out.startswith('<div class="weather-strip">')
     assert out.endswith("</div>")
+    assert '<span class="weather-main">' in out
     assert "Now 12°C ⛅ · Wind NW 10 mph" in out
     assert "Today H 14° / L 7° ☀️" in out
     assert "Tomorrow H 16° / L 9° ☁️" in out
     assert "⚠ Wind Advisory until 6 PM" in out
+    # No refreshed_at supplied → no badge.
+    assert "weather-refreshed" not in out
+
+
+def test_build_weather_strip_with_refreshed_at():
+    from datetime import UTC, datetime
+
+    refreshed = datetime(2026, 5, 2, 18, 0, tzinfo=UTC)  # 14:00 EDT
+    out = weather.build_weather_strip(
+        "0°C ❄️",
+        {},
+        [],
+        refreshed_at=refreshed,
+    )
+    assert '<span class="weather-refreshed">Refreshed at ' in out
+    # 18:00 UTC = 14:00 EDT in May.
+    assert "14:00 EDT" in out
 
 
 def test_build_weather_strip_no_alerts_no_forecast():
     out = weather.build_weather_strip("0°C ❄️", {}, [])
-    assert out == '<div class="weather-strip">Now 0°C ❄️</div>'
+    assert out == '<div class="weather-strip"><span class="weather-main">Now 0°C ❄️</span></div>'
 
 
 def test_build_weather_strip_partial_forecast():
@@ -41,11 +63,13 @@ def test_build_weather_strip_partial_forecast():
 
 
 def test_get_now_cached_uses_cache_when_fresh(db_session):
-    db_session.add(WeatherNow(
-        coords="41.0,-74.0",
-        now_text="11°C ⛅",
-        observed_at=datetime.now(UTC) - timedelta(minutes=10),
-    ))
+    db_session.add(
+        WeatherNow(
+            coords="41.0,-74.0",
+            now_text="11°C ⛅",
+            observed_at=datetime.now(UTC) - timedelta(minutes=10),
+        )
+    )
     db_session.commit()
     with patch.object(weather, "fetch_current_now") as fake:
         out = weather.get_now_cached(db_session, "41.0,-74.0")
@@ -54,11 +78,13 @@ def test_get_now_cached_uses_cache_when_fresh(db_session):
 
 
 def test_get_now_cached_refreshes_when_stale(db_session):
-    db_session.add(WeatherNow(
-        coords="41.0,-74.0",
-        now_text="OLD",
-        observed_at=datetime.now(UTC) - timedelta(hours=2),
-    ))
+    db_session.add(
+        WeatherNow(
+            coords="41.0,-74.0",
+            now_text="OLD",
+            observed_at=datetime.now(UTC) - timedelta(hours=2),
+        )
+    )
     db_session.commit()
     with patch.object(weather, "fetch_current_now", return_value="22°C ☀️"):
         out = weather.get_now_cached(db_session, "41.0,-74.0")
@@ -68,11 +94,13 @@ def test_get_now_cached_refreshes_when_stale(db_session):
 
 
 def test_get_now_cached_falls_back_to_stale_on_failure(db_session):
-    db_session.add(WeatherNow(
-        coords="41.0,-74.0",
-        now_text="STALE-BUT-OK",
-        observed_at=datetime.now(UTC) - timedelta(hours=2),
-    ))
+    db_session.add(
+        WeatherNow(
+            coords="41.0,-74.0",
+            now_text="STALE-BUT-OK",
+            observed_at=datetime.now(UTC) - timedelta(hours=2),
+        )
+    )
     db_session.commit()
     with patch.object(weather, "fetch_current_now", return_value=""):
         out = weather.get_now_cached(db_session, "41.0,-74.0")
@@ -103,14 +131,30 @@ def test_fetch_forecast_parses_periods():
     fake_forecast = {
         "properties": {
             "periods": [
-                {"isDaytime": True, "temperature": 14,
-                 "temperatureUnit": "C", "shortForecast": "Sunny"},
-                {"isDaytime": False, "temperature": 7,
-                 "temperatureUnit": "C", "shortForecast": "Clear"},
-                {"isDaytime": True, "temperature": 16,
-                 "temperatureUnit": "C", "shortForecast": "Cloudy"},
-                {"isDaytime": False, "temperature": 9,
-                 "temperatureUnit": "C", "shortForecast": "Mostly Cloudy"},
+                {
+                    "isDaytime": True,
+                    "temperature": 14,
+                    "temperatureUnit": "C",
+                    "shortForecast": "Sunny",
+                },
+                {
+                    "isDaytime": False,
+                    "temperature": 7,
+                    "temperatureUnit": "C",
+                    "shortForecast": "Clear",
+                },
+                {
+                    "isDaytime": True,
+                    "temperature": 16,
+                    "temperatureUnit": "C",
+                    "shortForecast": "Cloudy",
+                },
+                {
+                    "isDaytime": False,
+                    "temperature": 9,
+                    "temperatureUnit": "C",
+                    "shortForecast": "Mostly Cloudy",
+                },
             ],
         },
     }
@@ -130,10 +174,18 @@ def test_fetch_forecast_converts_fahrenheit():
     fake_forecast = {
         "properties": {
             "periods": [
-                {"isDaytime": True, "temperature": 50,
-                 "temperatureUnit": "F", "shortForecast": "Sunny"},
-                {"isDaytime": False, "temperature": 32,
-                 "temperatureUnit": "F", "shortForecast": "Clear"},
+                {
+                    "isDaytime": True,
+                    "temperature": 50,
+                    "temperatureUnit": "F",
+                    "shortForecast": "Sunny",
+                },
+                {
+                    "isDaytime": False,
+                    "temperature": 32,
+                    "temperatureUnit": "F",
+                    "shortForecast": "Clear",
+                },
             ],
         },
     }
@@ -141,14 +193,13 @@ def test_fetch_forecast_converts_fahrenheit():
     with patch.object(weather, "_get_json", side_effect=lambda _u: next(seq)):
         out = weather.fetch_forecast("41.0,-74.0")
     assert out["today_h"] == 10  # 50°F -> 10°C
-    assert out["today_l"] == 0   # 32°F -> 0°C
+    assert out["today_l"] == 0  # 32°F -> 0°C
 
 
 def test_fetch_alerts_returns_event_strings():
     fake = {
         "features": [
-            {"properties": {"event": "Wind Advisory",
-                            "ends": "2026-05-02T18:00:00+00:00"}},
+            {"properties": {"event": "Wind Advisory", "ends": "2026-05-02T18:00:00+00:00"}},
             {"properties": {"event": "Flood Watch", "ends": ""}},
         ],
     }

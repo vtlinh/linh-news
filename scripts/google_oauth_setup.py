@@ -9,6 +9,7 @@ screen in your browser). The resulting refresh token, plus the client_id /
 client_secret, is written to the `google_oauth` table so the production
 server can fetch calendar events without any further interactive consent.
 """
+
 from __future__ import annotations
 
 import os

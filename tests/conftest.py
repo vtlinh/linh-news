@@ -53,10 +53,14 @@ def client(db_session, monkeypatch, tmp_users_file):
     from app.main import app
 
     # Wire allowlist file
-    monkeypatch.setattr(auth_module, "load_allowlist", lambda path=None: {
-        "vtlinh87@gmail.com",
-        "friend@example.com",
-    })
+    monkeypatch.setattr(
+        auth_module,
+        "load_allowlist",
+        lambda path=None: {
+            "vtlinh87@gmail.com",
+            "friend@example.com",
+        },
+    )
 
     def override_session():
         Maker = session_factory()

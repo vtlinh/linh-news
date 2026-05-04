@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session, defer
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session, defer
 from app import auth, cache, calendar_oauth, calendar_summary, overlays, prefs, weather
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
-from app.db import Edition, HiddenCalendar, ImportantEvent, get_session
+from app.db import Edition, HiddenCalendar, ImportantEvent, SubsectionImage, get_session
 from app.settings import ADMIN_EMAIL, REPO_ROOT, get_settings, local_today
 
 
@@ -32,6 +33,13 @@ async def _lifespan(app):
 
 app = FastAPI(title="Linh News", lifespan=_lifespan)
 templates = Jinja2Templates(directory=str(REPO_ROOT / "app" / "templates"))
+# Serve the masthead font (and any future static assets) at /fonts/*. Used by
+# base.html's @font-face rule so the home-page masthead matches the PDF's.
+app.mount(
+    "/fonts",
+    StaticFiles(directory=str(REPO_ROOT / "app" / "fonts")),
+    name="fonts",
+)
 
 
 @app.middleware("http")
@@ -54,6 +62,7 @@ def healthz() -> dict:
 
 
 # ───────────────────────── Auth ─────────────────────────
+
 
 @app.get("/login", response_class=HTMLResponse)
 def login(request: Request):
@@ -108,6 +117,7 @@ def logout(request: Request, s: Session = Depends(get_session)):
 
 # ──────────────────────── Viewer ────────────────────────
 
+
 def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     """Replace ``<!-- WEATHER_PLACEHOLDER -->`` with a freshly assembled
     weather strip. The 'Now' observation comes through the 1-hour DB cache
@@ -120,7 +130,8 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     now = weather.get_now_cached(s, coords)
     forecast = (edition.weather_forecast_json if edition else None) or {}
     alerts = (edition.weather_alerts_json if edition else None) or []
-    strip = weather.build_weather_strip(now, forecast, alerts)
+    refreshed_at = edition.generated_at if edition else None
+    strip = weather.build_weather_strip(now, forecast, alerts, refreshed_at=refreshed_at)
     return html.replace("<!-- WEATHER_PLACEHOLDER -->", strip, 1)
 
 
@@ -152,16 +163,16 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
     favorites = overlays.favorite_movie_titles(s)
     allowed = set(prefs.get_allowed_ratings(today))
     section = movies_mod.render_html_section(
-        cached, today,
-        hidden_titles=hidden, allowed_ratings=allowed,
+        cached,
+        today,
+        hidden_titles=hidden,
+        allowed_ratings=allowed,
         favorite_titles=favorites,
     )
     return html.replace("<!-- MOVIES_PLACEHOLDER -->", section, 1)
 
 
-def _render_viewer(
-    request: Request, day: date, s: Session, viewer_email: str
-) -> HTMLResponse:
+def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -> HTMLResponse:
     # Defer the multi-MB pdf column — the home page only needs html +
     # generated_at. Fetching pdf on every request through the Fly proxy
     # was the dominant page-load cost.
@@ -193,9 +204,7 @@ def _render_viewer(
             # First-paint hint so the button renders in the right state with
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),
-            "edition_generated_at": (
-                edition.generated_at.isoformat() if edition else None
-            ),
+            "edition_generated_at": (edition.generated_at.isoformat() if edition else None),
         },
     )
 
@@ -237,14 +246,33 @@ def _pdf_token_valid(request: Request, token: str | None) -> bool:
     expected = get_settings().pdf_latest_token
     auth_header = request.headers.get("authorization", "")
     bearer = (
-        auth_header[len("Bearer "):].strip()
-        if auth_header.lower().startswith("bearer ")
-        else ""
+        auth_header[len("Bearer ") :].strip() if auth_header.lower().startswith("bearer ") else ""
     )
     presented = (token or bearer or "").strip()
     if not expected or not presented:
         return False
     return secrets.compare_digest(presented, expected)
+
+
+@app.get("/edition-image/{image_id}")
+def edition_image(
+    image_id: int,
+    s: Session = Depends(get_session),
+):
+    """Stream the bytes of one ``subsection_images`` row.
+
+    No auth gate — these are server-resized assets keyed by an opaque integer
+    that only appears in viewer pages a logged-in user already has. Cached
+    aggressively because each id is content-addressed by generation.
+    """
+    row = s.get(SubsectionImage, image_id)
+    if not row:
+        raise HTTPException(404, "image not found")
+    return Response(
+        row.bytes_,
+        media_type=row.mime_type or "image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
 
 
 @app.get("/pdf/latest")
@@ -330,9 +358,7 @@ def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int
     if sys.platform == "win32":
         # CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS make the child outlive
         # the parent (and not receive Ctrl-C signals sent to uvicorn).
-        kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-        )
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
     else:
         # New session + setsid so SIGINT/SIGTERM to the parent doesn't
         # propagate to the child.
@@ -406,6 +432,7 @@ def edition_freshness(
 
 # ──────────────────────── Admin ─────────────────────────
 
+
 @app.post("/hide-movie")
 async def hide_movie(
     request: Request,
@@ -431,14 +458,13 @@ def _calendar_events_for_year_cached(s: Session, _email: str) -> tuple[list[dict
         cache.store_events(events)
     else:
         Maker = _session_factory_for_background()
-        cache.maybe_refresh_in_background(
-            lambda: _refresh_events_cache_via(Maker)
-        )
+        cache.maybe_refresh_in_background(lambda: _refresh_events_cache_via(Maker))
     return events, []
 
 
 def _session_factory_for_background():
     from app.db import session_factory
+
     return session_factory()
 
 
@@ -459,7 +485,11 @@ def _calendar_events_for_year(s: Session) -> tuple[list[dict], list[dict]]:
     hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s)}
     active_ids = [c["id"] for c in all_cals if c["id"] not in hidden_ids]
     raw = calendar_oauth.fetch_events(
-        s, active_ids, today, horizon, calendar_names=cal_name,
+        s,
+        active_ids,
+        today,
+        horizon,
+        calendar_names=cal_name,
     )
     nearest: dict[str, dict] = {}
     seen_starts: dict[str, set] = {}
@@ -687,6 +717,7 @@ def admin_movies_data(
     # those are no longer relevant suggestions.
     today = local_today()
     cutoff = today - timedelta(weeks=3)
+
     def _still_fresh(m: dict) -> bool:
         if m.get("status") != "in_theaters":
             return True
@@ -694,6 +725,7 @@ def admin_movies_data(
             return _parse_date(m.get("release_date", "")) >= cutoff
         except Exception:  # noqa: BLE001
             return True
+
     movies = [m for m in movies if _still_fresh(m)]
     hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
     return {
@@ -838,6 +870,7 @@ async def admin_calendars_toggle(
 
 
 # ──────────────────────── Helpers ───────────────────────
+
 
 def _parse_date(s: str) -> date:
     try:

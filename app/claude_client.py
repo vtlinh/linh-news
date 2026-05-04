@@ -5,28 +5,11 @@ from typing import Any
 
 from anthropic import Anthropic
 
+from app.llm_schema import EDITION_SCHEMA
 from app.settings import get_settings
 
 # ── Default tool: web search (server-side, no client handling needed) ────
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
-
-# Schema for the daily edition. Defined once and reused as the structured
-# output schema for both cron and refresh runs.
-EDITION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "html": {
-            "type": "string",
-            "description": (
-                "Full HTML page (mobile-first responsive) with all the "
-                "sections requested in the system prompt. Includes Sources "
-                "tooltips on every news/finance/AI/movie/weather/school item."
-            ),
-        },
-    },
-    "required": ["html"],
-    "additionalProperties": False,
-}
 
 
 def _client() -> Anthropic:
@@ -62,9 +45,7 @@ def call_with_schema(
     tools = [return_tool] + list(extra_tools or [])
     client = _client()
     model_name = model or settings.anthropic_model
-    system_blocks = [
-        {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
-    ]
+    system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
     messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
 
     # Streaming is required for long requests (>10 min) per the Anthropic SDK.
@@ -86,24 +67,18 @@ def call_with_schema(
             msg = stream.get_final_message()
         last_msg = msg
 
-        # Did the model produce the structured payload? If so, we're done.
         for block in msg.content:
             if getattr(block, "type", None) == "tool_use" and block.name == schema_name:
                 return dict(block.input)
 
-        # If the turn paused mid-tool-use (e.g. web_search ran long), continue
-        # the conversation — append the assistant's content unchanged, then loop.
         if msg.stop_reason == "pause_turn":
             messages.append({"role": "assistant", "content": msg.content})
             continue
-
-        # Any other terminal stop reason → can't recover.
         break
 
     msg = last_msg
     text_blocks = [
-        b.text for b in (msg.content if msg else [])
-        if getattr(b, "type", None) == "text"
+        b.text for b in (msg.content if msg else []) if getattr(b, "type", None) == "text"
     ]
     raise ValueError(
         f"Claude did not invoke {schema_name!r}. "
@@ -113,13 +88,16 @@ def call_with_schema(
 
 
 def generate_edition(prompt_template: str, context: dict) -> dict:
-    """Send the rendered prompt to Claude, return parsed {html} dict."""
+    """Send the rendered prompt to Claude, return parsed LinhNews dict
+    (see app.llm_schema.EDITION_SCHEMA).
+    """
     system_block = prompt_template
     user_lines = ["Run for these inputs (substitute into the system prompt):"]
     for k, v in context.items():
         user_lines.append(f"- {k} = {_to_text(v)}")
     user_lines.append(
-        "\nWhen done, call the return_edition tool with the final HTML."
+        "\nWhen done, call the return_edition tool with the structured "
+        "LinhNews payload (sections + stocks). Do NOT return HTML."
     )
     return call_with_schema(
         system=system_block,
@@ -127,8 +105,8 @@ def generate_edition(prompt_template: str, context: dict) -> dict:
         schema=EDITION_SCHEMA,
         schema_name="return_edition",
         schema_description=(
-            "Return the final daily edition. Call this exactly once after all "
-            "web searches are complete."
+            "Return the structured daily edition. Call this exactly once "
+            "after all web searches are complete."
         ),
         extra_tools=[WEB_SEARCH_TOOL],
     )

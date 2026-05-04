@@ -11,6 +11,7 @@ Currently:
   Linh Times PDF, falling back to the kid-age-derived default when the
   user has not explicitly set them.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,7 +36,9 @@ _RATINGS_KEY = "linh_news:allowed_ratings"
 
 
 def get_allowed_ratings(
-    today: date | None = None, *, session: Session | None = None,
+    today: date | None = None,
+    *,
+    session: Session | None = None,
 ) -> list[str]:
     """The persisted MPAA-rating selection (set via the admin Movies page).
 
@@ -57,6 +60,7 @@ def get_allowed_ratings(
             if cleaned:
                 return cleaned
     from app.calendar_oauth import allowed_movie_ratings
+
     return allowed_movie_ratings(today)
 
 

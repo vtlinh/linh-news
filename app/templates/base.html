@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Linh News{% endblock %}</title>
   <style>
+    @font-face {
+      font-family: "Linh Times Masthead";
+      src: url("/fonts/Chomsky.otf") format("opentype");
+      font-display: swap;
+    }
     :root {
       --bg: #fbfaf6;
       --fg: #1a1a1a;
@@ -17,13 +22,13 @@
       margin: 0;
       background: var(--bg);
       color: var(--fg);
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: Cambria, "Times New Roman", "Liberation Serif", serif;
       font-size: clamp(15px, 2.4vw, 17px);
       line-height: 1.55;
     }
     /* Consistent section headings, regardless of emoji/flag prefixes Claude uses. */
     main h2, main section > h2 {
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: Cambria, "Times New Roman", "Liberation Serif", serif;
       font-size: clamp(18px, 2.6vw, 22px);
       font-weight: 700;
       margin: 0 0 0.5em;
@@ -33,7 +38,7 @@
       line-height: 1.2;
     }
     main h3 {
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: Cambria, "Times New Roman", "Liberation Serif", serif;
       font-size: clamp(16px, 2.2vw, 18px);
       font-weight: 700;
       margin: 1em 0 0.3em;
@@ -67,10 +72,11 @@
     header.site h1.masthead {
       margin: 0;
       text-align: center;
-      font-family: "Times New Roman", Georgia, serif;
-      font-weight: 900;
-      letter-spacing: -0.01em;
-      font-size: clamp(28px, 6vw, 56px);
+      font-family: "Linh Times Masthead", "Times New Roman", Georgia, serif;
+      font-weight: normal;
+      letter-spacing: 0;
+      font-size: clamp(36px, 7vw, 72px);
+      line-height: 1;
     }
     header.site .datepicker {
       display: flex; gap: 6px; align-items: center;
@@ -314,7 +320,34 @@
       padding: 8px 12px; margin: 0 0 1.2em;
       border-bottom: 1px solid var(--rule);
       font-size: 0.95em;
-      white-space: nowrap; overflow-x: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .weather-strip .weather-main {
+      /* min-width:0 lets the flex item shrink below its content size so
+         text-overflow:ellipsis can take effect; without it the inner text
+         keeps the item at its content width and pushes the refreshed badge
+         off-screen. */
+      flex: 1 1 auto;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .weather-strip .weather-refreshed {
+      flex: 0 0 auto;
+      font-size: 0.85em;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      /* Georgia defaults to oldstyle figures, so digits like "19:47" hang
+         below the baseline of the surrounding cap-height "REFRESHED AT"
+         text. Force lining (cap-height) figures so they align. */
+      font-variant-numeric: lining-nums tabular-nums;
+      font-feature-settings: "lnum" 1, "tnum" 1;
     }
     .weather-strip h1, .weather-strip h2, .weather-strip h3 { display: none; }
     .toast-host {

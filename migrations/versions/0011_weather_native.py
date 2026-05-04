@@ -4,6 +4,7 @@ Revision ID: 0011_weather_native
 Revises: 0010_favorite_movies
 Create Date: 2026-05-02
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

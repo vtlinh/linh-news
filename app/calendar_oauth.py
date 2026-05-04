@@ -51,6 +51,7 @@ def current_kid_grade(today: date | None = None) -> int:
     every August when a new school year begins."""
     if today is None:
         from app.settings import local_today as _local_today
+
         today = _local_today()
     school_year_start = today.year if today.month >= 8 else today.year - 1
     return GRADE_AT_ANCHOR + (school_year_start - KID_GRADE_ANCHOR_YEAR)
@@ -115,9 +116,7 @@ def is_auto_important(calendar_name: str, title: str) -> bool:
 def _credentials(s: Session) -> Credentials:
     row = s.execute(select(GoogleOAuth).limit(1)).scalar_one_or_none()
     if row is None:
-        raise RuntimeError(
-            "No Google OAuth row. Run scripts/google_oauth_setup.py first."
-        )
+        raise RuntimeError("No Google OAuth row. Run scripts/google_oauth_setup.py first.")
     creds = Credentials(
         token=None,
         refresh_token=row.refresh_token,
@@ -208,15 +207,19 @@ def fetch_events(
         cal_name = cal_names.get(cal_id, "")
         page_token = None
         while True:
-            resp = svc.events().list(
-                calendarId=cal_id,
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy="startTime",
-                pageToken=page_token,
-                maxResults=2500,
-            ).execute()
+            resp = (
+                svc.events()
+                .list(
+                    calendarId=cal_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy="startTime",
+                    pageToken=page_token,
+                    maxResults=2500,
+                )
+                .execute()
+            )
             for ev in resp.get("items", []):
                 if ev.get("status") == "cancelled":
                     continue

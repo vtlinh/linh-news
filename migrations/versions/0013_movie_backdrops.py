@@ -7,6 +7,7 @@ Revision ID: 0013_movie_backdrops
 Revises: 0012_drop_calendar_summary_html
 Create Date: 2026-05-03
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

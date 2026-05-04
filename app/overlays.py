@@ -16,9 +16,7 @@ from app.db import (
 
 
 def active_hidden_movie_titles(s: Session, today: date) -> list[str]:
-    rows = s.execute(
-        select(HiddenMovie).where(HiddenMovie.hidden_until >= today)
-    ).scalars().all()
+    rows = s.execute(select(HiddenMovie).where(HiddenMovie.hidden_until >= today)).scalars().all()
     return [r.title for r in rows]
 
 
@@ -28,11 +26,15 @@ def hidden_calendar_ids(s: Session) -> list[dict]:
 
 
 def important_events_from(s: Session, today: date) -> list[dict]:
-    rows = s.execute(
-        select(ImportantEvent)
-        .where(ImportantEvent.event_date >= today)
-        .order_by(ImportantEvent.importance.desc(), ImportantEvent.event_date.asc())
-    ).scalars().all()
+    rows = (
+        s.execute(
+            select(ImportantEvent)
+            .where(ImportantEvent.event_date >= today)
+            .order_by(ImportantEvent.importance.desc(), ImportantEvent.event_date.asc())
+        )
+        .scalars()
+        .all()
+    )
     return [
         {
             "title": r.title,

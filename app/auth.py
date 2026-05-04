@@ -111,9 +111,7 @@ def _current_email(request: Request, session: Session) -> str | None:
     return row.email.lower()
 
 
-def require_viewer(
-    request: Request, session: Session = Depends(get_session)
-) -> str:
+def require_viewer(request: Request, session: Session = Depends(get_session)) -> str:
     email = _current_email(request, session)
     if not email or not is_allowed(email):
         if request.headers.get("accept", "").startswith("text/html"):
@@ -125,9 +123,7 @@ def require_viewer(
     return email
 
 
-def require_admin(
-    request: Request, session: Session = Depends(get_session)
-) -> str:
+def require_admin(request: Request, session: Session = Depends(get_session)) -> str:
     email = _current_email(request, session)
     if not email or not is_allowed(email):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")

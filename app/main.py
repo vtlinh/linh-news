@@ -134,7 +134,14 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     prose_html = forecast.get("prose_html") or ""
     if prose_html:
         refreshed_html = weather.build_refreshed_span(refreshed_at)
-        replacement = f'<div class="weather">{refreshed_html}{prose_html}</div>'
+        # Splice the floated badge inside the prose div so it shares the
+        # prose paragraph's line-box and baseline; the prose text wraps
+        # around it on the same row.
+        opening = '<div class="weather-prose">'
+        prose_with_badge = prose_html.replace(
+            opening, opening + refreshed_html, 1
+        )
+        replacement = f'<div class="weather">{prose_with_badge}</div>'
     else:
         coords = get_settings().weather_coords
         now = weather.get_now_cached(s, coords)

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -48,6 +49,12 @@ class Edition(Base):
     # re-calling Claude. ``NULL`` for legacy editions generated before the
     # structured pipeline.
     content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Cached PDF side rail. Shape:
+    #   {"version": int, "calendar_html": str, "movies_html": str}
+    # Re-runs for the same date reuse this when ``version`` matches the
+    # current ``app.pdf_renderer.PDF_RAIL_VERSION`` — this skips the
+    # movie-backdrop downloads and the calendar/movies HTML build.
+    pdf_rail_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class SubsectionImage(Base):
@@ -204,6 +211,24 @@ class WeatherNow(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+
+
+class WeatherPhrase(Base):
+    """A hand-written prose clause used to render today/tomorrow weather as
+    newspaper-style text. Twenty variants exist per (period, bucket); the
+    renderer picks one of each at generation time and concatenates them.
+
+    ``text`` carries ``{h}`` / ``{l}`` slots filled with high/low
+    temperatures (Celsius int) and ``<b>Today</b>`` / ``<b>Tomorrow</b>`` /
+    ``<b>Tonight</b>`` already wrapped in bold tags."""
+
+    __tablename__ = "weather_phrases"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    period: Mapped[str] = mapped_column(String, nullable=False)
+    bucket: Mapped[str] = mapped_column(String, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (Index("ix_weather_phrases_period_bucket", "period", "bucket"),)
 
 
 class EventEmoji(Base):

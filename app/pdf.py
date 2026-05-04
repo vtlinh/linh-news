@@ -295,8 +295,28 @@ def _drop_one_section(html: str) -> str | None:
     return _kill(len(groups) - 1, "last-resort: no priority match")
 
 
-def html_to_pdf(html: str) -> bytes:
+def html_to_pdf(html: str, *, skip_phase1: bool = False) -> bytes:
+    """Back-compat wrapper that returns only the PDF bytes."""
+    pdf_bytes, _ = html_to_pdf_ex(html, skip_phase1=skip_phase1)
+    return pdf_bytes
+
+
+def html_to_pdf_ex(
+    html: str,
+    *,
+    skip_phase1: bool = False,
+) -> tuple[bytes, float | None]:
     """Render print-styled HTML to a single-page 12×22 in PDF using WeasyPrint.
+
+    Returns ``(pdf_bytes, phase1_font_pt)``. ``phase1_font_pt`` is the body
+    font that Phase 1 (rail-only fit) landed on — useful as proof-of-fit to
+    persist alongside a cached rail. ``None`` when Phase 1 was skipped or
+    the placeholder PDF is returned.
+
+    ``skip_phase1`` (optional): when the caller already has a cached rail
+    that previously passed Phase 1, pass ``True`` to skip the rail-fit
+    verification + trim step entirely. Phase 2 (full-doc font search) is
+    unaffected and always runs normally.
 
     Smart cache-driven algorithm (typical: 1 render, sometimes 2):
     1. Count words; look up the (words → font-size) cache and linearly
@@ -322,7 +342,7 @@ def html_to_pdf(html: str) -> bytes:
         from weasyprint import CSS, HTML
     except (OSError, ImportError) as e:
         log.warning("WeasyPrint native libs unavailable, using placeholder PDF: %s", e)
-        return _PLACEHOLDER_PDF
+        return _PLACEHOLDER_PDF, None
 
     from weasyprint import default_url_fetcher
 
@@ -516,36 +536,46 @@ def html_to_pdf(html: str) -> bytes:
         )
         return best_bytes, best_pt, 1.0 - best_fill
 
-    # ── Phase 1: rail-only fit (no news flow yet) ──
-    # Render the document with the news flow content stripped — only the
-    # masthead/dateline/rail/stocks-footer compete for vertical space. If
-    # this rail+chrome layout doesn't fit at MIN font, drop a movie (last
-    # first); if no movies left, drop a calendar event. Repeat until MIN
-    # fits OR the rail is empty. Phase 1 never returns the rail-only PDF
-    # — the trimmed `current` (which still has news) is what feeds Phase
-    # 2.
+    phase1_font_pt: float | None = None
+
     import time as _time
-    phase1_t0 = _time.monotonic()
-    log.info("PDF: ── phase 1 begin (rail-only fit; news flow stripped) ──")
     current = html
-    for _ in range(40):
-        rail_only = _strip_news_flow(current)
-        result = _fit_at_min_then_grow(rail_only)
-        if result is not None:
-            log.info(
-                "PDF: ── phase 1 end in %.2fs (rail+chrome fits at MIN) ──",
-                _time.monotonic() - phase1_t0,
-            )
-            break
-        trimmed = _drop_one_movie(current) or _drop_one_calendar_event(current)
-        if trimmed is None:
-            log.info(
-                "PDF: ── phase 1 end in %.2fs (rail emptied; rail+chrome "
-                "still overflows — Phase 2 will drop news on the full doc) ──",
-                _time.monotonic() - phase1_t0,
-            )
-            break
-        current = trimmed
+    if skip_phase1:
+        log.info(
+            "PDF: ── phase 1 skipped (caller supplied a cached rail that "
+            "previously passed Phase 1) ──"
+        )
+    else:
+        # ── Phase 1: rail-only fit (no news flow yet) ──
+        # Render the document with the news flow content stripped — only the
+        # masthead/dateline/rail/stocks-footer compete for vertical space. If
+        # this rail+chrome layout doesn't fit at MIN font, drop a movie (last
+        # first); if no movies left, drop a calendar event. Repeat until MIN
+        # fits OR the rail is empty. Phase 1 never returns the rail-only PDF
+        # — the trimmed `current` (which still has news) is what feeds Phase
+        # 2.
+        phase1_t0 = _time.monotonic()
+        log.info("PDF: ── phase 1 begin (rail-only fit; news flow stripped) ──")
+        for _ in range(40):
+            rail_only = _strip_news_flow(current)
+            result = _fit_at_min_then_grow(rail_only)
+            if result is not None:
+                phase1_font_pt = result[1]
+                log.info(
+                    "PDF: ── phase 1 end in %.2fs (rail+chrome fits at MIN, "
+                    "font=%.1fpt) ──",
+                    _time.monotonic() - phase1_t0, phase1_font_pt,
+                )
+                break
+            trimmed = _drop_one_movie(current) or _drop_one_calendar_event(current)
+            if trimmed is None:
+                log.info(
+                    "PDF: ── phase 1 end in %.2fs (rail emptied; rail+chrome "
+                    "still overflows — Phase 2 will drop news on the full doc) ──",
+                    _time.monotonic() - phase1_t0,
+                )
+                break
+            current = trimmed
 
     # ── Phase 2: full content (rail-locked from Phase 1 + news flow) ──
     # Same MIN-then-grow strategy, but on overflow we drop news content:
@@ -560,15 +590,15 @@ def html_to_pdf(html: str) -> bytes:
                 "PDF fit (phase 2): %.1fpt, blank=%.1f%% (after %d news trim(s)) in %.2fs",
                 font_pt, blank * 100, attempt, _time.monotonic() - phase2_t0,
             )
-            return pdf_bytes
+            return pdf_bytes, phase1_font_pt
         trimmed = _drop_one_article(current) or _drop_one_section(current)
         if trimmed is None:
             log.warning("PDF: nothing left to drop — shipping placeholder")
-            return _PLACEHOLDER_PDF
+            return _PLACEHOLDER_PDF, None
         current = trimmed
 
     log.error("PDF: still overflowing after 20 news-trim attempts — placeholder")
-    return _PLACEHOLDER_PDF
+    return _PLACEHOLDER_PDF, None
 
 
 def page_count(pdf_bytes: bytes) -> int:

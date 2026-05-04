@@ -30,7 +30,9 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         "_backfill_missing_sections",
         side_effect=lambda payload, _t: payload,
     )
-    fake_pdf = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v1")
+    fake_pdf = patch.object(
+        generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v1", None)
+    )
     fake_list = patch.object(generate.calendar_oauth, "list_calendars", return_value=[])
     fake_fetch = patch.object(generate.calendar_oauth, "fetch_events", return_value=[])
     fake_movies = patch.object(generate.movies_mod, "get_movies", return_value=[])
@@ -61,7 +63,9 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         "generate_edition",
         return_value={"sections": [], "stocks": []},
     )
-    fake_pdf2 = patch.object(generate.pdf, "html_to_pdf", return_value=b"%PDF-v2")
+    fake_pdf2 = patch.object(
+        generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v2", None)
+    )
     with (
         fake_claude2,
         fake_backfill,

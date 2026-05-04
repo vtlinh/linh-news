@@ -34,6 +34,12 @@ _MASTHEAD_FONT_FAMILY = "Linh Times Masthead"
 
 _FLOW_COLUMNS = 4
 
+# Bump whenever the PDF side rail's render logic changes (calendar/movies
+# layout, font sizing, backdrop sizing, etc.). The generate pipeline keys
+# its rail-HTML cache on this — re-runs for the same date rebuild the
+# rail iff the stored version differs from the current one.
+PDF_RAIL_VERSION = 1
+
 
 def _esc(s: str) -> str:
     return html_mod.escape(s or "", quote=True)

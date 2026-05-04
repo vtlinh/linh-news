@@ -67,8 +67,17 @@ def run(slot: Slot, today: date | None = None) -> date:
     overall_t0 = time.monotonic()
     log.info("⏱  ── refresh pipeline begin (slot=%s, date=%s) ──", slot, today)
 
+    with Maker() as s:
+        cached_rail = _load_cached_rail(s, today)
+    if cached_rail is not None:
+        log.info(
+            "Reusing cached PDF rail for %s (version=%d) — skipping movie/calendar rail rebuild",
+            today,
+            pdf_renderer.PDF_RAIL_VERSION,
+        )
+
     with _step("build_context"), Maker() as s:
-        ctx = _build_context(s, today, slot)
+        ctx = _build_context(s, today, slot, cached_rail=cached_rail)
     pdf_movies_html = ctx.pop("_pdf_movies_html", "")
     pdf_calendar_html = ctx.pop("_pdf_calendar_html", "")
     weather_forecast = ctx.pop("_weather_forecast", {})
@@ -124,8 +133,17 @@ def run(slot: Slot, today: date | None = None) -> date:
     except Exception:
         log.exception("Could not snapshot pdf_html")
 
+    skip_phase1 = cached_rail is not None
     with _step("html_to_pdf"):
-        pdf_bytes = pdf.html_to_pdf(pdf_html)
+        pdf_bytes, phase1_font_pt = pdf.html_to_pdf_ex(
+            pdf_html,
+            skip_phase1=skip_phase1,
+        )
+    # When Phase 1 was skipped, keep the previously cached Phase-1 font as
+    # the proof-of-fit; otherwise persist the freshly chosen one.
+    persisted_font_pt = (
+        (cached_rail or {}).get("font_pt") if skip_phase1 else phase1_font_pt
+    )
     try:
         from pathlib import Path
 
@@ -151,6 +169,16 @@ def run(slot: Slot, today: date | None = None) -> date:
             "even after dropping every droppable section)"
         )
 
+    rail_to_persist = {
+        "version": pdf_renderer.PDF_RAIL_VERSION,
+        "calendar_html": pdf_calendar_html,
+        "movies_html": pdf_movies_html,
+        # Body font (in pt) Phase 1 (rail-only fit) landed on. Stored as
+        # proof that the cached rail fits at one of the supported fonts;
+        # next same-day run will skip Phase 1. Phase 2 runs normally and
+        # is unaffected by this value.
+        "font_pt": persisted_font_pt,
+    }
     with _step("upsert_edition"), Maker() as s:
         _upsert_edition(
             s,
@@ -161,6 +189,7 @@ def run(slot: Slot, today: date | None = None) -> date:
             content_json=linhnews,
             weather_forecast=weather_forecast,
             weather_alerts=weather_alerts,
+            pdf_rail=rail_to_persist,
         )
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
@@ -168,7 +197,40 @@ def run(slot: Slot, today: date | None = None) -> date:
     return today
 
 
-def _build_context(s: Session, today: date, slot: Slot) -> dict:
+def _load_cached_rail(s: Session, today: date) -> dict | None:
+    """Return the previously persisted PDF rail for ``today`` if it was
+    produced by the current ``PDF_RAIL_VERSION``; ``None`` otherwise.
+
+    The shape on disk is ``{"version", "calendar_html", "movies_html"}``.
+    A version mismatch means the renderer has changed and we must rebuild.
+    """
+    row = s.get(Edition, today)
+    if row is None:
+        return None
+    rail = row.pdf_rail_json
+    if not isinstance(rail, dict):
+        return None
+    if rail.get("version") != pdf_renderer.PDF_RAIL_VERSION:
+        return None
+    font_pt = rail.get("font_pt")
+    try:
+        font_pt = float(font_pt) if font_pt is not None else None
+    except (TypeError, ValueError):
+        font_pt = None
+    return {
+        "calendar_html": rail.get("calendar_html") or "",
+        "movies_html": rail.get("movies_html") or "",
+        "font_pt": font_pt,
+    }
+
+
+def _build_context(
+    s: Session,
+    today: date,
+    slot: Slot,
+    *,
+    cached_rail: dict | None = None,
+) -> dict:
     settings = get_settings()
     horizon = today + timedelta(days=30)
 
@@ -180,20 +242,23 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     with _step("prefs.get_allowed_ratings"):
         allowed_ratings = set(prefs.get_allowed_ratings(today, session=s))
     hidden_set = set(hidden_movies)
-    pdf_movies_html = ""
-    try:
-        with _step("movies.get_movies(refresh_if_stale=True)"):
-            cached_movies = movies_mod.get_movies(refresh_if_stale=True)
-        with _step("movies.render_pdf_html"):
-            pdf_movies_html = movies_mod.render_pdf_html(
-                cached_movies,
-                today,
-                hidden_titles=hidden_set,
-                allowed_ratings=allowed_ratings,
-                favorite_titles=favorite_movies,
-            )
-    except Exception:  # noqa: BLE001
-        log.exception("Movie cache refresh / render failed")
+    if cached_rail is not None:
+        pdf_movies_html = cached_rail.get("movies_html", "")
+    else:
+        pdf_movies_html = ""
+        try:
+            with _step("movies.get_movies(refresh_if_stale=True)"):
+                cached_movies = movies_mod.get_movies(refresh_if_stale=True)
+            with _step("movies.render_pdf_html"):
+                pdf_movies_html = movies_mod.render_pdf_html(
+                    cached_movies,
+                    today,
+                    hidden_titles=hidden_set,
+                    allowed_ratings=allowed_ratings,
+                    favorite_titles=favorite_movies,
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("Movie cache refresh / render failed")
 
     # ── Calendar pipeline ────────────────────────────────────────────────
     events: list[dict] = []
@@ -243,7 +308,10 @@ def _build_context(s: Session, today: date, slot: Slot) -> dict:
     except Exception as e:  # noqa: BLE001 — never let calendar break generation
         log.warning("Calendar unavailable: %s", e)
 
-    pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
+    if cached_rail is not None:
+        pdf_calendar_html = cached_rail.get("calendar_html", "")
+    else:
+        pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
     dorchester_text = calendar_summary.build_dorchester_event_list(events, cal_names)
 
     with _step("NWS fetch_forecast"):
@@ -552,6 +620,7 @@ def _upsert_edition(
     content_json: dict | None = None,
     weather_forecast: dict | None = None,
     weather_alerts: list | None = None,
+    pdf_rail: dict | None = None,
 ) -> None:
     now = datetime.now(UTC)
     if s.bind.dialect.name == "postgresql":
@@ -564,6 +633,7 @@ def _upsert_edition(
             content_json=content_json,
             weather_forecast_json=weather_forecast or None,
             weather_alerts_json=weather_alerts or None,
+            pdf_rail_json=pdf_rail or None,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[Edition.date],
@@ -575,6 +645,7 @@ def _upsert_edition(
                 "content_json": stmt.excluded.content_json,
                 "weather_forecast_json": stmt.excluded.weather_forecast_json,
                 "weather_alerts_json": stmt.excluded.weather_alerts_json,
+                "pdf_rail_json": stmt.excluded.pdf_rail_json,
             },
         )
         s.execute(stmt)
@@ -591,6 +662,7 @@ def _upsert_edition(
                 content_json=content_json,
                 weather_forecast_json=weather_forecast or None,
                 weather_alerts_json=weather_alerts or None,
+                pdf_rail_json=pdf_rail or None,
             )
         )
     s.commit()

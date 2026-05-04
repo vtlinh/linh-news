@@ -39,7 +39,10 @@ jobs:
           # Any open PR on this exact branch?
           existing_same=$(gh pr list --state open --head "$branch" --json number --jq 'length')
           # Any open PR from a prior claude/ci-fix-* branch (different SHA, still pending)?
-          existing_any=$(gh pr list --state open --search 'head:claude/ci-fix- author:app/github-actions' --json number --jq 'length' || echo 0)
+          # Match by branch prefix only — the claude-code-action commits using the
+          # user's OAuth token, so PRs are authored as a real user, not a bot, and
+          # an author filter would never match.
+          existing_any=$(gh pr list --state open --search 'head:claude/ci-fix-' --json number --jq 'length' || echo 0)
 
           if [ "$existing_same" != "0" ] || [ "$existing_any" != "0" ]; then
             echo "An open CI-fix PR already exists; skipping."

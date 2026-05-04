@@ -147,7 +147,9 @@ def _resize_to(img: Image.Image, max_w: int) -> Image.Image:
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
 
-def resize_for_pdf(image_bytes: bytes, max_width_px: int = PDF_COLUMN_WIDTH_PX) -> tuple[bytes, str] | None:
+def resize_for_pdf(
+    image_bytes: bytes, max_width_px: int = PDF_COLUMN_WIDTH_PX
+) -> tuple[bytes, str] | None:
     """Decode → downscale → re-encode an image for PDF embedding.
 
     Returns ``(bytes, mime_type)`` capped at ``max_width_px`` wide. Returns

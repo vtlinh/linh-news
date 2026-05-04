@@ -78,14 +78,27 @@ def _day_of_year(d: date) -> int:
     return (d - date(d.year, 1, 1)).days + 1
 
 
-def _format_weather_for_pdf(strip_html: str) -> str:
-    """Reshape the weather strip's joined text for the PDF masthead corner.
+def _format_weather_for_pdf(strip_html: str, prose_html: str = "") -> str:
+    """Reshape the weather data for the PDF masthead corner.
 
-    The strip arrives as ``<div class="weather-strip">…</div>``; we extract
-    the inner text and apply the same layout rules the old builder used:
-    drop pollen, keep "Wind" merged into the preceding line, bold the
-    Now / Today / Tomorrow labels, join with " · ".
+    When ``prose_html`` (the hand-written paragraph baked at generation
+    time) is supplied, return its inner HTML directly — the bold
+    Today/Tomorrow keywords and any alert suffixes are already in place.
+    The PDF intentionally drops the live 'Now' temperature, which is only
+    meaningful in the auto-refreshing HTML viewer.
+
+    When no prose is available (older editions), fall back to extracting
+    the inner text of ``<div class="weather-strip">…</div>`` and applying
+    the legacy layout: drop pollen, merge Wind into the preceding line,
+    bold Now/Today/Tomorrow labels, join with " · ".
     """
+    if prose_html:
+        m_p = re.search(
+            r'<div\s+class="weather-prose"[^>]*>(.*?)</div\s*>',
+            prose_html,
+            re.IGNORECASE | re.DOTALL,
+        )
+        return m_p.group(1) if m_p else prose_html
     if not strip_html:
         return ""
     m = re.search(
@@ -247,6 +260,7 @@ def build_pdf_html(
     today: date,
     refreshed_at: datetime | None = None,
     image_bytes_by_id: dict[int, tuple[bytes, str]] | None = None,
+    weather_prose_html: str = "",
 ) -> str:
     """Build the print-styled HTML document for WeasyPrint.
 
@@ -254,7 +268,7 @@ def build_pdf_html(
     For each section's first subsection that has an ``image_id`` and a
     matching entry, the renderer embeds the image inline as a data URI.
     """
-    weather_inner = _format_weather_for_pdf(weather_strip_html)
+    weather_inner = _format_weather_for_pdf(weather_strip_html, weather_prose_html)
     flow_html = _render_flow(
         linhnews.get("sections") or [],
         image_bytes_by_id=image_bytes_by_id,

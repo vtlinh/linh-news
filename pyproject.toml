@@ -44,6 +44,11 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 # defaults. The check is unhelpful for FastAPI handlers.
 ignore = ["B008"]
 
+[tool.ruff.lint.per-file-ignores]
+# weather_prose holds 360 hand-written phrases as string literals; wrapping
+# them across multiple lines hurts readability without aiding review.
+"app/weather_prose.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -63,6 +63,58 @@ def _emoji(desc: str) -> str:
     return "🌡"
 
 
+# Bucket codes used by the weather_phrases table. Keyword order matters —
+# the first hit wins, so more specific buckets ("thunderstorm", "snow")
+# come before broader ones ("rain", "cloudy").
+_CONDITION_BUCKETS: list[tuple[str, str]] = [
+    ("thunderstorm", "thunderstorm"),
+    ("lightning", "thunderstorm"),
+    ("tornado", "thunderstorm"),
+    ("hurricane", "thunderstorm"),
+    ("snow", "snow"),
+    ("blizzard", "snow"),
+    ("sleet", "snow"),
+    ("freezing", "snow"),
+    ("ice", "snow"),
+    ("hail", "snow"),
+    ("fog", "fog"),
+    ("haze", "fog"),
+    ("smoke", "fog"),
+    ("dust", "fog"),
+    ("sand", "fog"),
+    ("drizzle", "rain"),
+    ("shower", "rain"),
+    ("rain", "rain"),
+    ("windy", "windy"),
+    ("breezy", "windy"),
+    # Cloudy variants — order: most specific first.
+    ("partly cloudy", "partly_cloudy"),
+    ("partly sunny", "partly_cloudy"),
+    ("mostly cloudy", "cloudy"),
+    ("overcast", "cloudy"),
+    ("cloudy", "cloudy"),
+    ("mostly clear", "mostly_sunny"),
+    ("mostly sunny", "mostly_sunny"),
+    ("sunny", "sunny"),
+    ("clear", "sunny"),
+    ("fair", "sunny"),
+]
+
+
+def bucket(short_forecast: str) -> str:
+    """Map an NWS shortForecast / textDescription string to a phrase bucket.
+
+    Returns one of: ``sunny``, ``mostly_sunny``, ``partly_cloudy``,
+    ``cloudy``, ``rain``, ``thunderstorm``, ``snow``, ``fog``, ``windy``.
+    Falls back to ``cloudy`` when nothing matches — the most generic neutral
+    phrasing."""
+    d = (short_forecast or "").lower()
+    for kw, b in _CONDITION_BUCKETS:
+        if kw in d:
+            return b
+    return "cloudy"
+
+
 def _wind_dir(degrees: float) -> str:
     dirs = [
         "N",
@@ -201,19 +253,23 @@ def fetch_forecast(lat_lon: str) -> dict:
 
         out: dict = {}
         if today_day:
+            today_short = today_day.get("shortForecast", "") or ""
             out["today_h"] = round(
                 _to_celsius(today_day["temperature"], today_day.get("temperatureUnit", "C"))
             )
-            out["today_em"] = _emoji(today_day.get("shortForecast", ""))
+            out["today_em"] = _emoji(today_short)
+            out["today_short"] = today_short
         if nights:
             out["today_l"] = round(
                 _to_celsius(nights[0]["temperature"], nights[0].get("temperatureUnit", "C"))
             )
         if len(days) >= 2:
+            tomorrow_short = days[1].get("shortForecast", "") or ""
             out["tomorrow_h"] = round(
                 _to_celsius(days[1]["temperature"], days[1].get("temperatureUnit", "C"))
             )
-            out["tomorrow_em"] = _emoji(days[1].get("shortForecast", ""))
+            out["tomorrow_em"] = _emoji(tomorrow_short)
+            out["tomorrow_short"] = tomorrow_short
         if len(nights) >= 2:
             out["tomorrow_l"] = round(
                 _to_celsius(nights[1]["temperature"], nights[1].get("temperatureUnit", "C"))

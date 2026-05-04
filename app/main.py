@@ -119,10 +119,12 @@ def logout(request: Request, s: Session = Depends(get_session)):
 
 
 def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
-    """Replace ``<!-- WEATHER_PLACEHOLDER -->`` with a freshly assembled
-    weather strip. The 'Now' observation comes through the 1-hour DB cache
-    in ``weather.get_now_cached``; forecast and alerts are read off the
-    Edition row (captured at generation time).
+    """Replace ``<!-- WEATHER_PLACEHOLDER -->`` with the live 'Now'
+    observation plus the hand-written prose paragraph baked at generation
+    time on ``Edition.weather_forecast_json["prose_html"]``.
+
+    Older editions generated before the prose pipeline (no ``prose_html``
+    key) gracefully fall back to the legacy one-line strip.
     """
     if "<!-- WEATHER_PLACEHOLDER -->" not in html:
         return html
@@ -131,8 +133,23 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     forecast = (edition.weather_forecast_json if edition else None) or {}
     alerts = (edition.weather_alerts_json if edition else None) or []
     refreshed_at = edition.generated_at if edition else None
-    strip = weather.build_weather_strip(now, forecast, alerts, refreshed_at=refreshed_at)
-    return html.replace("<!-- WEATHER_PLACEHOLDER -->", strip, 1)
+    prose_html = forecast.get("prose_html") or ""
+    if prose_html:
+        # Live-refreshing 'Now' on its own row, prose underneath. The
+        # refreshed-at badge stays on the Now line so the prose can remain
+        # static prose without a trailing timestamp.
+        now_row = weather.build_weather_strip(
+            now,
+            {},
+            [],
+            refreshed_at=refreshed_at,
+        )
+        replacement = f'<div class="weather">{now_row}{prose_html}</div>'
+    else:
+        replacement = weather.build_weather_strip(
+            now, forecast, alerts, refreshed_at=refreshed_at
+        )
+    return html.replace("<!-- WEATHER_PLACEHOLDER -->", replacement, 1)
 
 
 def _inject_calendar(html: str, s: Session, today: date) -> str:

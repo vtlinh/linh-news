@@ -167,6 +167,10 @@ def test_fetch_forecast_parses_periods():
     assert out["tomorrow_l"] == 9
     assert out["today_em"] == "☀️"
     assert "🌥" in out["tomorrow_em"] or out["tomorrow_em"] == "☁️"
+    # shortForecast strings are now retained so the prose renderer can
+    # bucket today and tomorrow independently.
+    assert out["today_short"] == "Sunny"
+    assert out["tomorrow_short"] == "Cloudy"
 
 
 def test_fetch_forecast_converts_fahrenheit():

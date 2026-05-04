@@ -26,6 +26,7 @@ from app import (
     pdf_renderer,
     prefs,
     weather,
+    weather_prose,
 )
 from app import movies as movies_mod
 from app.db import Edition, SubsectionImage, session_factory
@@ -112,6 +113,7 @@ def run(slot: Slot, today: date | None = None) -> date:
             pdf_calendar_html=pdf_calendar_html,
             pdf_movies_html=pdf_movies_html,
             weather_strip_html=pdf_weather_strip,
+            weather_prose_html=weather_forecast.get("prose_html", "") or "",
             today=today,
             image_bytes_by_id=image_bytes_by_id,
         )
@@ -318,6 +320,17 @@ def _build_context(
         weather_forecast = weather.fetch_forecast(settings.weather_coords)
     with _step("NWS fetch_alerts"):
         weather_alerts = weather.fetch_alerts(settings.weather_coords)
+    # Render the human-sounding prose paragraph once per generation. The
+    # picked phrases get baked into ``weather_forecast["prose_html"]`` so
+    # the HTML viewer and the PDF render the same text. Empty string when
+    # the seed table is unpopulated or H/L data is missing — callers fall
+    # back to the legacy strip in that case.
+    with _step("weather_prose.render"):
+        weather_forecast["prose_html"] = weather_prose.render_prose_html(
+            weather_forecast,
+            weather_alerts,
+            s,
+        )
 
     return {
         "DATE": today.isoformat(),

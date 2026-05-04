@@ -311,12 +311,30 @@
     .tooltip-popup a:last-child { border-bottom: 0; }
     .tooltip-popup a:hover { text-decoration: underline; }
 
-    /* Weather strip: one-line band right below the masthead's separator.
-       Spans every column whether the parent is multi-column (column-span:all)
-       or CSS Grid (grid-column: 1/-1). */
-    .weather-strip {
+    /* Weather block: band right below the masthead's separator. Spans every
+       column whether the parent is multi-column (column-span:all) or CSS
+       Grid (grid-column: 1/-1). When the prose paragraph is present, the
+       wrapping ``.weather`` div carries the column-spanning rules so both
+       its rows (live 'Now' on top, hand-written prose below) span the page;
+       on legacy editions without prose, the ``.weather-strip`` itself is
+       the spanning element. */
+    .weather, .weather-strip {
       column-span: all;
       grid-column: 1 / -1;
+    }
+    .weather {
+      padding: 8px 12px; margin: 0 0 1.2em;
+      border-bottom: 1px solid var(--rule);
+    }
+    .weather .weather-strip {
+      padding: 0; margin: 0; border-bottom: 0;
+    }
+    .weather-prose {
+      font-size: 0.98em;
+      line-height: 1.45;
+      margin-top: 4px;
+    }
+    .weather-strip {
       padding: 8px 12px; margin: 0 0 1.2em;
       border-bottom: 1px solid var(--rule);
       font-size: 0.95em;

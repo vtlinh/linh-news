@@ -625,10 +625,9 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
         "border-bottom:0.5pt solid #000;margin:0 0 2pt;padding-bottom:1pt;"
         "font-weight:bold"
     )
-    # Event rows: bold so the rail block reads at a glance; per-row bold
-    # rather than on the wrapper so any inline child (like the time prefix)
-    # inherits the weight.
-    row_style = "margin:0 0 1pt;font-size:12pt;font-weight:bold"
+    # ``cal-event`` class lets the PDF fit loop find + drop event rows.
+    row_style = "margin:0 0 1pt;font-size:12pt"
+    row_open = f'<div class="cal-event" style="{row_style}'
     parts: list[str] = [f'<div style="{label_style}">Calendar</div>']
 
     for day_str in sorted(day_groups):
@@ -658,10 +657,10 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
                     dt = datetime.fromisoformat(start)
                     h = dt.hour % 12 or 12
                     t = f"{h}:{dt.strftime('%M')} {'AM' if dt.hour < 12 else 'PM'}"
-                    parts.append(f'<div style="{row_style}">{t} {title}</div>')
+                    parts.append(f'{row_open}">{t} {title}</div>')
                 except ValueError:
-                    parts.append(f'<div style="{row_style}">{title}</div>')
+                    parts.append(f'{row_open}">{title}</div>')
             else:
-                parts.append(f'<div style="{row_style};color:#555">• {title}</div>')
+                parts.append(f'{row_open};color:#555">• {title}</div>')
 
     return "\n".join(parts)

@@ -472,14 +472,18 @@ def render_pdf_html(
     row_style = "margin:0 0 8pt;line-height:1.25;break-inside:avoid"
     # Movie title: larger + bold, on its own line above the release subtitle.
     title_style = "font-size:13pt;font-weight:bold;line-height:1.2"
-    sub_style = "font-size:9pt;color:#555;font-weight:bold"
+    sub_style = "font-size:9pt;color:#555"
     # Description: bold so it carries the same visual weight as the title.
-    desc_style = "font-size:11pt;color:#222;margin-top:2pt;line-height:1.3;font-weight:bold"
+    desc_style = "font-size:11pt;color:#222;margin-top:2pt;line-height:1.3"
     # Backdrops keep their original aspect ratio (no cover-cropping). With a
     # 2.4in rail and ~16:9 TMDB stills this is ~1.35in tall per card. The
     # two-phase fit loop in app/pdf.py drops movie cards (last first) and
     # then calendar events when the rail can't fit at the minimum font.
-    backdrop_style = "display:block;width:100%;height:auto;margin:0 0 3pt"
+    # Backdrops are physically downscaled to one column-width before
+    # embedding (see app/images.fetch_for_pdf). With intrinsic width
+    # already at the column size, we use width:auto so WeasyPrint never
+    # has to inflate the image to fit a flex container.
+    backdrop_style = "display:block;width:auto;max-width:100%;height:auto;margin:0 0 3pt"
     parts = [f'<div style="{label_style}">Movies</div>']
     for m in items:
         title = (m.get("title") or "").strip()
@@ -494,16 +498,20 @@ def render_pdf_html(
         )
         summary = (m.get("summary") or "").strip()
         desc_html = f'<div style="{desc_style}">{html.escape(summary)}</div>' if summary else ""
-        backdrop = _pick_backdrop(m)
-        backdrop_html = (
-            f'<img class="movie-backdrop" src="{html.escape(backdrop)}" '
-            f'alt="" style="{backdrop_style}">'
-            if backdrop
-            else ""
-        )
+        backdrop_url = _pick_backdrop(m)
+        backdrop_html = ""
+        if backdrop_url:
+            from app import images as _images
+            fetched = _images.fetch_for_pdf(backdrop_url)
+            if fetched is not None:
+                src = _images.to_data_uri(*fetched)
+                backdrop_html = (
+                    f'<img class="movie-backdrop" src="{src}" '
+                    f'alt="" style="{backdrop_style}">'
+                )
         parts.append(
-            f'<div style="{row_style}">{backdrop_html}'
-            f'<div style="{title_style}">{html.escape(title)}</div>'
+            f'<div class="movie-card" style="{row_style}">{backdrop_html}'
+            f'<div class="movie-title" style="{title_style}">{html.escape(title)}</div>'
             f'<div style="{sub_style}">{html.escape(sub)}</div>'
             f"{desc_html}</div>"
         )

@@ -150,243 +150,143 @@ _DROP_PRIORITY = [
     re.compile(r"global|world|international", re.IGNORECASE),
 ]
 
-# Matches a complete <section>...</section> block (handles nested tags crudely
-# but well enough for the flat structures Claude typically produces).
-_SECTION_RE = re.compile(
-    r"<section(?:\s[^>]*)?>.*?</section\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-_H2_TEXT_RE = re.compile(r"<h2[^>]*>(.*?)</h2\s*>", re.IGNORECASE | re.DOTALL)
-_TAG_STRIP_RE = re.compile(r"<[^>]+>")
+
+def _parse(html: str):
+    """Parse with BeautifulSoup using the stdlib parser (no extra deps)."""
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(html, "html.parser")
 
 
-def _drop_one_section(html: str) -> str | None:
-    """Remove the single lowest-priority droppable category from the PDF HTML.
-
-    The flow uses one-section-per-item: a category title lives in its own
-    h2-only ``<section>``, followed by sibling story sections (h3 + body)
-    that belong to that category. Dropping just the title section would
-    orphan its stories under the previous category's heading, so we drop
-    the title section *and* every following story section up to (but not
-    including) the next title section.
-
-    Returns the trimmed HTML, or None if nothing was dropped.
-    """
-    sections = list(_SECTION_RE.finditer(html))
-    if not sections:
-        return None
-
-    def _h2_text(sec_html: str) -> str:
-        m = _H2_TEXT_RE.search(sec_html)
-        return _TAG_STRIP_RE.sub("", m.group(1)).strip().lower() if m else ""
-
-    def _is_category_header(sec_html: str) -> bool:
-        return bool(_H2_TEXT_RE.search(sec_html))
-
-    def _drop_group(idx: int) -> str:
-        """Drop sections[idx] (a category header) plus all immediately
-        following non-header sibling sections."""
-        end_idx = idx + 1
-        while end_idx < len(sections) and not _is_category_header(sections[end_idx].group()):
-            end_idx += 1
-        start = sections[idx].start()
-        end = sections[end_idx - 1].end()
-        # Also swallow the section's *own* preceding ``<div class="sep-group">``
-        # rule (the heavy black bar pdf_renderer emits between categories).
-        # Without this, dropping the dorch section would leave its sep-group
-        # in front of the next section, doubling-up with that section's own
-        # sep-group rule.
-        prev = re.search(
-            r'\s*<div\s+class="sep-group"[^>]*>\s*</div\s*>\s*$',
-            html[:start],
-            re.IGNORECASE,
-        )
-        if prev:
-            start = prev.start()
-        # Eat any whitespace between this group and what follows so we
-        # don't leave an empty gap.
-        return html[:start] + html[end:].lstrip()
-
-    # Try each drop-priority pattern in order.
-    for pattern in _DROP_PRIORITY:
-        for i in range(len(sections) - 1, -1, -1):  # last match wins
-            sec_html = sections[i].group()
-            if not _is_category_header(sec_html):
-                continue
-            if pattern.search(_h2_text(sec_html)):
-                title = _h2_text(sec_html)[:60]
-                trailing = 0
-                k = i + 1
-                while k < len(sections) and not _is_category_header(sections[k].group()):
-                    trailing += 1
-                    k += 1
-                log.info(
-                    "PDF: dropping category %r (header + %d stories) to fit one page",
-                    title,
-                    trailing,
-                )
-                return _drop_group(i)
-
-    # No pattern matched — drop the very last section as a last resort.
-    last_idx = len(sections) - 1
-    log.info("PDF: dropping last section (no priority match) to fit one page")
-    return html[: sections[last_idx].start()] + html[sections[last_idx].end() :]
-
-
-def _drop_one_article(html: str) -> str | None:
-    """Drop one news subsection (a story sibling) to fit one page.
-
-    The structured pdf_renderer emits each news section as a flat run of
-    sibling ``<section>``s: an h2-only ``news-header`` followed by N
-    ``news-story`` siblings. To shrink content we pick the section with
-    the most stories (so we shave the fattest section first and keep
-    counts balanced), tiebreak by ``_DROP_PRIORITY`` (lowest-priority
-    section loses a story first), then drop that section's *last* story.
-
-    When that last story was also the only story in its section, also
-    drop the now-orphaned header + its preceding sep-group rule so the
-    flow doesn't end on a content-less h2.
-
-    Returns the trimmed HTML, or ``None`` when there is nothing left to
-    drop (every section is already empty).
-    """
-    sections = list(_SECTION_RE.finditer(html))
-    if not sections:
-        return None
-
-    def _is_header(sec_html: str) -> bool:
-        return bool(_H2_TEXT_RE.search(sec_html))
-
-    def _h2_text(sec_html: str) -> str:
-        m = _H2_TEXT_RE.search(sec_html)
-        return _TAG_STRIP_RE.sub("", m.group(1)).strip().lower() if m else ""
-
-    def _drop_rank(title: str) -> int:
-        """Lower rank = drop first. Sections not in _DROP_PRIORITY get the
-        highest rank (drop last)."""
-        for i, p in enumerate(_DROP_PRIORITY):
-            if p.search(title):
-                return i
-        return len(_DROP_PRIORITY)
-
-    # Bucket sections into groups: each header collects following non-header
-    # siblings as its stories.
-    groups: list[tuple[re.Match[str], list[re.Match[str]], str]] = []
-    i = 0
-    while i < len(sections):
-        sec = sections[i]
-        if _is_header(sec.group()):
-            title = _h2_text(sec.group())
-            stories: list[re.Match[str]] = []
-            j = i + 1
-            while j < len(sections) and not _is_header(sections[j].group()):
-                stories.append(sections[j])
-                j += 1
-            groups.append((sec, stories, title))
-            i = j
-        else:
-            i += 1
-
-    # Only consider sections that still have ≥2 stories — we always keep
-    # at least one news item per section so the section header isn't
-    # orphaned. When every section is down to 1, the caller falls through
-    # to other trim strategies (movies, then last-resort section drop).
-    candidates = [g for g in groups if len(g[1]) >= 2]
-    if not candidates:
-        return None
-
-    # Most stories first (shave the fattest); tiebreak by drop priority.
-    candidates.sort(key=lambda g: (-len(g[1]), _drop_rank(g[2])))
-    _header, stories, title = candidates[0]
-    last = stories[-1]  # within the chosen section, drop its LAST story
-    log.info(
-        "PDF: dropping last story of %r (%d → %d stories)",
-        title[:60],
-        len(stories),
-        len(stories) - 1,
-    )
-    return html[: last.start()] + html[last.end() :]
-
-
-# Movie cards in the rail are wrapped in <div style="margin:0 0 8pt;...
-# break-inside:avoid">…</div> by app.movies.render_pdf_html. We tag those
-# wrappers with a distinguishing class via the matcher below.
-_MOVIE_CARD_RE = re.compile(
-    r'<div\s+style="[^"]*break-inside:avoid[^"]*">(?:(?!</div\s*>).)*'
-    r"(?:<img\s[^>]*movie-backdrop|Opens|In theaters)"
-    r"(?:(?!</div\s*>).)*</div\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-# Movie title sits inside the card as
-#   <div style="font-size:13pt;font-weight:bold;line-height:1.2">{title}</div>
-_MOVIE_TITLE_RE = re.compile(
-    r'<div\s+style="font-size:13pt;font-weight:bold[^"]*">(.*?)</div\s*>',
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _drop_one_movie(html: str) -> str | None:
-    """Strip the last movie card from the rail. Returns None when the rail
-    has no movie cards left."""
-    matches = list(_MOVIE_CARD_RE.finditer(html))
-    if not matches:
-        return None
-    last = matches[-1]
-    title_m = _MOVIE_TITLE_RE.search(last.group())
-    title = _TAG_STRIP_RE.sub("", title_m.group(1)).strip() if title_m else "?"
-    log.info(
-        "PDF: dropping movie %r (%d → %d cards)",
-        title[:60],
-        len(matches),
-        len(matches) - 1,
-    )
-    return html[: last.start()] + html[last.end() :]
-
-
-# Calendar event rows are produced by app.calendar_summary.build_pdf_calendar
-# as ``<div style="margin:0 0 1pt;font-size:12pt;font-weight:bold…">…</div>``.
-_CALENDAR_EVENT_RE = re.compile(
-    r'<div\s+style="margin:0 0 1pt;font-size:12pt;font-weight:bold[^"]*">'
-    r"((?:(?!</div\s*>).)*)</div\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-# Non-greedy match for the news flow div used by Phase 1 to render
-# rail + chrome only (without any news content) so the rail height can
-# be measured against the page in isolation.
-_FLOW_DIV_RE = re.compile(
-    r'(<div\s+class="flow"[^>]*>)(.*?)(</div\s*>)',
-    re.IGNORECASE | re.DOTALL,
-)
+def _drop_rank(title: str) -> int:
+    """Lower rank = drop first. Sections not in _DROP_PRIORITY get the
+    highest rank (drop last)."""
+    title_l = title.lower()
+    for i, p in enumerate(_DROP_PRIORITY):
+        if p.search(title_l):
+            return i
+        if p.search(title):
+            return i
+    return len(_DROP_PRIORITY)
 
 
 def _strip_news_flow(html: str) -> str:
-    """Return ``html`` with the contents of ``<div class="flow">…</div>``
-    emptied. Used by Phase 1 to fit the rail (calendar + movies) + chrome
-    against the page without any news content competing for vertical
-    space — Phase 2 then proves the news flow against the full page once
-    Phase 1 has locked the rail size."""
-    return _FLOW_DIV_RE.sub(r"\1\3", html, count=1)
+    """Empty the contents of ``<div class="flow">…</div>``. Phase 1 fits
+    rail + chrome alone; the flow is restored before Phase 2."""
+    soup = _parse(html)
+    flow = soup.find("div", class_="flow")
+    if flow is None:
+        return html
+    flow.clear()
+    return str(soup)
+
+
+def _drop_one_movie(html: str) -> str | None:
+    """Strip the last movie card from the rail. Returns None if there are
+    no movie cards left. Each card has ``class="movie-card"``; its title
+    sits in a child with ``class="movie-title"``."""
+    soup = _parse(html)
+    cards = soup.find_all("div", class_="movie-card")
+    if not cards:
+        return None
+    last = cards[-1]
+    title_el = last.find(class_="movie-title")
+    title = (title_el.get_text(strip=True) if title_el else "?")[:60]
+    log.info("PDF: dropping movie %r (%d → %d cards)", title, len(cards), len(cards) - 1)
+    last.decompose()
+    return str(soup)
 
 
 def _drop_one_calendar_event(html: str) -> str | None:
-    """Strip the last calendar event row from the rail. Returns None when
-    the rail has no calendar event rows left."""
-    matches = list(_CALENDAR_EVENT_RE.finditer(html))
-    if not matches:
+    """Strip the last calendar event row (``class="cal-event"``) from the
+    rail. Returns None if there are none left."""
+    soup = _parse(html)
+    events = soup.find_all("div", class_="cal-event")
+    if not events:
         return None
-    last = matches[-1]
-    text = _TAG_STRIP_RE.sub("", last.group(1)).strip()
-    log.info(
-        "PDF: dropping calendar event %r (%d → %d events)",
-        text[:60],
-        len(matches),
-        len(matches) - 1,
-    )
-    return html[: last.start()] + html[last.end() :]
+    last = events[-1]
+    text = last.get_text(strip=True)[:60]
+    log.info("PDF: dropping calendar event %r (%d → %d events)",
+             text, len(events), len(events) - 1)
+    last.decompose()
+    return str(soup)
+
+
+def _section_groups(soup) -> list[tuple[object, list[object], str]]:
+    """Bucket the news flow's flat ``<section>`` siblings into groups —
+    each ``news-header`` collects the following ``news-story`` siblings.
+
+    Returns ``[(header_section, [story_sections], title), …]``.
+    """
+    flow = soup.find("div", class_="flow")
+    if flow is None:
+        return []
+    groups: list[tuple[object, list[object], str]] = []
+    current_header = None
+    current_stories: list[object] = []
+    current_title = ""
+    for sec in flow.find_all("section", recursive=False):
+        classes = sec.get("class") or []
+        if "news-header" in classes:
+            if current_header is not None:
+                groups.append((current_header, current_stories, current_title))
+            current_header = sec
+            current_stories = []
+            h2 = sec.find("h2")
+            current_title = h2.get_text(strip=True) if h2 else ""
+        elif "news-story" in classes:
+            current_stories.append(sec)
+    if current_header is not None:
+        groups.append((current_header, current_stories, current_title))
+    return groups
+
+
+def _drop_one_article(html: str) -> str | None:
+    """Drop one news story from the section with the most stories
+    (tiebreak by ``_DROP_PRIORITY``, lowest priority first). The chosen
+    section's *last* story is the one removed. Always keeps at least 1
+    story per section so headers don't end up orphaned."""
+    soup = _parse(html)
+    groups = _section_groups(soup)
+    candidates = [g for g in groups if len(g[1]) >= 2]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda g: (-len(g[1]), _drop_rank(g[2])))
+    _header, stories, title = candidates[0]
+    last = stories[-1]
+    log.info("PDF: dropping last story of %r (%d → %d stories)",
+             title[:60], len(stories), len(stories) - 1)
+    last.decompose()
+    return str(soup)
+
+
+def _drop_one_section(html: str) -> str | None:
+    """Last-resort: drop an entire news category (header + all stories)
+    by ``_DROP_PRIORITY``. Also removes the preceding ``sep-group`` rule
+    so the flow doesn't end with a doubled separator."""
+    soup = _parse(html)
+    groups = _section_groups(soup)
+    if not groups:
+        return None
+
+    def _kill(group_idx: int, reason: str) -> str:
+        header, stories, title = groups[group_idx]
+        # Drop the preceding sep-group div so we don't end up with two
+        # separators in a row.
+        prev = header.find_previous_sibling()
+        if prev is not None and "sep-group" in (prev.get("class") or []):
+            prev.decompose()
+        log.info("PDF: dropping category %r (header + %d stories) — %s",
+                 title[:60], len(stories), reason)
+        for s in stories:
+            s.decompose()
+        header.decompose()
+        return str(soup)
+
+    for pattern in _DROP_PRIORITY:
+        for i in range(len(groups) - 1, -1, -1):
+            if pattern.search(groups[i][2].lower()) or pattern.search(groups[i][2]):
+                return _kill(i, "matched drop-priority pattern")
+    return _kill(len(groups) - 1, "last-resort: no priority match")
 
 
 def html_to_pdf(html: str) -> bytes:
@@ -476,18 +376,21 @@ def html_to_pdf(html: str) -> bytes:
         return CSS(
             string=f"""
         @page {{ size: 15.296in 27.193in; margin: 0.4in; }}
-        /* Color-emoji fallbacks (Noto = Linux/Docker, Segoe UI = Windows,
-           Apple = macOS) so flag/icon glyphs render in colour rather than
-           falling through to monochrome DejaVu. */
-        html, body {{ font-family: "Times New Roman", Georgia, serif,
-                                   "Noto Color Emoji", "Segoe UI Emoji",
-                                   "Apple Color Emoji", emoji; }}
+        /* The pdf_renderer's embedded style block declares a "LinhEmoji"
+           @font-face with unicode-range covering emoji blocks — that's
+           what handles colour glyphs. Putting "Noto Color Emoji" or any
+           emoji family directly in this body stack causes WeasyPrint to
+           use the emoji font for ALL text (Times New Roman never gets
+           applied, bold collapses), so we keep it serif-only here. */
+        html, body {{ font-family: "Times New Roman", Georgia, serif; }}
         body {{ font-size: {base_pt:.2f}pt !important; line-height: 1.15 !important; }}
+        /* No emoji families here — WeasyPrint drops @font-face Chomsky
+           when emoji families share the stack. Masthead text has no
+           emoji glyphs. */
         h1 {{ font-size: {h1_pt:.2f}pt !important; margin: 0 0 2pt !important;
               text-align: center; font-weight: normal;
               font-family: "Linh Times Masthead", "Times New Roman",
-                           Georgia, serif, "Noto Color Emoji",
-                           "Segoe UI Emoji", "Apple Color Emoji", emoji; }}
+                           Georgia, serif; }}
         h2 {{ font-size: {base_pt * 1.375:.2f}pt !important; margin: 4pt 0 2pt !important;
               font-weight: bold; }}
         h3, h4, h5, h6 {{ font-size: {base_pt * 1.125:.2f}pt !important;
@@ -498,7 +401,13 @@ def html_to_pdf(html: str) -> bytes:
         hr {{ display: none !important; }}
         br + br {{ display: none !important; }}
         img {{ max-width: 100% !important; }}
-        section, article, header, footer, div {{ margin: 0 0 3pt !important; }}
+        /* Crush spacing in the news flow only — applying this globally
+           also slammed every div in the rail (every calendar row, every
+           movie card sub-div) and bloated the rail by 1-2in of phantom
+           margin, which made Phase 1 over-trim. */
+        .flow section, .flow article, .flow header, .flow footer, .flow div {{
+            margin: 0 0 3pt !important;
+        }}
         """
         )
 

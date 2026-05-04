@@ -483,7 +483,11 @@ def test_render_html_section_no_backdrop_when_empty():
     assert 'class="movie-backdrop"' not in rendered
 
 
-def test_render_pdf_html_includes_backdrop():
+def test_render_pdf_html_includes_backdrop(monkeypatch):
+    """``render_pdf_html`` downloads + downscales the backdrop and embeds
+    it as a data URI (so WeasyPrint never sees the original 300px asset)."""
+    from app import images as _images
+    monkeypatch.setattr(_images, "fetch_for_pdf", lambda url: (b"\x00\x01stubbytes", "image/jpeg"))
     today = date(2026, 5, 1)
     items = [
         _make(
@@ -500,7 +504,7 @@ def test_render_pdf_html_includes_backdrop():
         allowed_ratings={"PG"},
     )
     assert 'class="movie-backdrop"' in pdf
-    assert "image.tmdb.org/t/p/w780/zzz.jpg" in pdf
+    assert 'src="data:image/jpeg;base64,' in pdf
 
 
 def test_render_html_section_links_title_to_tmdb():

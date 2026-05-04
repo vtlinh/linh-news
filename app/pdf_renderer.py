@@ -142,7 +142,12 @@ def _render_story_html(
         image_id = sub.get("image_id")
         entry = image_bytes_by_id.get(int(image_id)) if image_id else None
         if entry is not None:
-            data, mime = entry
+            from app import images as _images
+            # Stored bytes are 400px wide (storage cap). Downscale to the
+            # PDF column width here so WeasyPrint embeds + lays out the
+            # smaller image directly — no width:100% guesswork.
+            resized = _images.resize_for_pdf(entry[0])
+            data, mime = resized if resized is not None else entry
             b64 = base64.b64encode(data).decode("ascii")
             alt_src = (sub.get("images") or [{}])[0].get("alt", "") if sub.get("images") else ""
             image_html = (
@@ -248,11 +253,15 @@ def build_pdf_html(
     )
     stocks_html = _render_stocks_footer(linhnews.get("stocks") or [])
 
+    # Wrap each block in its own container so the
+    # ``aside.rail > * + * { margin-top: 8pt }`` rule only fires between
+    # the major blocks (calendar/movies) — not between every event row
+    # and movie card, which would chew ~3in of phantom whitespace.
     sidebar_parts: list[str] = []
     if pdf_calendar_html:
-        sidebar_parts.append(pdf_calendar_html)
+        sidebar_parts.append(f'<div class="rail-block">{pdf_calendar_html}</div>')
     if pdf_movies_html:
-        sidebar_parts.append(pdf_movies_html)
+        sidebar_parts.append(f'<div class="rail-block">{pdf_movies_html}</div>')
     sidebar_inner = "".join(sidebar_parts)
 
     if refreshed_at is None:
@@ -265,29 +274,51 @@ def build_pdf_html(
     refreshed_label = f"Refreshed at {refreshed_at.hour:02d}:00 {tz_abbrev}"
     dateline = _format_date(today)
     vol_roman = _roman(_day_of_year(today))
-    font_url = _MASTHEAD_FONT_PATH.as_uri()
+    # Inline the masthead font as a data URI. Routing through file:// hits
+    # app/pdf.py's url_fetcher which falls back to urllib for file URLs and
+    # reports mime_type=text/plain — WeasyPrint then rejects it as font
+    # data and silently falls through to the next family in the stack
+    # (Segoe UI Emoji, Times New Roman, …). Embedding the bytes directly
+    # bypasses the fetcher entirely.
+    font_b64 = base64.b64encode(_MASTHEAD_FONT_PATH.read_bytes()).decode("ascii")
+    font_url = f"data:font/otf;base64,{font_b64}"
 
-    # Color-emoji fallback chain: Noto Color Emoji ships in the production
-    # Docker image; Segoe UI Emoji and Apple Color Emoji cover Windows/macOS
-    # local dev so glyphs like 🇺🇸 / 🌍 / 💰 don't fall through to a
-    # monochrome DejaVu fallback.
-    _EMOJI_FAMILIES = '"Noto Color Emoji", "Segoe UI Emoji", "Apple Color Emoji", emoji'
+    # WeasyPrint quirk: putting an emoji family in a regular font-family
+    # stack ("Times New Roman", …, "Noto Color Emoji") causes the emoji
+    # family to be picked for ALL text, not just emoji codepoints — Times
+    # New Roman never gets used and bold collapses. The fix is to declare
+    # the emoji family via @font-face with a unicode-range covering the
+    # emoji blocks, and reference it as a separate family. WeasyPrint then
+    # only uses the emoji font for matching codepoints, leaving Times New
+    # Roman + bold variants in charge of the actual text.
+    _EMOJI_FAMILY = '"LinhEmoji"'
+    _EMOJI_FACE = (
+        '@font-face { font-family: "LinhEmoji";'
+        ' src: local("Noto Color Emoji"),'
+        '      local("Segoe UI Emoji"),'
+        '      local("Apple Color Emoji");'
+        ' unicode-range: U+1F000-1FFFF, U+2600-27BF, U+1F1E6-1F1FF,'
+        '                U+2300-23FF, U+2B00-2BFF, U+2900-297F,'
+        '                U+1F900-1F9FF, U+1FA70-1FAFF; }'
+    )
     style_block = f"""
+    {_EMOJI_FACE}
     @font-face {{ font-family: "{_MASTHEAD_FONT_FAMILY}";
-                  src: url("{font_url}") format("opentype"); }}
+                  src: url("{font_url}") format("opentype");
+                  font-weight: normal; font-style: normal; }}
     /* News-flow titles + body. !important so the WeasyPrint stylesheet's
        generic h2/h3/p rules in app/pdf.py compose correctly without losing
        weight when font-family changes. */
     .flow section.news-header h2 {{
                  font-weight:bold !important;
-                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILIES}; }}
+                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILY}; }}
     .flow section.news-story h3 {{
                  font-weight:bold !important;
-                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILIES}; }}
+                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILY}; }}
     .flow section.news-story p,
     .flow section.news-story ul,
     .flow section.news-story li {{
-                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILIES}; }}
+                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILY}; }}
     /* Subsection image: cap at one flow-column width. The page geometry
        (15.296in × 0.4in margins, 2.4in rail, 14pt content gap, 14pt
        column-gap × 3, 4 columns) gives ~2.83in per column; 2.6in keeps
@@ -309,23 +340,23 @@ def build_pdf_html(
                  border:0.5pt solid #000; padding:8pt 20pt;
                  text-align:center;
                  font-style:italic;
-                 font-family:"Times New Roman", Georgia, serif,
-                              "Noto Color Emoji", "Segoe UI Emoji",
-                              "Apple Color Emoji", emoji; }}
+                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILY}; }}
     .masthead .weather-corner {{ text-align:center;
-                 font-family:"Times New Roman", Georgia, serif,
-                              "Noto Color Emoji", "Segoe UI Emoji",
-                              "Apple Color Emoji", emoji;
+                 font-family:"Times New Roman", Georgia, serif, {_EMOJI_FAMILY};
                  max-width:2.6in; min-width:1.6in;
                  padding:6pt 8pt;
                  line-height:1.3; }}
     .masthead .weather-corner .weather-title {{
-                 display:block; font-weight:bold;
+                 display:block; font-weight:bold !important;
                  letter-spacing:.05em; text-transform:uppercase;
                  font-size:10pt; margin:0 0 4pt; text-align:center; }}
+    /* Do NOT include emoji families in this stack: WeasyPrint silently
+       drops the @font-face Chomsky load when the family list also
+       contains "Noto Color Emoji" (and falls through to Segoe UI Emoji
+       for the entire title). The masthead has no emoji glyphs anyway. */
     .masthead .title {{ flex:1 1 auto; text-align:center; margin:0;
                  font-family:"{_MASTHEAD_FONT_FAMILY}", "Times New Roman",
-                              Georgia, serif, "Noto Color Emoji";
+                              Georgia, serif;
                  font-weight:normal; letter-spacing:0;
                  white-space:nowrap; overflow:visible; }}
     .dateline {{ display:flex; justify-content:space-between; align-items:baseline;

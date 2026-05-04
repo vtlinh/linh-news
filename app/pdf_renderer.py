@@ -162,20 +162,25 @@ def _render_section_for_pdf(
 
     Header is the h2-only wrapper; stories are individual <section> blocks
     with the h3 + body. The caller stitches them together with sep-story /
-    sep-group rules between the right pairs. The first story carries the
-    section's image (if its first subsection had a successful image fetch).
+    sep-group rules between the right pairs. At most one subsection per
+    section carries an image (set by app.generate); the renderer simply
+    embeds whichever one has ``image_id``. We also defensively cap to one
+    in case stale data has it set on multiple subsections.
     """
     key = section.get("key", "")
     title = _esc(section.get("title", "") or SECTION_TITLES.get(key, key))
     header = f'<section class="news-header"><h2>{title}</h2></section>'
     stories: list[str] = []
-    for idx, sub in enumerate(section.get("subsections") or []):
-        with_image = idx == 0
+    image_used = False
+    for sub in section.get("subsections") or []:
+        with_image = (not image_used) and bool(sub.get("image_id"))
         story = _render_story_html(
             sub,
             image_bytes_by_id=image_bytes_by_id,
             with_image=with_image,
         )
+        if with_image:
+            image_used = True
         stories.append(f'<section class="news-story">{story}</section>')
     return header, stories
 

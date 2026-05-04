@@ -79,10 +79,12 @@ def test_favorite_overrides_rating_within_favorite_window():
     assert in_theaters == []
 
 
-def test_favorite_outside_tight_window_excluded():
+def test_favorite_path_is_additive_not_restrictive():
+    """A favorite whose rating already qualifies under the standard 60-day
+    window must still be included even when it falls outside the tighter
+    30-day favorite window — being marked favorite should never *remove*
+    a movie that would otherwise qualify."""
     today = date(2026, 5, 1)
-    # A favorite released > 30 days out is excluded — favorite window is
-    # tighter than the standard 60-day window.
     fav_far = _make("Fav Far", "PG", today + timedelta(days=45))
     in_theaters, coming_soon = movies.filter_for_edition(
         [fav_far],
@@ -90,6 +92,22 @@ def test_favorite_outside_tight_window_excluded():
         hidden_titles=set(),
         allowed_ratings={"G", "PG"},
         favorite_titles={"Fav Far"},
+    )
+    assert [m["title"] for m in coming_soon] == ["Fav Far"]
+
+
+def test_favorite_with_disallowed_rating_outside_tight_window_excluded():
+    """A favorite with a rating outside ``allowed_ratings`` AND a release
+    beyond the 30-day favorite window has neither path qualify, so it's
+    excluded."""
+    today = date(2026, 5, 1)
+    fav_far = _make("Fav Far R", "R", today + timedelta(days=45))
+    in_theaters, coming_soon = movies.filter_for_edition(
+        [fav_far],
+        today,
+        hidden_titles=set(),
+        allowed_ratings={"G", "PG"},
+        favorite_titles={"Fav Far R"},
     )
     assert in_theaters == [] and coming_soon == []
 

@@ -126,7 +126,9 @@ def test_render_image_skipped_when_no_image_id():
     assert "/edition-image/" not in out
 
 
-def test_only_first_subsection_gets_image_per_section():
+def test_at_most_one_image_per_section_when_multiple_have_ids():
+    """Defensive: if stale/multiple subsections somehow carry image_id,
+    only the first such subsection renders an <img>."""
     sec = {
         "key": "us",
         "title": "T",
@@ -148,6 +150,31 @@ def test_only_first_subsection_gets_image_per_section():
     out = render_edition_html({"sections": [sec], "stocks": []})
     assert "/edition-image/1" in out
     assert "/edition-image/2" not in out
+
+
+def test_image_renders_on_later_subsection_when_first_has_no_image():
+    """When the first subsection produced no usable image but a later one
+    did, the image should still render — just on the later subsection."""
+    sec = {
+        "key": "us",
+        "title": "T",
+        "subsections": [
+            {
+                "title": "h0",
+                "text": "b",
+                "sources": [{"url": "https://x", "title": "T"}],
+                # no image_id — first subsection had no usable og:image
+            },
+            {
+                "title": "h1",
+                "text": "b",
+                "sources": [{"url": "https://x", "title": "T"}],
+                "image_id": 7,
+            },
+        ],
+    }
+    out = render_edition_html({"sections": [sec], "stocks": []})
+    assert "/edition-image/7" in out
 
 
 def test_stocks_render_with_color_and_tooltip():

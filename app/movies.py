@@ -288,13 +288,16 @@ def filter_for_edition(
 ) -> tuple[list[dict], list[dict]]:
     """Return ``(in_theaters, coming_soon)`` lists for the daily edition.
 
-    Standard inclusion: release_date in ``[today - 3 weeks, today + 2 months]``
-    AND ``rating`` in ``allowed_ratings`` AND title not in ``hidden_titles``.
+    A movie is included if it qualifies under **either** path:
 
-    Favorites override the rating filter on a tighter forward window:
-    if a movie's title is in ``favorite_titles`` and its release_date is
-    in ``[today - 3 weeks, today + 1 month]``, it is included regardless
-    of ``allowed_ratings``. ``hidden_titles`` still applies."""
+    * Standard: ``release_date`` in ``[today - 3 weeks, today + 2 months]``
+      AND ``rating`` in ``allowed_ratings``.
+    * Favorite: title in ``favorite_titles`` AND ``release_date`` in
+      ``[today - 3 weeks, today + 1 month]`` (any rating).
+
+    The favorite path is purely additive — being marked favorite never
+    removes a movie that would otherwise qualify under the standard
+    window. ``hidden_titles`` always applies."""
     favorite_titles = favorite_titles or set()
     earliest = today - EDITION_PAST_WINDOW
     latest = today + EDITION_FUTURE_WINDOW
@@ -309,15 +312,16 @@ def filter_for_edition(
         rd = _parse_release(m)
         if rd is None or rd < earliest:
             continue
+        # Two independent paths to inclusion; either qualifies.
+        # Standard:  rd ≤ latest      AND rating in allowed_ratings
+        # Favorite:  rd ≤ fav_latest  AND title in favorite_titles
+        # The favorite path is additive — being a favorite never *removes*
+        # a movie that would otherwise qualify under the standard window.
         is_fav = title in favorite_titles
-        if is_fav:
-            if rd > fav_latest:
-                continue
-        else:
-            if rd > latest:
-                continue
-            if m.get("rating") not in allowed_ratings:
-                continue
+        in_standard = rd <= latest and m.get("rating") in allowed_ratings
+        in_favorite = is_fav and rd <= fav_latest
+        if not (in_standard or in_favorite):
+            continue
         seen.add(title)
         if rd <= today:
             in_theaters.append(m)

@@ -144,9 +144,14 @@ def _render_section(section: dict) -> str:
         f'<section class="news-header" data-key="{_esc(key)}"><h2>{title}</h2></section>'
     ]
     subs = section.get("subsections") or []
+    image_used = False
     for idx, sub in enumerate(subs):
-        # Show one image per news section: the first subsection's first image.
-        with_image = idx == 0
+        # At most one image per news section: render whichever subsection
+        # carries an ``image_id`` (set by app.generate, which prefers the
+        # earliest subsection that produced a usable image).
+        with_image = (not image_used) and bool(sub.get("image_id"))
+        if with_image:
+            image_used = True
         parts.append(
             f'<section class="news-story" data-key="{_esc(key)}" '
             f'data-idx="{idx}">{_render_subsection(sub, with_image=with_image)}'

@@ -499,43 +499,44 @@ def _fetch_and_persist_images(
     image_bytes_by_id: dict[int, tuple[bytes, str]] = {}
     for section in linhnews.get("sections") or []:
         key = section.get("key", "")
-        # Only the first subsection of each section is rendered with an
-        # image (per pdf_renderer._render_section_for_pdf), so don't waste
-        # network on the rest.
+        # At most one image per section, attached to the earliest
+        # subsection whose sources yield a usable image. We walk the
+        # subsections in order and stop as soon as one succeeds.
         subs = section.get("subsections") or []
-        if not subs:
-            continue
-        idx, sub = 0, subs[0]
-        urls = _candidate_image_urls(sub)
-        if not urls:
-            continue
-        try:
-            fetched = images.fetch_one(urls, reject_hashes=reject_hashes)
-        except Exception:  # noqa: BLE001
-            log.exception("Image fetch raised for %s/%d", key, idx)
-            continue
-        if fetched is None:
-            log.info("No usable image for %s/%d (%d candidates)", key, idx, len(urls))
-            continue
-        # Within this single run, also reject hashes we've already used —
-        # two subsections in the same edition shouldn't share an image.
-        # This doesn't block same-day re-runs because the prior run's rows
-        # were deleted above before this loop started.
-        reject_hashes.add(fetched.sha256)
-        row = SubsectionImage(
-            edition_date=day,
-            section_key=key,
-            subsection_idx=idx,
-            bytes_=fetched.bytes_,
-            mime_type=fetched.mime_type,
-            width=fetched.width,
-            height=fetched.height,
-            image_hash=fetched.sha256,
-        )
-        s.add(row)
-        s.flush()  # populate row.id without committing
-        sub["image_id"] = row.id
-        image_bytes_by_id[row.id] = (fetched.bytes_, fetched.mime_type)
+        for idx, sub in enumerate(subs):
+            urls = _candidate_image_urls(sub)
+            if not urls:
+                continue
+            try:
+                fetched = images.fetch_one(urls, reject_hashes=reject_hashes)
+            except Exception:  # noqa: BLE001
+                log.exception("Image fetch raised for %s/%d", key, idx)
+                continue
+            if fetched is None:
+                log.info(
+                    "No usable image for %s/%d (%d candidates)", key, idx, len(urls)
+                )
+                continue
+            # Within this single run, also reject hashes we've already used —
+            # two subsections in the same edition shouldn't share an image.
+            # This doesn't block same-day re-runs because the prior run's
+            # rows were deleted above before this loop started.
+            reject_hashes.add(fetched.sha256)
+            row = SubsectionImage(
+                edition_date=day,
+                section_key=key,
+                subsection_idx=idx,
+                bytes_=fetched.bytes_,
+                mime_type=fetched.mime_type,
+                width=fetched.width,
+                height=fetched.height,
+                image_hash=fetched.sha256,
+            )
+            s.add(row)
+            s.flush()  # populate row.id without committing
+            sub["image_id"] = row.id
+            image_bytes_by_id[row.id] = (fetched.bytes_, fetched.mime_type)
+            break  # one image per section — stop at the first success
     s.commit()
     log.info("Persisted %d subsection images for %s", len(image_bytes_by_id), day)
     return image_bytes_by_id

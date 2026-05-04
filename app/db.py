@@ -72,6 +72,9 @@ class SubsectionImage(Base):
     mime_type: Mapped[str] = mapped_column(String, nullable=False)
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)
+    # SHA-256 of the raw downloaded bytes. Used to reject images that already
+    # appeared in a different edition (e.g. site banners served as og:image).
+    image_hash: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class HiddenMovie(Base):

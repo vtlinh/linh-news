@@ -11,6 +11,7 @@ If the chosen URL fails (404, decode error, etc.) we try the next candidate.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import random
@@ -46,6 +47,7 @@ class FetchedImage:
     mime_type: str
     width: int
     height: int
+    sha256: str
 
 
 def _download(url: str) -> bytes:
@@ -80,9 +82,11 @@ def _encode(img: Image.Image) -> tuple[bytes, str]:
     return buf.getvalue(), "image/jpeg"
 
 
-def _try_one(url: str) -> tuple[Image.Image, bool] | None:
-    """Download + decode a single URL. Returns (image, is_landscape) or None
-    on any failure."""
+def _try_one(url: str) -> tuple[Image.Image, bool, str] | None:
+    """Download + decode a single URL. Returns (image, is_landscape, sha256)
+    of the *raw* downloaded bytes, or None on any failure. Hashing the raw
+    bytes (not the re-encoded JPEG) keeps cross-day dedup stable across
+    Pillow version differences."""
     if not url:
         return None
     try:
@@ -96,10 +100,13 @@ def _try_one(url: str) -> tuple[Image.Image, bool] | None:
     except (UnidentifiedImageError, OSError) as e:
         log.info("Image decode failed (%s): %s", url, e)
         return None
-    return img, img.width >= img.height
+    return img, img.width >= img.height, hashlib.sha256(raw).hexdigest()
 
 
-def fetch_one(urls: list[str]) -> FetchedImage | None:
+def fetch_one(
+    urls: list[str],
+    reject_hashes: set[str] | None = None,
+) -> FetchedImage | None:
     """Return one resized image for the subsection, or None if every
     candidate failed.
 
@@ -107,36 +114,45 @@ def fetch_one(urls: list[str]) -> FetchedImage | None:
     Prefer landscape — if the first successful decode is portrait, keep
     trying the rest looking for a landscape one. Fall back to the portrait
     candidate if no landscape candidate succeeds.
+
+    ``reject_hashes`` (sha256 of raw downloaded bytes) skips candidates
+    whose bytes match any prior edition's image — used to suppress generic
+    site banners that recur day after day.
     """
     if not urls:
         return None
     candidates = list(urls)
     random.shuffle(candidates)
 
-    portrait_fallback: Image.Image | None = None
-    chosen: Image.Image | None = None
+    portrait_fallback: tuple[Image.Image, str] | None = None
+    chosen: tuple[Image.Image, str] | None = None
     for url in candidates:
         result = _try_one(url)
         if result is None:
             continue
-        img, is_landscape = result
+        img, is_landscape, sha = result
+        if reject_hashes and sha in reject_hashes:
+            log.info("Image rejected — hash seen on prior day (%s): %s", sha[:12], url)
+            continue
         if is_landscape:
-            chosen = img
+            chosen = (img, sha)
             break
         if portrait_fallback is None:
-            portrait_fallback = img
+            portrait_fallback = (img, sha)
     if chosen is None:
         chosen = portrait_fallback
     if chosen is None:
         return None
 
-    chosen = _resize(chosen)
-    data, mime = _encode(chosen)
+    img, sha = chosen
+    img = _resize(img)
+    data, mime = _encode(img)
     return FetchedImage(
         bytes_=data,
         mime_type=mime,
-        width=chosen.width,
-        height=chosen.height,
+        width=img.width,
+        height=img.height,
+        sha256=sha,
     )
 
 

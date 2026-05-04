@@ -4,12 +4,13 @@ import argparse
 import contextlib
 import hashlib
 import logging
+import re
 import sys
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -389,14 +390,58 @@ def _ensure_edition_stub(s: Session, day: date) -> None:
     s.commit()
 
 
+_HEADLINE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9'-]+")
+_HEADLINE_STOPWORDS = {
+    "about", "after", "again", "against", "amid", "around", "before", "behind",
+    "below", "between", "could", "during", "every", "from", "have", "into",
+    "more", "much", "must", "near", "next", "off", "once", "only", "other",
+    "over", "same", "should", "since", "some", "still", "such", "than",
+    "that", "their", "them", "then", "there", "these", "they", "this",
+    "those", "through", "today", "tonight", "under", "until", "very", "what",
+    "when", "where", "which", "while", "with", "within", "without", "would",
+    "your", "says", "said", "just", "also", "been", "were", "will",
+}
+
+
+def _headline_keywords(text_value: str) -> set[str]:
+    """Significant tokens from a headline / og title / alt — lowercase,
+    length ≥4, alphabetic-leading, stopwords removed. Used to score whether
+    an og:image's metadata refers to the same story as the subsection."""
+    out: set[str] = set()
+    for tok in _HEADLINE_TOKEN_RE.findall(text_value or ""):
+        low = tok.lower()
+        if len(low) >= 4 and low not in _HEADLINE_STOPWORDS:
+            out.add(low)
+    return out
+
+
+def _is_image_relevant(headline: str, og: og_image.OgImage) -> bool:
+    """True if the og:image's page title or alt text shares at least one
+    significant keyword with the subsection headline. If the page exposed
+    no title/alt at all, we trust the homepage filter and accept — this
+    avoids false rejections on minimal sites."""
+    headline_kw = _headline_keywords(headline)
+    if not headline_kw:
+        return True
+    candidate_kw = _headline_keywords(og.page_title) | _headline_keywords(og.alt)
+    if not candidate_kw:
+        return True
+    return bool(headline_kw & candidate_kw)
+
+
 def _candidate_image_urls(sub: dict) -> list[str]:
-    """Scrape og:image from each source URL, in order. Deduped.
+    """Scrape og:image from each source URL, in order. Deduped, and
+    filtered to images whose page metadata mentions at least one keyword
+    from the subsection headline.
 
     The LLM no longer supplies image URLs — it hallucinated 100% 404s.
-    We only trust og:image meta tags from the article pages themselves.
+    We only trust og:image meta tags from the article pages themselves,
+    and we reject anything that looks unrelated (a generic site banner on
+    a homepage URL, an article about something else, etc.).
     """
     urls: list[str] = []
     seen: set[str] = set()
+    headline = sub.get("title", "") or ""
     for src in sub.get("sources") or []:
         if not isinstance(src, dict):
             continue
@@ -404,9 +449,17 @@ def _candidate_image_urls(sub: dict) -> list[str]:
         if not article_url:
             continue
         og = og_image.fetch_og_image(article_url)
-        if og and og not in seen:
-            seen.add(og)
-            urls.append(og)
+        if og is None or og.url in seen:
+            continue
+        if not _is_image_relevant(headline, og):
+            log.info(
+                "og:image rejected — no headline overlap (headline=%r url=%s)",
+                headline,
+                og.url,
+            )
+            continue
+        seen.add(og.url)
+        urls.append(og.url)
     return urls
 
 
@@ -428,6 +481,21 @@ def _fetch_and_persist_images(
     s.execute(delete(SubsectionImage).where(SubsectionImage.edition_date == day))
     s.commit()
 
+    # Hashes seen on any *other* edition's images — used to drop generic
+    # site banners that recur day after day. Today's rows were just deleted
+    # above, so equality with ``day`` is a no-op; using != is conservative
+    # in case a parallel run interleaves.
+    reject_hashes: set[str] = set(
+        h
+        for h in s.execute(
+            select(SubsectionImage.image_hash).where(
+                SubsectionImage.image_hash.is_not(None),
+                SubsectionImage.edition_date != day,
+            )
+        ).scalars()
+        if h
+    )
+
     image_bytes_by_id: dict[int, tuple[bytes, str]] = {}
     for section in linhnews.get("sections") or []:
         key = section.get("key", "")
@@ -442,13 +510,18 @@ def _fetch_and_persist_images(
         if not urls:
             continue
         try:
-            fetched = images.fetch_one(urls)
+            fetched = images.fetch_one(urls, reject_hashes=reject_hashes)
         except Exception:  # noqa: BLE001
             log.exception("Image fetch raised for %s/%d", key, idx)
             continue
         if fetched is None:
             log.info("No usable image for %s/%d (%d candidates)", key, idx, len(urls))
             continue
+        # Within this single run, also reject hashes we've already used —
+        # two subsections in the same edition shouldn't share an image.
+        # This doesn't block same-day re-runs because the prior run's rows
+        # were deleted above before this loop started.
+        reject_hashes.add(fetched.sha256)
         row = SubsectionImage(
             edition_date=day,
             section_key=key,
@@ -457,6 +530,7 @@ def _fetch_and_persist_images(
             mime_type=fetched.mime_type,
             width=fetched.width,
             height=fetched.height,
+            image_hash=fetched.sha256,
         )
         s.add(row)
         s.flush()  # populate row.id without committing

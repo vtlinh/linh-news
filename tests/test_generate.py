@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import patch
 
-from app import generate
+from app import generate, og_image
 from app.db import Edition
 
 
@@ -214,3 +214,64 @@ def test_build_context_dedupes_calendar_events(db_session, monkeypatch):
     may11 = by_day.get(date(2026, 5, 11), [])
     assert len(may4) == 1, may4
     assert len(may11) == 1, may11
+
+
+# ── og:image relevance filter ────────────────────────────────────────────
+
+
+def _og(url: str, title: str = "", alt: str = "") -> og_image.OgImage:
+    return og_image.OgImage(url=url, page_title=title, alt=alt)
+
+
+def test_is_image_relevant_accepts_overlap_in_page_title():
+    headline = "Senate Passes Sweeping Climate Bill"
+    og = _og("https://x/y.jpg", title="US Senate approves climate legislation")
+    assert generate._is_image_relevant(headline, og) is True
+
+
+def test_is_image_relevant_accepts_overlap_in_alt():
+    headline = "Knicks Beat Celtics in Overtime"
+    og = _og("https://x/y.jpg", title="NBA highlights", alt="Knicks players celebrating")
+    assert generate._is_image_relevant(headline, og) is True
+
+
+def test_is_image_relevant_rejects_unrelated_metadata():
+    headline = "Senate Passes Sweeping Climate Bill"
+    og = _og("https://x/y.jpg", title="Recipes for autumn squash soup")
+    assert generate._is_image_relevant(headline, og) is False
+
+
+def test_is_image_relevant_accepts_when_no_metadata_available():
+    """If the page exposes no title/alt, give the image the benefit of the
+    doubt rather than dropping it — the homepage filter already handled
+    the worst case."""
+    headline = "Senate Passes Sweeping Climate Bill"
+    og = _og("https://x/y.jpg", title="", alt="")
+    assert generate._is_image_relevant(headline, og) is True
+
+
+def test_is_image_relevant_ignores_short_and_stopword_tokens():
+    """'the' and 'in' overlapping doesn't count as a relevance match."""
+    headline = "The Vote In The Capitol"
+    og = _og("https://x/y.jpg", title="The latest in fashion")
+    assert generate._is_image_relevant(headline, og) is False
+
+
+def test_candidate_image_urls_drops_irrelevant_og_images():
+    """The full pipeline: og scrape → relevance filter → URL list."""
+    sub = {
+        "title": "Knicks Win in Overtime",
+        "sources": [
+            {"url": "https://nba.example/article/knicks-win", "title": "NBA"},
+            {"url": "https://food.example/article/squash", "title": "Food Co"},
+        ],
+    }
+
+    def fake_og(url: str) -> og_image.OgImage | None:
+        if "knicks" in url:
+            return _og("https://cdn/knicks.jpg", title="Knicks beat Celtics in overtime")
+        return _og("https://cdn/squash.jpg", title="Autumn squash soup recipe")
+
+    with patch.object(generate.og_image, "fetch_og_image", side_effect=fake_og):
+        urls = generate._candidate_image_urls(sub)
+    assert urls == ["https://cdn/knicks.jpg"]

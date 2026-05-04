@@ -95,3 +95,54 @@ def test_fetch_one_returns_none_when_all_fail():
     with patch.object(images, "_download", side_effect=OSError("nope")):
         out = images.fetch_one(["https://x/a", "https://x/b"])
     assert out is None
+
+
+def test_fetch_one_returns_sha256_of_raw_bytes():
+    """The hash is computed from the raw downloaded bytes — not the
+    re-encoded JPEG — so cross-day dedup stays stable across resize/format
+    differences."""
+    import hashlib
+
+    src = _png_bytes(800, 400)
+    expected = hashlib.sha256(src).hexdigest()
+    with patch.object(images, "_download", return_value=src):
+        out = images.fetch_one(["https://x/a.png"])
+    assert out is not None
+    assert out.sha256 == expected
+
+
+def test_fetch_one_skips_rejected_hashes_and_tries_next():
+    """A candidate whose raw-bytes sha256 is in ``reject_hashes`` is skipped
+    even if it would otherwise be the best match."""
+    import hashlib
+
+    banner = _png_bytes(800, 400, color=(0, 0, 0))
+    fresh = _png_bytes(900, 450, color=(255, 255, 255))
+    banner_hash = hashlib.sha256(banner).hexdigest()
+
+    def fake_download(url: str) -> bytes:
+        return banner if "banner" in url else fresh
+
+    with (
+        patch.object(images.random, "shuffle", side_effect=lambda lst: lst),
+        patch.object(images, "_download", side_effect=fake_download),
+    ):
+        out = images.fetch_one(
+            ["https://x/banner.png", "https://x/fresh.png"],
+            reject_hashes={banner_hash},
+        )
+    assert out is not None
+    assert out.sha256 != banner_hash
+
+
+def test_fetch_one_returns_none_when_only_candidate_is_rejected():
+    import hashlib
+
+    src = _png_bytes(800, 400)
+    src_hash = hashlib.sha256(src).hexdigest()
+    with patch.object(images, "_download", return_value=src):
+        out = images.fetch_one(
+            ["https://x/a.png"],
+            reject_hashes={src_hash},
+        )
+    assert out is None

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
@@ -11,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import SessionRow, get_session
-from app.settings import ADMIN_EMAIL, get_settings
+from app.settings import get_settings
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -20,25 +19,17 @@ LOGIN_SCOPES = "openid email profile"
 SESSION_COOKIE = "linh_news_session"
 
 
-def load_allowlist(path: Path | None = None) -> set[str]:
-    p = path or get_settings().users_file
-    if not p.exists():
-        return set()
-    out: set[str] = set()
-    for raw in p.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        out.add(line.lower())
-    return out
+def load_allowlist(csv: str | None = None) -> set[str]:
+    raw = csv if csv is not None else get_settings().authorized_users
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
-def is_allowed(email: str, path: Path | None = None) -> bool:
-    return email.lower() in load_allowlist(path)
+def is_allowed(email: str, csv: str | None = None) -> bool:
+    return email.lower() in load_allowlist(csv)
 
 
 def is_admin(email: str) -> bool:
-    return email.lower() == ADMIN_EMAIL.lower()
+    return email.lower() == get_settings().admin_email.lower()
 
 
 def login_url(state: str) -> str:

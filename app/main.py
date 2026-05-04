@@ -19,7 +19,7 @@ from app import auth, cache, calendar_oauth, calendar_summary, overlays, prefs, 
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, SubsectionImage, get_session
-from app.settings import ADMIN_EMAIL, REPO_ROOT, get_settings, local_today
+from app.settings import REPO_ROOT, get_settings, local_today
 
 
 @asynccontextmanager
@@ -200,7 +200,7 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
             "next_date_allowed": next_date <= today,
             "today_str": today.isoformat(),
             "edition_html": edition_html,
-            "is_admin": viewer_email.lower() == ADMIN_EMAIL.lower(),
+            "is_admin": auth.is_admin(viewer_email),
             # First-paint hint so the button renders in the right state with
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),

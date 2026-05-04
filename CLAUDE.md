@@ -60,10 +60,10 @@ Pipeline (`app/generate.py`):
 
 ## Auth model (two tiers)
 
-- **Viewer** — any email in `users.txt` (committed to repo). Can view any past edition and click Refresh.
-- **Admin** — hardcoded `vtlinh87@gmail.com` constant in `app/auth.py`. Can also Hide movies, hide calendars, and edit important events.
+- **Viewer** — any email in the `AUTHORIZED_USERS` env var (comma-separated). Can view any past edition and click Refresh.
+- **Admin** — the email in the `ADMIN_EMAIL` env var (default `vtlinh87@gmail.com`). Must also appear in `AUTHORIZED_USERS`. Can also Hide movies, hide calendars, and edit important events.
 
-Server-side enforcement via `require_viewer` and `require_admin` FastAPI dependencies. The viewer template hides admin-only UI but never relies on that for security. Adding/removing authorized users is done by editing `users.txt` and redeploying — there is intentionally no admin route for it.
+Server-side enforcement via `require_viewer` and `require_admin` FastAPI dependencies. The viewer template hides admin-only UI but never relies on that for security. Adding/removing authorized users is done with `fly secrets set AUTHORIZED_USERS=…` and a redeploy — there is intentionally no admin route for it.
 
 ## news.pr — the prompt file
 

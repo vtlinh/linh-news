@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,10 +17,8 @@ os.environ.setdefault("SESSION_SECRET", "test-secret")
 
 
 @pytest.fixture()
-def tmp_users_file(tmp_path: Path) -> Path:
-    p = tmp_path / "users.txt"
-    p.write_text("# comment\nvtlinh87@gmail.com\nfriend@example.com\n", encoding="utf-8")
-    return p
+def users_csv() -> str:
+    return "vtlinh87@gmail.com, friend@example.com"
 
 
 @pytest.fixture()
@@ -44,7 +41,7 @@ def db_session() -> Iterator[Session]:
 
 
 @pytest.fixture()
-def client(db_session, monkeypatch, tmp_users_file):
+def client(db_session, monkeypatch, users_csv):
     """FastAPI TestClient with the SQLite session factory installed."""
     from fastapi.testclient import TestClient
 
@@ -52,11 +49,10 @@ def client(db_session, monkeypatch, tmp_users_file):
     from app.db import get_session, session_factory
     from app.main import app
 
-    # Wire allowlist file
     monkeypatch.setattr(
         auth_module,
         "load_allowlist",
-        lambda path=None: {
+        lambda csv=None: {
             "vtlinh87@gmail.com",
             "friend@example.com",
         },

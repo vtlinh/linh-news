@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ADMIN_EMAIL = "vtlinh87@gmail.com"
 
 # All "today" calculations in the app must use Linh's local time, not UTC,
 # so the date picker and calendar lookups match what's on her wall clock.
@@ -50,6 +49,14 @@ class Settings(BaseSettings):
     weather_coords: str = "41.0223,-74.0635"
     weather_address: str = "15 Hunter Ridge, Woodcliff Lake, NJ 07677"
 
+    # Email of the sole admin user — granted Hide / important-event / movie-admin
+    # privileges. Any other authorized viewer is read-only.
+    admin_email: str = "vtlinh87@gmail.com"
+
+    # Comma-separated list of Google account emails allowed to view the site.
+    # The admin must be included here too. Whitespace around commas is OK.
+    authorized_users: str = "vtlinh87@gmail.com"
+
     session_secret: str = "dev-only-change-me"
     session_ttl_days: int = 30
     # Shared secret used by GitHub Actions to authenticate cron pings.
@@ -57,7 +64,6 @@ class Settings(BaseSettings):
     # Token for unauthenticated access to /pdf/latest (e.g. home screen shortcut).
     pdf_latest_token: str = ""
 
-    users_file: Path = REPO_ROOT / "users.txt"
     news_pr_path: Path = REPO_ROOT / "news.pr"
 
 

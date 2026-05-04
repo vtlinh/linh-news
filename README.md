@@ -51,7 +51,7 @@ Hosted on Fly.io. Two scheduled machines run `python -m app.generate morning` at
 
 ## Authorized users
 
-Edit [users.txt](users.txt) to grant Google-account access. Admin actions are restricted to the `ADMIN_EMAIL` constant (`vtlinh87@gmail.com`).
+Set the `AUTHORIZED_USERS` env var (comma-separated Google account emails) to grant access; the admin email must also appear in that list. The sole admin is configured via `ADMIN_EMAIL` (default `vtlinh87@gmail.com`). Update either with `fly secrets set …` and redeploy.
 
 ## Configuration
 

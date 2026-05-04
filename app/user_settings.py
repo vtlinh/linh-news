@@ -283,7 +283,7 @@ def save(s: Session, email: str, payload: dict) -> dict:
         sc = c.get("school_calendar") or {}
         kind = (sc.get("kind") or "").strip()
         value = (sc.get("value") or "").strip()
-        if kind in {"google", "url", "ics"} and value:
+        if kind in {"google", "url"} and value:
             entry["school_calendar"] = {"kind": kind, "value": value}
         children_clean.append(entry)
 

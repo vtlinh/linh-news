@@ -309,30 +309,11 @@
     }
     bday.addEventListener('input', updateSummary);
 
-    // School calendar — three input options. The user fills whichever they
-    // have; on save we pick the first non-empty in (google → url → ics) order.
+    // School calendar — pick a Google Calendar OR paste a URL. Picking a
+    // Google Calendar clears+disables the URL field; clearing the picker
+    // (✕) re-enables it. On save we send whichever is set.
     const gselect = el('select', { class: 'sc-google' });
     gselect.appendChild(el('option', { value: '' }, '(none)'));
-    function populateGSelect(list) {
-      gselect.innerHTML = '';
-      gselect.appendChild(el('option', { value: '' }, '(none)'));
-      list.forEach(cal => {
-        const opt = el('option', { value: cal.id }, cal.name + (cal.primary ? ' (primary)' : ''));
-        if (sc.kind === 'google' && sc.value === cal.id) opt.selected = true;
-        gselect.appendChild(opt);
-      });
-    }
-    populateGSelect([]);
-    loadCalendars().then(populateGSelect);
-
-    const refreshBtn = el('button', { type: 'button', class: 'add-source' }, '↻');
-    refreshBtn.title = 'Refresh Google Calendars from server';
-    refreshBtn.addEventListener('click', async () => {
-      refreshBtn.disabled = true;
-      const list = await loadCalendars(true);
-      populateGSelect(list);
-      refreshBtn.disabled = false;
-    });
 
     const urlInput = el('input', {
       type: 'url',
@@ -341,17 +322,34 @@
     });
     urlInput.style.flex = '1';
 
-    const icsHidden = el('input', { type: 'hidden', value: sc.kind === 'ics' ? (sc.value || '') : '' });
-    const fileInput = el('input', { type: 'file' });
-    fileInput.accept = '.ics,text/calendar';
-    const fileLabel = el('span', { class: 'sub' }, sc.kind === 'ics' && sc.value ? '(ics file uploaded)' : '');
-    fileInput.addEventListener('change', async () => {
-      const f = fileInput.files && fileInput.files[0];
-      if (!f) return;
-      const text = await f.text();
-      icsHidden.value = text;
-      fileLabel.textContent = `(${f.name}, ${text.length} chars)`;
+    const clearBtn = el('button', { type: 'button', class: 'del-source' }, '✕');
+    clearBtn.title = 'Clear calendar selection';
+
+    function syncDisabledState() {
+      const picked = !!gselect.value;
+      clearBtn.style.display = picked ? '' : 'none';
+      urlInput.disabled = picked;
+      if (picked) urlInput.value = '';
+    }
+
+    function populateGSelect(list) {
+      gselect.innerHTML = '';
+      gselect.appendChild(el('option', { value: '' }, '(none)'));
+      list.forEach(cal => {
+        const opt = el('option', { value: cal.id }, cal.name + (cal.primary ? ' (primary)' : ''));
+        if (sc.kind === 'google' && sc.value === cal.id) opt.selected = true;
+        gselect.appendChild(opt);
+      });
+      syncDisabledState();
+    }
+    populateGSelect([]);
+    loadCalendars().then(populateGSelect);
+
+    clearBtn.addEventListener('click', () => {
+      gselect.value = '';
+      syncDisabledState();
     });
+    gselect.addEventListener('change', syncDisabledState);
 
     const del = el('button', { type: 'button', class: 'delete-section' }, '✕ remove');
     const errBox = el('p', { class: 'err' });
@@ -371,16 +369,11 @@
         el('div', { class: 'row-inline' }, [
           el('span', { class: 'sub' }, 'Google:'),
           gselect,
-          refreshBtn,
+          clearBtn,
         ]),
         el('div', { class: 'row-inline' }, [
           el('span', { class: 'sub' }, 'URL:'),
           urlInput,
-        ]),
-        el('div', { class: 'row-inline' }, [
-          el('span', { class: 'sub' }, 'or .ics file:'),
-          fileInput,
-          fileLabel,
         ]),
         errBox,
       ]),
@@ -391,10 +384,8 @@
       const out = { name: name.value.trim(), birthday: bday.value.trim() };
       const gv = gselect.value.trim();
       const uv = urlInput.value.trim();
-      const iv = icsHidden.value.trim();
       if (gv) out.school_calendar = { kind: 'google', value: gv };
       else if (uv) out.school_calendar = { kind: 'url', value: uv };
-      else if (iv) out.school_calendar = { kind: 'ics', value: iv };
       return out;
     };
     row._showError = (msg) => {

@@ -255,6 +255,12 @@ def _drop_one_article(html: str) -> str | None:
     last = stories[-1]
     log.info("PDF: dropping last story of %r (%d → %d stories)",
              title[:60], len(stories), len(stories) - 1)
+    # Also drop the sep-story rule immediately before this story so we
+    # don't leave an orphan 1/3 separator floating above whatever comes
+    # next (next section's header, etc.).
+    prev = last.find_previous_sibling()
+    if prev is not None and "sep-story" in (prev.get("class") or []):
+        prev.decompose()
     last.decompose()
     return str(soup)
 

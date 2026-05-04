@@ -470,11 +470,13 @@ def render_pdf_html(
         "font-weight:bold"
     )
     row_style = "margin:0 0 8pt;line-height:1.25;break-inside:avoid"
-    # Movie title: larger + bold, on its own line above the release subtitle.
-    title_style = "font-size:13pt;font-weight:bold;line-height:1.2"
+    # Font sizes for .movie-title and .movie-desc come from the user
+    # stylesheet in app.pdf._make_css and scale with the fit-algorithm's
+    # chosen base_pt (10-20pt body, title +20%). Subtitle stays a fixed
+    # small caption.
+    title_style = "font-weight:bold;line-height:1.2"
     sub_style = "font-size:9pt;color:#555"
-    # Description: bold so it carries the same visual weight as the title.
-    desc_style = "font-size:11pt;color:#222;margin-top:2pt;line-height:1.3"
+    desc_style = "color:#222;margin-top:2pt;line-height:1.3"
     # Backdrops keep their original aspect ratio (no cover-cropping). With a
     # 2.4in rail and ~16:9 TMDB stills this is ~1.35in tall per card. The
     # two-phase fit loop in app/pdf.py drops movie cards (last first) and
@@ -497,7 +499,10 @@ def render_pdf_html(
             else f"Opens {_format_release_label(rd)}"
         )
         summary = (m.get("summary") or "").strip()
-        desc_html = f'<div style="{desc_style}">{html.escape(summary)}</div>' if summary else ""
+        desc_html = (
+            f'<div class="movie-desc" style="{desc_style}">{html.escape(summary)}</div>'
+            if summary else ""
+        )
         backdrop_url = _pick_backdrop(m)
         backdrop_html = ""
         if backdrop_url:

@@ -626,7 +626,10 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
         "font-weight:bold"
     )
     # ``cal-event`` class lets the PDF fit loop find + drop event rows.
-    row_style = "margin:0 0 1pt;font-size:12pt"
+    # Font sizes are intentionally NOT set here; the user-stylesheet in
+    # app.pdf._make_css scales ``.cal-event`` / ``.cal-date`` against the
+    # base_pt that the fit algorithm chooses (10-20pt body, dates +20%).
+    row_style = "margin:0 0 1pt"
     row_open = f'<div class="cal-event" style="{row_style}'
     parts: list[str] = [f'<div style="{label_style}">Calendar</div>']
 
@@ -640,12 +643,14 @@ def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]
             label = d.strftime("%A")  # full day name, e.g. "Friday"
         # Date label: bigger + bold so each day-group's header stands out
         # from the event rows below it.
+        # Font size set externally via .cal-date in app.pdf._make_css so it
+        # tracks the fit-algorithm's chosen base_pt.
         sub_label_style = (
-            "font-size:11pt;letter-spacing:.05em;text-transform:uppercase;"
+            "letter-spacing:.05em;text-transform:uppercase;"
             "margin:4pt 0 1pt;font-weight:bold;color:#000"
         )
         parts.append(
-            f'<div style="{sub_label_style}">'
+            f'<div class="cal-date" style="{sub_label_style}">'
             f"<strong>{label} — {d.strftime('%b')} {d.day}</strong></div>"
         )
         evs = sorted(day_groups[day_str], key=lambda x: x.get("start", ""))

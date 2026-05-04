@@ -398,6 +398,11 @@ def html_to_pdf(html: str) -> bytes:
         p, li {{ margin: 0 0 3pt !important; font-size: {base_pt:.2f}pt !important;
                  line-height: 1.15 !important; }}
         small {{ font-size: {base_pt * 0.875:.2f}pt !important; }}
+        /* Rail font sizes scale with the fit-chosen base_pt so the rail
+           matches the news flow's density. Date/title get a +10% boost
+           over event/description body text. */
+        .cal-event, .movie-desc {{ font-size: {base_pt:.2f}pt !important; }}
+        .cal-date, .movie-title {{ font-size: {base_pt * 1.1:.2f}pt !important; }}
         hr {{ display: none !important; }}
         br + br {{ display: none !important; }}
         img {{ max-width: 100% !important; }}

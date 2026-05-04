@@ -375,6 +375,26 @@ def get_now_cached(
 # ───────────────── Strip renderer ─────────────────
 
 
+def build_refreshed_span(refreshed_at: datetime | None) -> str:
+    """Render the ``REFRESHED AT HH:MM TZ`` badge as an inline span.
+
+    Returns ``""`` when no timestamp is provided. Shared between the live
+    one-line strip and the prose-paragraph layout."""
+    if refreshed_at is None:
+        return ""
+    from app.settings import LOCAL_TZ
+
+    ts = refreshed_at
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    ts = ts.astimezone(LOCAL_TZ)
+    tz_abbrev = ts.tzname() or "EST"
+    return (
+        f'<span class="weather-refreshed">Refreshed at '
+        f"{ts.hour:02d}:{ts.minute:02d} {tz_abbrev}</span>"
+    )
+
+
 def build_weather_strip(
     now: str,
     forecast: dict,
@@ -393,7 +413,6 @@ def build_weather_strip(
     The CSS pins ``.weather-refreshed`` to the right edge of the row,
     mirroring the masthead-corner refreshed label in the PDF.
     """
-    from app.settings import LOCAL_TZ
 
     parts: list[str] = []
     if now:
@@ -426,17 +445,7 @@ def build_weather_strip(
     for a in alerts or []:
         parts.append(f"⚠ {a}")
     inner = " · ".join(p for p in parts if p)
-    refreshed_html = ""
-    if refreshed_at is not None:
-        ts = refreshed_at
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        ts = ts.astimezone(LOCAL_TZ)
-        tz_abbrev = ts.tzname() or "EST"
-        refreshed_html = (
-            f'<span class="weather-refreshed">Refreshed at '
-            f"{ts.hour:02d}:{ts.minute:02d} {tz_abbrev}</span>"
-        )
+    refreshed_html = build_refreshed_span(refreshed_at)
     return (
         f'<div class="weather-strip">'
         f'<span class="weather-main">{inner}</span>'

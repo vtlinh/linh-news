@@ -19,6 +19,7 @@ from app import (
     claude_client,
     html_renderer,
     images,
+    og_image,
     overlays,
     pdf,
     pdf_renderer,
@@ -370,55 +371,102 @@ def _backfill_missing_sections(linhnews: dict, today: date) -> dict:
 # ── Image fetch ─────────────────────────────────────────────────────────
 
 
+def _ensure_edition_stub(s: Session, day: date) -> None:
+    """Insert an empty ``editions`` row for ``day`` if one doesn't already
+    exist, so the ``subsection_images.edition_date`` FK has a parent. The
+    real content is filled in later by ``_upsert_edition``."""
+    if s.get(Edition, day) is not None:
+        return
+    s.add(
+        Edition(
+            date=day,
+            html="",
+            pdf=b"",
+            pdf_html="",
+            generated_at=datetime.now(UTC),
+        )
+    )
+    s.commit()
+
+
+def _candidate_image_urls(sub: dict) -> list[str]:
+    """Build the candidate image URL list for one subsection.
+
+    Server-side og:image scraping is the primary signal: the LLM can't
+    invent CDN paths reliably (~100% 404). We scrape og:image from each
+    source URL in order. Any LLM-supplied ``images[]`` URLs are appended
+    as a low-priority fallback so old prompts keep working.
+    """
+    urls: list[str] = []
+    for src in sub.get("sources") or []:
+        if not isinstance(src, dict):
+            continue
+        article_url = src.get("url")
+        if not article_url:
+            continue
+        og = og_image.fetch_og_image(article_url)
+        if og:
+            urls.append(og)
+    for img in sub.get("images") or []:
+        if isinstance(img, dict) and img.get("url"):
+            urls.append(img["url"])
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    return [u for u in urls if not (u in seen or seen.add(u))]
+
+
 def _fetch_and_persist_images(
     s: Session,
     day: date,
     linhnews: dict,
 ) -> dict[int, tuple[bytes, str]]:
-    """For each subsection that supplied candidate image URLs, download one,
-    persist the bytes, and stamp the row id back onto the in-memory
-    structure as ``subsection["image_id"]``.
+    """For each subsection, scrape og:image from its sources, download one
+    that decodes, persist the bytes, and stamp the row id back onto the
+    in-memory structure as ``subsection["image_id"]``.
 
     Returns a ``{image_id: (bytes, mime_type)}`` mapping the PDF renderer
     embeds inline as data URIs (avoiding the round-trip through HTTP).
 
     Wipes any pre-existing rows for ``day`` so re-runs don't accumulate.
     """
+    _ensure_edition_stub(s, day)
     s.execute(delete(SubsectionImage).where(SubsectionImage.edition_date == day))
     s.commit()
 
     image_bytes_by_id: dict[int, tuple[bytes, str]] = {}
     for section in linhnews.get("sections") or []:
         key = section.get("key", "")
-        for idx, sub in enumerate(section.get("subsections") or []):
-            urls = [
-                img.get("url")
-                for img in (sub.get("images") or [])
-                if isinstance(img, dict) and img.get("url")
-            ]
-            if not urls:
-                continue
-            try:
-                fetched = images.fetch_one(urls)
-            except Exception:  # noqa: BLE001
-                log.exception("Image fetch raised for %s/%d", key, idx)
-                continue
-            if fetched is None:
-                log.info("No usable image for %s/%d (%d candidates)", key, idx, len(urls))
-                continue
-            row = SubsectionImage(
-                edition_date=day,
-                section_key=key,
-                subsection_idx=idx,
-                bytes_=fetched.bytes_,
-                mime_type=fetched.mime_type,
-                width=fetched.width,
-                height=fetched.height,
-            )
-            s.add(row)
-            s.flush()  # populate row.id without committing
-            sub["image_id"] = row.id
-            image_bytes_by_id[row.id] = (fetched.bytes_, fetched.mime_type)
+        # Only the first subsection of each section is rendered with an
+        # image (per pdf_renderer._render_section_for_pdf), so don't waste
+        # network on the rest.
+        subs = section.get("subsections") or []
+        if not subs:
+            continue
+        idx, sub = 0, subs[0]
+        urls = _candidate_image_urls(sub)
+        if not urls:
+            continue
+        try:
+            fetched = images.fetch_one(urls)
+        except Exception:  # noqa: BLE001
+            log.exception("Image fetch raised for %s/%d", key, idx)
+            continue
+        if fetched is None:
+            log.info("No usable image for %s/%d (%d candidates)", key, idx, len(urls))
+            continue
+        row = SubsectionImage(
+            edition_date=day,
+            section_key=key,
+            subsection_idx=idx,
+            bytes_=fetched.bytes_,
+            mime_type=fetched.mime_type,
+            width=fetched.width,
+            height=fetched.height,
+        )
+        s.add(row)
+        s.flush()  # populate row.id without committing
+        sub["image_id"] = row.id
+        image_bytes_by_id[row.id] = (fetched.bytes_, fetched.mime_type)
     s.commit()
     log.info("Persisted %d subsection images for %s", len(image_bytes_by_id), day)
     return image_bytes_by_id

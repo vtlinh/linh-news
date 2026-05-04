@@ -25,7 +25,7 @@ from app import (
     weather,
 )
 from app import movies as movies_mod
-from app.db import Edition, session_factory
+from app.db import Edition, SubsectionImage, session_factory
 from app.settings import get_settings, local_today
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -94,12 +94,17 @@ def main(target: date) -> int:
             weather_strip_html = ""
         log.info("Weather strip: %d bytes", len(weather_strip_html))
 
+        rows = s.query(SubsectionImage).filter_by(edition_date=target).all()
+        image_bytes_by_id = {r.id: (r.bytes_, r.mime_type) for r in rows}
+        log.info("Subsection images: %d", len(image_bytes_by_id))
+
         pdf_html = pdf_renderer.build_pdf_html(
             e.content_json,
             pdf_calendar_html=pdf_cal,
             pdf_movies_html=pdf_mov,
             weather_strip_html=weather_strip_html,
             today=target,
+            image_bytes_by_id=image_bytes_by_id,
         )
         log.info("Print HTML: %d bytes", len(pdf_html))
 

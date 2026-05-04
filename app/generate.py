@@ -26,6 +26,7 @@ from app import (
 )
 from app import movies as movies_mod
 from app.db import Edition, session_factory
+from app.pdf import _PLACEHOLDER_PDF
 from app.settings import get_settings, local_today
 
 log = logging.getLogger(__name__)
@@ -113,6 +114,18 @@ def run(slot: Slot, today: date | None = None) -> date:
         log.info("Saved generated PDF: %s (%d bytes)", pdf_snap, len(pdf_bytes))
     except Exception:
         log.exception("Could not snapshot pdf bytes")
+
+    if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+        raise RuntimeError(
+            f"Refusing to upsert edition for {today}: PDF render produced "
+            f"{len(pdf_bytes)} bytes, not a valid PDF"
+        )
+    if pdf_bytes == _PLACEHOLDER_PDF:
+        raise RuntimeError(
+            f"Refusing to upsert edition for {today}: PDF render returned the "
+            "placeholder (WeasyPrint native libs missing or content overflowed "
+            "even after dropping every droppable section)"
+        )
 
     with _step("upsert_edition"), Maker() as s:
         _upsert_edition(

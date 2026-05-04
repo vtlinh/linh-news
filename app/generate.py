@@ -25,18 +25,19 @@ from app import (
     pdf,
     pdf_renderer,
     prefs,
+    prompt_template,
     weather,
     weather_prose,
 )
 from app import movies as movies_mod
+from app import (
+    user_settings as user_settings_mod,
+)
 from app.db import Edition, SubsectionImage, session_factory
 from app.llm_schema import (
     MIN_STOCK_SOURCES,
     MIN_SUBSECTIONS,
-    SECTION_KEYS,
     SECTION_REROLL_SCHEMA,
-    SECTION_TITLES,
-    SECTION_TOPIC_HINTS,
 )
 from app.pdf import _PLACEHOLDER_PDF
 from app.settings import get_settings, local_today
@@ -58,12 +59,18 @@ def _step(name: str):
         log.info("⏱  DONE    %s (%.2fs)", name, dt)
 
 
-def run(slot: Slot, today: date | None = None) -> date:
+def run(slot: Slot, today: date | None = None, email: str | None = None) -> date:
     """Generate today's edition and upsert into editions. Returns the date row."""
     today = today or local_today()
     settings = get_settings()
-    template = settings.news_pr_path.read_text(encoding="utf-8")
     Maker = session_factory()
+    target_email = email or settings.admin_email
+    with Maker() as s:
+        usettings = user_settings_mod.get(s, target_email)
+    masthead_name = (usettings.get("display_name") or "the reader").strip() or "the reader"
+    weather_coords = (usettings.get("weather_coords") or settings.weather_coords).strip()
+    user_sections = list(usettings.get("sections") or [])
+    user_children = list(usettings.get("children") or [])
 
     overall_t0 = time.monotonic()
     log.info("⏱  ── refresh pipeline begin (slot=%s, date=%s) ──", slot, today)
@@ -78,18 +85,31 @@ def run(slot: Slot, today: date | None = None) -> date:
         )
 
     with _step("build_context"), Maker() as s:
-        ctx = _build_context(s, today, slot, cached_rail=cached_rail)
+        ctx = _build_context(
+            s, today, slot,
+            cached_rail=cached_rail,
+            weather_coords=weather_coords,
+        )
     pdf_movies_html = ctx.pop("_pdf_movies_html", "")
     pdf_calendar_html = ctx.pop("_pdf_calendar_html", "")
     weather_forecast = ctx.pop("_weather_forecast", {})
     weather_alerts = ctx.pop("_weather_alerts", [])
 
+    rendered_prompt = prompt_template.build_prompt(
+        display_name=masthead_name,
+        today=today,
+        sections=user_sections,
+        children=user_children,
+        watchlist_stocks=ctx.get("WATCHLIST_STOCKS") or [],
+        dorchester_events=ctx.get("DORCHESTER_CALENDAR_EVENTS") or "",
+    )
+
     with _step("claude_generate_edition"):
-        linhnews = claude_client.generate_edition(template, ctx)
-    _validate_and_log(linhnews)
+        linhnews = claude_client.generate_edition(rendered_prompt)
+    _validate_and_log(linhnews, expected_keys=[s.get("key") for s in user_sections])
 
     with _step("backfill_missing_sections"):
-        linhnews = _backfill_missing_sections(linhnews, today)
+        linhnews = _backfill_missing_sections(linhnews, today, user_sections, masthead_name)
 
     with _step("fetch_subsection_images"), Maker() as s:
         image_bytes_by_id = _fetch_and_persist_images(s, today, linhnews)
@@ -101,7 +121,7 @@ def run(slot: Slot, today: date | None = None) -> date:
     # the screen page substitutes its own at view time so 'Now' stays
     # within the 1-hour cache window).
     with _step("build_pdf_weather_strip"), Maker() as s:
-        pdf_now = weather.get_now_cached(s, settings.weather_coords)
+        pdf_now = weather.get_now_cached(s, weather_coords)
     pdf_weather_strip = weather.build_weather_strip(
         pdf_now,
         weather_forecast,
@@ -116,6 +136,7 @@ def run(slot: Slot, today: date | None = None) -> date:
             weather_prose_html=weather_forecast.get("prose_html", "") or "",
             today=today,
             image_bytes_by_id=image_bytes_by_id,
+            masthead_name=masthead_name,
         )
     # Snapshot the print HTML *exactly* as it goes into WeasyPrint, so we
     # can inspect missing-image and overflow problems after the fact.
@@ -232,9 +253,11 @@ def _build_context(
     slot: Slot,
     *,
     cached_rail: dict | None = None,
+    weather_coords: str | None = None,
 ) -> dict:
     settings = get_settings()
     horizon = today + timedelta(days=30)
+    coords = weather_coords or settings.weather_coords
 
     with _step("overlays (hidden movies + watchlist)"):
         hidden_movies = overlays.active_hidden_movie_titles(s, today)
@@ -317,9 +340,9 @@ def _build_context(
     dorchester_text = calendar_summary.build_dorchester_event_list(events, cal_names)
 
     with _step("NWS fetch_forecast"):
-        weather_forecast = weather.fetch_forecast(settings.weather_coords)
+        weather_forecast = weather.fetch_forecast(coords)
     with _step("NWS fetch_alerts"):
-        weather_alerts = weather.fetch_alerts(settings.weather_coords)
+        weather_alerts = weather.fetch_alerts(coords)
     # Render the human-sounding prose paragraph once per generation. The
     # picked phrases get baked into ``weather_forecast["prose_html"]`` so
     # the HTML viewer and the PDF render the same text. Empty string when
@@ -333,14 +356,8 @@ def _build_context(
         )
 
     return {
-        "DATE": today.isoformat(),
-        "KID_AGE": calendar_oauth.current_kid_age(today),
-        "KID_GRADE": calendar_oauth.current_kid_grade(today),
         "WATCHLIST_STOCKS": watchlist,
         "DORCHESTER_CALENDAR_EVENTS": dorchester_text,
-        "CUSTOM_TOPICS": "",
-        # Private context keys (leading underscore). Popped before the LLM
-        # call in run() so they never leak into the user message.
         "_pdf_movies_html": pdf_movies_html,
         "_pdf_calendar_html": pdf_calendar_html,
         "_weather_forecast": weather_forecast,
@@ -351,13 +368,13 @@ def _build_context(
 # ── Validation / re-roll on the structured response ─────────────────────
 
 
-def _validate_and_log(linhnews: dict) -> None:
+def _validate_and_log(linhnews: dict, *, expected_keys: list[str]) -> None:
     """Surface visible warnings for any structural shortfall — missing keys,
     short subsection counts, stocks below the source threshold. Never raises.
     """
     sections = linhnews.get("sections") or []
     keys_present = {s.get("key") for s in sections}
-    missing = [k for k in SECTION_KEYS if k not in keys_present]
+    missing = [k for k in expected_keys if k and k not in keys_present]
     if missing:
         log.warning("LLM omitted required sections: %s", missing)
     for sec in sections:
@@ -380,19 +397,16 @@ def _validate_and_log(linhnews: dict) -> None:
             )
 
 
-def _detect_missing_section_keys(linhnews: dict) -> list[str]:
-    keys_present = {s.get("key") for s in (linhnews.get("sections") or [])}
-    return [k for k in SECTION_KEYS if k not in keys_present]
-
-
-def _regenerate_section(key: str, today: date) -> dict | None:
+def _regenerate_section(sec: dict, today: date, display_name: str) -> dict | None:
     """Re-roll one missing section and return a Section dict, or None."""
-    title = SECTION_TITLES[key]
-    topic = SECTION_TOPIC_HINTS[key]
+    key = sec.get("key", "")
+    title = sec.get("title", "")
+    topic = sec.get("description", "") or ""
+    target = int(sec.get("subsection_count", MIN_SUBSECTIONS))
     system = (
-        "You are filling in ONE missing news section for Linh's daily "
-        "newspaper edition. Use web_search aggressively to find fresh items "
-        "dated within 1–2 days of the target date. Return STRICTLY the "
+        f"You are filling in ONE missing news section for {display_name}'s "
+        "daily newspaper edition. Use web_search aggressively to find fresh "
+        "items dated within 1–2 days of the target date. Return STRICTLY the "
         "subsections list for this section — no HTML, no extra fields. "
         "Each subsection has plain-text title + text (use '- ' prefixes for "
         "bullet lines), 0..N image URL candidates, and ≥1 source."
@@ -403,7 +417,7 @@ def _regenerate_section(key: str, today: date) -> dict | None:
         f"Section title (informational only): {title}\n\n"
         f"Topic: {topic}\n\n"
         f"Run multiple web_search queries until you have at least "
-        f"{MIN_SUBSECTIONS} fresh, distinct items."
+        f"{target} fresh, distinct items."
     )
     try:
         result = claude_client.call_with_schema(
@@ -426,25 +440,31 @@ def _regenerate_section(key: str, today: date) -> dict | None:
     return {"key": key, "title": title, "subsections": subs}
 
 
-def _backfill_missing_sections(linhnews: dict, today: date) -> dict:
-    missing = _detect_missing_section_keys(linhnews)
+def _backfill_missing_sections(
+    linhnews: dict,
+    today: date,
+    user_sections: list[dict],
+    display_name: str = "the reader",
+) -> dict:
+    keys_present = {s.get("key") for s in (linhnews.get("sections") or [])}
+    missing = [s for s in user_sections if s.get("key") and s.get("key") not in keys_present]
     if not missing:
         return linhnews
     log.warning(
         "Edition missing %d required section(s): %s — attempting re-roll",
         len(missing),
-        missing,
+        [s.get("key") for s in missing],
     )
     sections = list(linhnews.get("sections") or [])
-    for key in missing:
-        with _step(f"reroll_section:{key}"):
-            section = _regenerate_section(key, today)
+    for sec in missing:
+        with _step(f"reroll_section:{sec.get('key')}"):
+            section = _regenerate_section(sec, today, display_name)
         if section:
             sections.append(section)
         else:
             log.warning(
                 "Could not backfill section %s — storing edition without it",
-                key,
+                sec.get("key"),
             )
     linhnews["sections"] = sections
     return linhnews
@@ -688,6 +708,11 @@ def _cli() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("slot", choices=["morning", "evening", "refresh"])
     p.add_argument("--date", default=None, help="Override date (YYYY-MM-DD)")
+    p.add_argument(
+        "--email",
+        default=None,
+        help="Generate the edition for this user's settings (default: admin)",
+    )
     args = p.parse_args()
 
     log_dir = Path(__file__).resolve().parent.parent / "logs"
@@ -718,7 +743,7 @@ def _cli() -> int:
     error_msg: str | None = None
     started = time.monotonic()
     try:
-        run(args.slot, today=target_date)
+        run(args.slot, today=target_date, email=args.email)
     except Exception as e:  # noqa: BLE001
         error_msg = _summarize_error(e)
         log.exception("generate.run failed")

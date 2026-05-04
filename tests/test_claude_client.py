@@ -87,7 +87,7 @@ def test_generate_edition_returns_structured_dict():
     fake = _fake_response("return_edition", payload)
     p = _patch_stream(fake)
     try:
-        out = generate_edition("template {{DATE}}", {"DATE": "2026-04-30"})
+        out = generate_edition("rendered prompt for 2026-04-30")
     finally:
         p.stop()
     assert out == payload

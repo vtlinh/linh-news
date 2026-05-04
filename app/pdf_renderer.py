@@ -24,7 +24,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 from app.html_renderer import format_percent, percent_color, text_to_html
-from app.llm_schema import SECTION_KEYS, SECTION_TITLES
 from app.settings import LOCAL_TZ, local_now
 
 log = logging.getLogger(__name__)
@@ -187,7 +186,7 @@ def _render_section_for_pdf(
     in case stale data has it set on multiple subsections.
     """
     key = section.get("key", "")
-    title = _esc(section.get("title", "") or SECTION_TITLES.get(key, key))
+    title = _esc(section.get("title", "") or key)
     header = f'<section class="news-header"><h2>{title}</h2></section>'
     stories: list[str] = []
     image_used = False
@@ -215,8 +214,7 @@ def _render_flow(
     consecutive stories. Between sections, ``sep-group`` before the next
     header.
     """
-    by_key = {s.get("key"): s for s in sections if s.get("key")}
-    ordered = [by_key[k] for k in SECTION_KEYS if k in by_key]
+    ordered = [s for s in sections if s.get("key")]
     parts: list[str] = []
     for i, sec in enumerate(ordered):
         header, stories = _render_section_for_pdf(sec, image_bytes_by_id=image_bytes_by_id)
@@ -261,6 +259,7 @@ def build_pdf_html(
     refreshed_at: datetime | None = None,
     image_bytes_by_id: dict[int, tuple[bytes, str]] | None = None,
     weather_prose_html: str = "",
+    masthead_name: str = "Linh",
 ) -> str:
     """Build the print-styled HTML document for WeasyPrint.
 
@@ -429,8 +428,8 @@ def build_pdf_html(
         f"<style>{style_block}</style>",
         "</head><body>",
         '<header class="masthead">',
-        '<div class="motto"><span>"All the News<br>That\'s Fit for Linh"</span></div>',
-        '<h1 class="title">The Linh Times</h1>',
+        f'<div class="motto"><span>"All the News<br>That\'s Fit for {masthead_name}"</span></div>',
+        f'<h1 class="title">The {masthead_name} Times</h1>',
         '<div class="weather-corner">'
         + (
             f'<span class="weather-title">The Weather</span>{weather_inner}'

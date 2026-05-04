@@ -56,15 +56,20 @@ def test_fetch_events_drops_cancelled_keeps_past(monkeypatch, db_session):
     assert sorted(e["summary"] for e in out) == ["Future", "Old"]
 
 
-def test_current_kid_grade_advances_in_august():
-    # April of academic year 2025–2026 → still 2nd grade.
-    assert calendar_oauth.current_kid_grade(date(2026, 4, 30)) == 2
-    assert calendar_oauth.current_kid_grade(date(2026, 7, 31)) == 2
-    # August 1 2026 starts academic year 2026–2027 → 3rd grade.
-    assert calendar_oauth.current_kid_grade(date(2026, 8, 1)) == 3
-    assert calendar_oauth.current_kid_grade(date(2027, 5, 15)) == 3
-    # Future years keep advancing.
-    assert calendar_oauth.current_kid_grade(date(2028, 9, 1)) == 5
+def test_kids_grade_for_advances_in_august():
+    """``kids.grade_for`` is the pure helper used by both the prompt
+    template and the calendar grade filter. A child born 2018-09-01 is
+    in 2nd grade for academic year 2025-2026 and 3rd once August 1 2026
+    rolls over."""
+    from app import kids
+
+    # Born 2017-09-01 → starts K in fall 2023 → 2nd grade in academic year 2025-2026.
+    bd = date(2017, 9, 1)
+    assert kids.grade_for(bd, date(2026, 4, 30)) == 2
+    assert kids.grade_for(bd, date(2026, 7, 31)) == 2
+    assert kids.grade_for(bd, date(2026, 8, 1)) == 3
+    assert kids.grade_for(bd, date(2027, 5, 15)) == 3
+    assert kids.grade_for(bd, date(2028, 9, 1)) == 5
 
 
 def test_allowed_movie_ratings_tiers(monkeypatch):
@@ -80,7 +85,7 @@ def test_allowed_movie_ratings_tiers(monkeypatch):
 
 
 def test_dorchester_filters_other_grades(monkeypatch):
-    monkeypatch.setattr(calendar_oauth, "current_kid_grade", lambda *a, **k: 2)
+    monkeypatch.setattr(calendar_oauth, "current_kid_grades", lambda *a, **k: [2])
     cn = "Dorchester Parent Calendar"
     assert calendar_oauth.is_filtered(cn, "3rd Grade Field Trip") is True
     assert calendar_oauth.is_filtered(cn, "Grade 5 Music Recital") is True

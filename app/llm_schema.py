@@ -21,50 +21,10 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-# ── Required section keys (in flow order). The LLM must return one Section
-# per key; missing keys trigger a single-section re-roll. ────────────────────
-
-SECTION_KEYS: list[str] = [
-    "global",
-    "us",
-    "njny",
-    "dorch",
-    "finance",
-    "tech",
-    "ai",
-    "ukraine",
-]
-
-SECTION_TITLES: dict[str, str] = {
-    "global": "🌍 Top Global Political News",
-    "us": "🇺🇸 Top US Political News",
-    "njny": "🗽 Top NJ / NY News",
-    "dorch": "🏫 Dorchester Elementary School News & Events",
-    "finance": "💰 Top Financial News",
-    "tech": "💻 Top Tech News",
-    "ai": "🤖 AI News",
-    "ukraine": "🇺🇦 Ukraine News",
-}
-
-SECTION_TOPIC_HINTS: dict[str, str] = {
-    "global": "Major world / international developments. Cite reputable outlets "
-    "(Reuters, AP, BBC, etc.).",
-    "us": "Major US government / political developments.",
-    "njny": "Top New Jersey / New York regional news.",
-    "dorch": "Top Dorchester Elementary School (Woodcliff Lake, NJ) news plus "
-    "upcoming events. Always check https://www.wclpfa.com/WlL/index.cfm. "
-    "Use the authoritative DORCHESTER_CALENDAR_EVENTS dates verbatim — do "
-    "not invent dates.",
-    "finance": "Markets, deals, economic data. Exclude individual-stock earnings — "
-    "those go in the Stocks section's why-it-moved.",
-    "tech": "Product launches, acquisitions, regulatory actions, platform "
-    "changes, hardware releases. Exclude AI-specific stories.",
-    "ai": "AI news, emphasising coding AI (Claude, Cursor, Copilot, Codex, etc.).",
-    "ukraine": "Front-line military situation, diplomatic and peace-process news, "
-    "Western aid and sanctions, significant domestic political/economic "
-    "developments inside Ukraine, humanitarian stories. Cite Reuters, AP, "
-    "BBC, Kyiv Independent, Ukrainska Pravda, etc.",
-}
+# Section identity is per-user now and lives in ``UserSettings.sections_json``;
+# there are no hardcoded section keys/titles/topic-hints in this module
+# anymore. The JSON schema below accepts any string ``key`` so the LLM can
+# echo whatever the user configured.
 
 # Minimum subsections per news section. The model is asked for ≥3; the server
 # accepts whatever it returns (even 1) but logs a warning below this threshold.
@@ -160,12 +120,17 @@ _SECTION_SCHEMA: dict[str, Any] = {
     "properties": {
         "key": {
             "type": "string",
-            "enum": SECTION_KEYS,
-            "description": "Stable identifier; one of the eight required sections.",
+            "description": (
+                "Stable identifier — echo back the section key from the prompt's "
+                "section list verbatim."
+            ),
         },
         "title": {
             "type": "string",
-            "description": ("Display title including emoji (use the canonical title for the key)."),
+            "description": (
+                "Display title including emoji (use the title from the section "
+                "list verbatim)."
+            ),
         },
         "subsections": {
             "type": "array",
@@ -228,16 +193,16 @@ EDITION_SCHEMA: dict[str, Any] = {
         "sections": {
             "type": "array",
             "description": (
-                "Eight required news sections, in this order: "
-                + ", ".join(f"{k} ({SECTION_TITLES[k]})" for k in SECTION_KEYS)
-                + "."
+                "One entry per section listed in the prompt's "
+                "'Required sections' block, in the same order. Echo each "
+                "section's `key` and `title` verbatim from the prompt."
             ),
             "items": _SECTION_SCHEMA,
         },
         "stocks": {
             "type": "array",
             "description": (
-                "One entry per WATCHLIST_STOCKS symbol, in the same order. "
+                "One entry per watchlist symbol, in the same order. "
                 "Empty array if the watchlist is empty."
             ),
             "items": _STOCK_SCHEMA,

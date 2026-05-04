@@ -1,0 +1,523 @@
+{% extends "base.html" %}
+{% block title %}Data — Newspaper settings{% endblock %}
+{% block body %}
+<header class="site admin">
+  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Data</h1>
+  <div class="actions toolbar-actions" style="margin-left:auto;">
+    <a href="/logout">Logout</a>
+  </div>
+</header>
+<main class="data-page">
+  <p class="hint">
+    Configure your personalised newspaper. Sections are listed in priority
+    order (top = highest). On save, the system fixes typos and fills in any
+    empty descriptions.
+  </p>
+
+  <section class="user-fields">
+    <label>Display name
+      <input type="text" id="display-name" placeholder="Linh">
+      <span class="sub">Powers <em>"The XXX News"</em> masthead and <em>"The XXX Times"</em> on the PDF.</span>
+    </label>
+    <label>Address
+      <input type="text" id="address" placeholder="15 Hunter Ridge, Woodcliff Lake, NJ 07677">
+      <span class="sub">Used to fetch local weather. Resolved on save.</span>
+    </label>
+  </section>
+
+  <h2 class="sections-h">Children</h2>
+  <p class="hint">Names + birthdays let the system compute current grade and age, used by the school grade-filter rule.</p>
+  <div id="children"></div>
+  <button type="button" id="add-child" class="add-section-btn">+ Add child</button>
+
+  <h2 class="sections-h">Sections</h2>
+  <div id="sections"></div>
+
+  <button type="button" id="add-section" class="add-section-btn">+ Add section</button>
+
+  <div class="save-row">
+    <button type="button" id="save-btn" class="primary">Save</button>
+    <span id="save-status" class="save-status"></span>
+  </div>
+</main>
+
+<style>
+  main.data-page { max-width: 920px; margin: 0 auto; padding: 16px; }
+  main.data-page .hint { color: var(--muted); }
+  .user-fields { display: flex; flex-direction: column; gap: 12px;
+    border: 1px solid var(--rule); padding: 12px; border-radius: 6px;
+    background: #fff; margin-bottom: 18px; }
+  .user-fields label { display: flex; flex-direction: column; gap: 4px;
+    font-weight: 600; }
+  .user-fields input { font: inherit; padding: 8px 10px; border: 1px solid var(--rule);
+    border-radius: 4px; min-height: 40px; }
+  .user-fields .sub { font-weight: normal; color: var(--muted); font-size: 0.88em; }
+  h2.sections-h { margin-top: 8px; }
+
+  .section-row {
+    border: 1px solid var(--rule); border-radius: 6px;
+    background: #fff; padding: 12px; margin-bottom: 12px;
+    display: grid; grid-template-columns: auto 1fr; gap: 10px 14px;
+    align-items: start;
+  }
+  .section-row.error { border-color: var(--accent); }
+  .section-row .lhs { display: flex; flex-direction: column; align-items: center;
+    gap: 6px; min-width: 50px; }
+  .section-row .lhs .idx { font-weight: 700; font-size: 1.1em; }
+  .section-row .lhs button {
+    width: 28px; height: 28px; border: 1px solid var(--rule); background: #fff;
+    border-radius: 4px; cursor: pointer; padding: 0; line-height: 1;
+  }
+  .section-row .lhs button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .section-row .body { display: flex; flex-direction: column; gap: 8px; }
+  .section-row label { display: flex; flex-direction: column; gap: 3px;
+    font-size: 0.9em; color: var(--muted); }
+  .section-row label input, .section-row label textarea {
+    font: inherit; color: var(--fg); padding: 6px 8px;
+    border: 1px solid var(--rule); border-radius: 4px;
+  }
+  .section-row .row-inline {
+    display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+  }
+  .section-row .row-inline label { flex-direction: row; align-items: center;
+    gap: 6px; color: var(--fg); font-size: 1em; }
+  .section-row .delete-section { background: #fff; border: 1px solid var(--rule);
+    border-radius: 4px; cursor: pointer; padding: 4px 8px; color: var(--accent); }
+  .section-row .sources { display: flex; flex-direction: column; gap: 4px; }
+  .section-row .source-row { display: flex; gap: 6px; align-items: center; }
+  .section-row .source-row input { flex: 1; }
+  .section-row .source-row .del-source {
+    width: 30px; height: 30px; border: 1px solid var(--rule); background: #fff;
+    border-radius: 4px; cursor: pointer; color: var(--accent);
+  }
+  .section-row .add-source {
+    align-self: flex-start; padding: 4px 10px; border: 1px solid var(--rule);
+    background: #fff; border-radius: 4px; cursor: pointer;
+  }
+  .section-row .err {
+    color: var(--accent); font-size: 0.88em; margin: 0;
+  }
+
+  .add-section-btn {
+    width: 100%; padding: 10px; border: 1px dashed var(--fg); background: #fff;
+    border-radius: 6px; cursor: pointer; font: inherit; margin-bottom: 18px;
+  }
+
+  .save-row { display: flex; gap: 12px; align-items: center; }
+  .save-row button.primary {
+    padding: 10px 22px; background: var(--fg); color: #fff;
+    border: 1px solid var(--fg); border-radius: 4px; cursor: pointer; font: inherit;
+    min-height: 44px;
+  }
+  .save-row button.primary:disabled { opacity: 0.5; cursor: progress; }
+  .save-status { color: var(--muted); }
+  .save-status.error { color: var(--accent); }
+  .save-status.ok { color: #0a7d1f; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  const initial = {{ settings_json | tojson }};
+
+  const $sections = document.getElementById('sections');
+  const $children = document.getElementById('children');
+  const $addChild = document.getElementById('add-child');
+  const $displayName = document.getElementById('display-name');
+  const $address = document.getElementById('address');
+  const $saveBtn = document.getElementById('save-btn');
+  const $saveStatus = document.getElementById('save-status');
+  const $addSection = document.getElementById('add-section');
+
+  function el(tag, attrs = {}, children = []) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') e.className = v;
+      else if (k === 'value') e.value = v;
+      else if (k === 'checked') e.checked = !!v;
+      else if (k === 'type') e.type = v;
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v);
+    }
+    for (const c of [].concat(children)) {
+      if (c == null) continue;
+      e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    }
+    return e;
+  }
+
+  function renderSourceRow(url, onDelete) {
+    const input = el('input', { type: 'url', value: url || '', placeholder: 'https://example.com' });
+    const del = el('button', { type: 'button', class: 'del-source', title: 'Remove' }, '✕');
+    del.addEventListener('click', () => onDelete(input));
+    return el('div', { class: 'source-row' }, [input, del]);
+  }
+
+  function renderSection(sec, idx) {
+    const lhs = el('div', { class: 'lhs' });
+    const idxLabel = el('div', { class: 'idx' }, String(idx + 1));
+    const upBtn = el('button', { type: 'button', title: 'Move up' }, '↑');
+    const dnBtn = el('button', { type: 'button', title: 'Move down' }, '↓');
+    lhs.append(idxLabel, upBtn, dnBtn);
+
+    const titleInput = el('input', { type: 'text', value: sec.title || '', placeholder: 'Section title (e.g. 🌍 World news)' });
+    const descInput = el('textarea', { rows: 2, placeholder: 'Description for the LLM (leave blank to auto-fill on save)' });
+    descInput.value = sec.description || '';
+    const subInput = el('input', { type: 'number', min: '1', max: '30', value: String(sec.subsection_count ?? 5) });
+    subInput.style.maxWidth = '90px';
+
+    const useGlobal = el('input', { type: 'checkbox', checked: sec.use_global_sources !== false });
+    const useGlobalLabel = el('label', {}, [useGlobal, ' Use global sources']);
+
+    const sourcesWrap = el('div', { class: 'sources' });
+
+    function addSourceUI(url) {
+      const row = renderSourceRow(url, (input) => {
+        sourcesWrap.removeChild(input.closest('.source-row'));
+      });
+      sourcesWrap.appendChild(row);
+    }
+    (sec.preferred_sources || []).forEach(addSourceUI);
+    if ((sec.preferred_sources || []).length === 0) addSourceUI('');
+
+    const addSourceBtn = el('button', { type: 'button', class: 'add-source', title: 'Add a preferred source' }, '+ source');
+    addSourceBtn.addEventListener('click', () => addSourceUI(''));
+
+    const errBox = el('p', { class: 'err' });
+    errBox.style.display = 'none';
+
+    const deleteBtn = el('button', { type: 'button', class: 'delete-section' }, '✕ remove');
+
+    const body = el('div', { class: 'body' }, [
+      el('label', {}, ['Title', titleInput]),
+      el('label', {}, ['Description', descInput]),
+      el('div', { class: 'row-inline' }, [
+        el('label', {}, ['Min subsections ', subInput]),
+        useGlobalLabel,
+        el('div', { style: 'flex:1' }),
+        deleteBtn,
+      ]),
+      el('label', {}, ['Preferred sources']),
+      sourcesWrap,
+      addSourceBtn,
+      errBox,
+    ]);
+
+    const row = el('div', { class: 'section-row' }, [lhs, body]);
+
+    upBtn.addEventListener('click', () => moveSection(row, -1));
+    dnBtn.addEventListener('click', () => moveSection(row, +1));
+    deleteBtn.addEventListener('click', () => {
+      if ($sections.children.length <= 1) {
+        $saveStatus.textContent = 'Need at least one section.';
+        $saveStatus.className = 'save-status error';
+        return;
+      }
+      $sections.removeChild(row);
+      reindex();
+    });
+
+    row._collect = () => ({
+      key: sec.key || '',
+      title: titleInput.value.trim(),
+      description: descInput.value.trim(),
+      subsection_count: parseInt(subInput.value, 10) || 5,
+      preferred_sources: Array.from(sourcesWrap.querySelectorAll('input'))
+        .map(i => i.value.trim()).filter(Boolean),
+      use_global_sources: useGlobal.checked,
+    });
+    row._showError = (msg) => {
+      errBox.textContent = msg;
+      errBox.style.display = msg ? 'block' : 'none';
+      row.classList.toggle('error', !!msg);
+    };
+
+    return row;
+  }
+
+  function moveSection(row, delta) {
+    const all = Array.from($sections.children);
+    const i = all.indexOf(row);
+    const j = i + delta;
+    if (j < 0 || j >= all.length) return;
+    if (delta < 0) $sections.insertBefore(row, all[j]);
+    else $sections.insertBefore(all[j], row);
+    reindex();
+  }
+
+  function reindex() {
+    Array.from($sections.children).forEach((row, idx) => {
+      row.querySelector('.idx').textContent = String(idx + 1);
+      const [up, dn] = row.querySelectorAll('.lhs button');
+      up.disabled = idx === 0;
+      dn.disabled = idx === $sections.children.length - 1;
+    });
+  }
+
+  function gradeForToday(birthday) {
+    if (!birthday) return null;
+    const bd = new Date(birthday + 'T00:00:00');
+    if (isNaN(bd)) return null;
+    const today = new Date();
+    const syStart = today.getMonth() + 1 >= 8 ? today.getFullYear() : today.getFullYear() - 1;
+    let syAge = syStart - bd.getFullYear();
+    const m = bd.getMonth() + 1, d = bd.getDate();
+    if (m > 8 || (m === 8 && d > 1)) syAge -= 1;
+    return syAge - 5;
+  }
+
+  function gradeLabel(g) {
+    if (g == null) return '';
+    if (g < 0) return 'pre-K';
+    if (g === 0) return 'Kindergarten';
+    const suf = g === 1 ? 'st' : g === 2 ? 'nd' : g === 3 ? 'rd' : 'th';
+    return `${g}${suf} grade`;
+  }
+
+  function ageOnToday(birthday) {
+    if (!birthday) return null;
+    const bd = new Date(birthday + 'T00:00:00');
+    if (isNaN(bd)) return null;
+    const today = new Date();
+    let yrs = today.getFullYear() - bd.getFullYear();
+    const m = bd.getMonth() + 1, d = bd.getDate();
+    if (today.getMonth() + 1 < m || (today.getMonth() + 1 === m && today.getDate() < d)) yrs -= 1;
+    return yrs;
+  }
+
+  let cachedCalendars = null;
+  async function loadCalendars(force = false) {
+    if (cachedCalendars && !force) return cachedCalendars;
+    try {
+      const r = await fetch('/api/calendars' + (force ? '?refresh=1' : ''));
+      const j = await r.json();
+      cachedCalendars = j.calendars || [];
+    } catch { cachedCalendars = []; }
+    return cachedCalendars;
+  }
+
+  function renderChild(c) {
+    const sc = c.school_calendar || {};
+    const name = el('input', { type: 'text', value: c.name || '', placeholder: 'Name' });
+    const bday = el('input', { type: 'date', value: c.birthday || '' });
+    const summary = el('span', { class: 'sub child-summary' });
+    function updateSummary() {
+      const g = gradeForToday(bday.value);
+      const a = ageOnToday(bday.value);
+      summary.textContent = (a != null && g != null)
+        ? ` — age ${a}, ${gradeLabel(g)}`
+        : '';
+    }
+    bday.addEventListener('input', updateSummary);
+
+    // School calendar — three input options. The user fills whichever they
+    // have; on save we pick the first non-empty in (google → url → ics) order.
+    const gselect = el('select', { class: 'sc-google' });
+    gselect.appendChild(el('option', { value: '' }, '(none)'));
+    function populateGSelect(list) {
+      gselect.innerHTML = '';
+      gselect.appendChild(el('option', { value: '' }, '(none)'));
+      list.forEach(cal => {
+        const opt = el('option', { value: cal.id }, cal.name + (cal.primary ? ' (primary)' : ''));
+        if (sc.kind === 'google' && sc.value === cal.id) opt.selected = true;
+        gselect.appendChild(opt);
+      });
+    }
+    populateGSelect([]);
+    loadCalendars().then(populateGSelect);
+
+    const refreshBtn = el('button', { type: 'button', class: 'add-source' }, '↻');
+    refreshBtn.title = 'Refresh Google Calendars from server';
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      const list = await loadCalendars(true);
+      populateGSelect(list);
+      refreshBtn.disabled = false;
+    });
+
+    const urlInput = el('input', {
+      type: 'url',
+      placeholder: 'https://example.com/cal.ics or webcal://…',
+      value: sc.kind === 'url' ? (sc.value || '') : '',
+    });
+    urlInput.style.flex = '1';
+
+    const icsHidden = el('input', { type: 'hidden', value: sc.kind === 'ics' ? (sc.value || '') : '' });
+    const fileInput = el('input', { type: 'file' });
+    fileInput.accept = '.ics,text/calendar';
+    const fileLabel = el('span', { class: 'sub' }, sc.kind === 'ics' && sc.value ? '(ics file uploaded)' : '');
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      const text = await f.text();
+      icsHidden.value = text;
+      fileLabel.textContent = `(${f.name}, ${text.length} chars)`;
+    });
+
+    const del = el('button', { type: 'button', class: 'delete-section' }, '✕ remove');
+    const errBox = el('p', { class: 'err' });
+    errBox.style.display = 'none';
+
+    const row = el('div', { class: 'section-row child-row' }, [
+      el('div', { class: 'lhs' }, [el('span', { class: 'idx' }, '👶')]),
+      el('div', { class: 'body' }, [
+        el('div', { class: 'row-inline' }, [
+          el('label', {}, ['Name', name]),
+          el('label', {}, ['Birthday', bday]),
+          summary,
+          el('div', { style: 'flex:1' }),
+          del,
+        ]),
+        el('label', {}, ['School calendar (pick one)']),
+        el('div', { class: 'row-inline' }, [
+          el('span', { class: 'sub' }, 'Google:'),
+          gselect,
+          refreshBtn,
+        ]),
+        el('div', { class: 'row-inline' }, [
+          el('span', { class: 'sub' }, 'URL:'),
+          urlInput,
+        ]),
+        el('div', { class: 'row-inline' }, [
+          el('span', { class: 'sub' }, 'or .ics file:'),
+          fileInput,
+          fileLabel,
+        ]),
+        errBox,
+      ]),
+    ]);
+
+    del.addEventListener('click', () => $children.removeChild(row));
+    row._collect = () => {
+      const out = { name: name.value.trim(), birthday: bday.value.trim() };
+      const gv = gselect.value.trim();
+      const uv = urlInput.value.trim();
+      const iv = icsHidden.value.trim();
+      if (gv) out.school_calendar = { kind: 'google', value: gv };
+      else if (uv) out.school_calendar = { kind: 'url', value: uv };
+      else if (iv) out.school_calendar = { kind: 'ics', value: iv };
+      return out;
+    };
+    row._showError = (msg) => {
+      errBox.textContent = msg;
+      errBox.style.display = msg ? 'block' : 'none';
+      row.classList.toggle('error', !!msg);
+    };
+    updateSummary();
+    return row;
+  }
+
+  $addChild.addEventListener('click', () => {
+    $children.appendChild(renderChild({}));
+  });
+
+  function loadInto(settings) {
+    $displayName.value = settings.display_name || '';
+    $address.value = settings.address || '';
+    $sections.innerHTML = '';
+    (settings.sections || []).forEach((sec, i) => {
+      $sections.appendChild(renderSection(sec, i));
+    });
+    reindex();
+    $children.innerHTML = '';
+    (settings.children || []).forEach((c) => $children.appendChild(renderChild(c)));
+  }
+
+  $addSection.addEventListener('click', () => {
+    const idx = $sections.children.length;
+    const row = renderSection({
+      key: '',
+      title: '',
+      description: '',
+      subsection_count: 5,
+      preferred_sources: [],
+      use_global_sources: true,
+    }, idx);
+    $sections.appendChild(row);
+    reindex();
+  });
+
+  function collect() {
+    return {
+      display_name: $displayName.value.trim(),
+      address: $address.value.trim(),
+      sections: Array.from($sections.children).map(r => r._collect()),
+      children: Array.from($children.children).map(r => r._collect()),
+    };
+  }
+
+  function clearErrors() {
+    $saveStatus.textContent = '';
+    $saveStatus.className = 'save-status';
+    Array.from($sections.children).forEach(r => r._showError(''));
+    Array.from($children.children).forEach(r => r._showError(''));
+  }
+
+  function clientValidate(payload) {
+    const errors = {};
+    payload.sections.forEach((sec, idx) => {
+      if (!sec.use_global_sources && sec.preferred_sources.length === 0) {
+        errors[`section.${idx}.sources`] =
+          "Add at least one preferred source, or check 'use global sources'.";
+      }
+      if (!sec.title) errors[`section.${idx}.title`] = 'Title cannot be empty.';
+    });
+    return errors;
+  }
+
+  function showErrors(errors) {
+    const sRows = Array.from($sections.children);
+    const cRows = Array.from($children.children);
+    let firstMsg = '';
+    for (const [key, msg] of Object.entries(errors)) {
+      let m = key.match(/^section\.(\d+)\./);
+      if (m) {
+        const r = sRows[+m[1]];
+        if (r) r._showError(msg);
+      }
+      m = key.match(/^child\.(\d+)\./);
+      if (m) {
+        const r = cRows[+m[1]];
+        if (r) r._showError(msg);
+      }
+      if (!firstMsg) firstMsg = msg;
+    }
+    $saveStatus.textContent = firstMsg || 'Please fix the errors above.';
+    $saveStatus.className = 'save-status error';
+  }
+
+  $saveBtn.addEventListener('click', async () => {
+    clearErrors();
+    const payload = collect();
+    const clientErrs = clientValidate(payload);
+    if (Object.keys(clientErrs).length) {
+      showErrors(clientErrs);
+      return;
+    }
+    $saveBtn.disabled = true;
+    $saveStatus.textContent = 'Saving…';
+    $saveStatus.className = 'save-status';
+    try {
+      const r = await fetch('/data/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        showErrors(j.errors || {});
+        return;
+      }
+      loadInto(j.settings);
+      $saveStatus.textContent = 'Saved ✓';
+      $saveStatus.className = 'save-status ok';
+    } catch (e) {
+      $saveStatus.textContent = 'Save failed: ' + (e?.message || e);
+      $saveStatus.className = 'save-status error';
+    } finally {
+      $saveBtn.disabled = false;
+    }
+  });
+
+  loadInto(initial);
+</script>
+{% endblock %}

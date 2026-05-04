@@ -15,20 +15,16 @@ def _empty_linhnews() -> dict:
 
 
 def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
-    pr = tmp_path / "news.pr"
-    pr.write_text("Date={{DATE}}", encoding="utf-8")
-    monkeypatch.setattr(generate.get_settings(), "news_pr_path", pr, raising=False)
-
     fake_claude = patch.object(
         generate.claude_client,
         "generate_edition",
         return_value=_empty_linhnews(),
     )
-    # Empty sections list would trigger 8 re-rolls — short-circuit.
+    # No user_sections configured → backfill is a no-op anyway, but stub for safety.
     fake_backfill = patch.object(
         generate,
         "_backfill_missing_sections",
-        side_effect=lambda payload, _t: payload,
+        side_effect=lambda payload, *_a, **_k: payload,
     )
     fake_pdf = patch.object(
         generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v1", None)
@@ -85,19 +81,26 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
 
 
 def test_backfill_missing_sections_calls_reroll_for_each_missing_key():
-    """All 8 keys missing → 8 re-roll attempts. We mock the LLM call to
-    return a canned subsection list so the function appends real sections."""
+    """Every section in the user's list missing from the LLM response → one
+    re-roll attempt per missing section."""
     today = date(2026, 5, 3)
+    user_sections = [
+        {"key": "global", "title": "🌍 World", "description": "world", "subsection_count": 3},
+        {"key": "tech", "title": "💻 Tech", "description": "tech", "subsection_count": 3},
+        {"key": "ai", "title": "🤖 AI", "description": "ai", "subsection_count": 3},
+    ]
     canned_subs = [{"title": "h", "text": "b", "sources": [{"url": "https://x", "title": "T"}]}]
     with patch.object(
         generate.claude_client,
         "call_with_schema",
         return_value={"subsections": canned_subs},
     ) as call:
-        out = generate._backfill_missing_sections({"sections": [], "stocks": []}, today)
-    assert call.call_count == 8
+        out = generate._backfill_missing_sections(
+            {"sections": [], "stocks": []}, today, user_sections, "Tester"
+        )
+    assert call.call_count == len(user_sections)
     keys = {s["key"] for s in out["sections"]}
-    assert keys == set(generate.SECTION_KEYS)
+    assert keys == {s["key"] for s in user_sections}
 
 
 def test_build_context_includes_overlays(db_session, monkeypatch):
@@ -110,13 +113,19 @@ def test_build_context_includes_overlays(db_session, monkeypatch):
         patch.object(generate.weather, "fetch_alerts", return_value=[]),
     ):
         ctx = generate._build_context(db_session, today, "evening")
-    assert ctx["DATE"] == "2026-04-30"
     assert ctx["WATCHLIST_STOCKS"] == []
     # Weather + calendar are rendered natively; nothing about them should
     # leak into the LLM-bound public context.
     assert "WEATHER_COORDS" not in ctx
     assert "NOW_WEATHER" not in ctx
     assert "PDF_CALENDAR_HTML" not in ctx
+    # Date / kid age / kid grade / custom-topics are now rendered straight
+    # into the prompt by ``app.prompt_template`` instead of going through
+    # the LLM-context dict.
+    assert "DATE" not in ctx
+    assert "KID_AGE" not in ctx
+    assert "KID_GRADE" not in ctx
+    assert "CUSTOM_TOPICS" not in ctx
     # Dorchester Parent Calendar is the lone exception — passed in so the
     # LLM can ground the school news section in real upcoming events.
     assert ctx["DORCHESTER_CALENDAR_EVENTS"] == "(none)"

@@ -30,14 +30,6 @@ def is_filtered(calendar_name: str, title: str) -> bool:
     return "dorchester parent calendar" in cn and _is_other_grade(title or "")
 
 
-# ── Kid-grade filter ──────────────────────────────────────────────────────
-# Anchor: William starts 2nd grade in academic year 2025–2026.
-# School year transitions on August 1: anyone reading the events on/after
-# August 1 of a given calendar year is in the academic year that starts that
-# month. The grade auto-advances by one each August.
-KID_GRADE_ANCHOR_YEAR = 2025  # academic year start when kids are GRADE_AT_ANCHOR
-GRADE_AT_ANCHOR = 2
-
 # Recognises common ways school events label a grade in the title:
 #   "Grade 3", "3rd Grade", "5th-Grade", "Kindergarten"
 _GRADE_RE = re.compile(
@@ -46,20 +38,47 @@ _GRADE_RE = re.compile(
 )
 
 
-def current_kid_grade(today: date | None = None) -> int:
-    """Return the grade William and Elizabeth are currently in. Auto-advances
-    every August when a new school year begins."""
+def _admin_children_grades(today: date) -> list[int]:
+    """Look up the admin's children list and return their current grades.
+    Returns ``[]`` when the row is missing or unreadable so the calendar
+    filter behaves as 'no grade filter at all' rather than crashing."""
+    from app import kids
+    from app.db import UserSettings, session_factory
+    from app.settings import get_settings
+
+    try:
+        Maker = session_factory()
+        with Maker() as s:
+            row = s.get(UserSettings, get_settings().admin_email)
+            if row is None:
+                return []
+            return kids.grades_for_today(row.children_json or [], today)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def current_kid_grades(today: date | None = None) -> list[int]:
+    """Return the list of grades currently attended by the admin's
+    children (sorted, deduped). Empty if no children are configured."""
     if today is None:
         from app.settings import local_today as _local_today
 
         today = _local_today()
-    school_year_start = today.year if today.month >= 8 else today.year - 1
-    return GRADE_AT_ANCHOR + (school_year_start - KID_GRADE_ANCHOR_YEAR)
+    return _admin_children_grades(today)
+
+
+def current_kid_grade(today: date | None = None) -> int:
+    """Single representative grade — the youngest configured child's
+    grade, or 0 if none. Kept for callers that haven't migrated to
+    :func:`current_kid_grades`."""
+    grades = current_kid_grades(today)
+    return grades[0] if grades else 0
 
 
 def current_kid_age(today: date | None = None) -> int:
-    """Approximate age of the youngest kid based on US schooling norms
-    (1st grade ≈ age 6, so age = grade + 6)."""
+    """Approximate age of the youngest kid during the school year
+    (kids turn ``grade + 6`` somewhere during their school year).
+    Used as the input to the movie-rating tiering only."""
     return current_kid_grade(today) + 6
 
 
@@ -92,7 +111,12 @@ def _extracted_grade(title: str) -> int | None:
 
 def _is_other_grade(title: str) -> bool:
     g = _extracted_grade(title)
-    return g is not None and g != current_kid_grade()
+    if g is None:
+        return False
+    grades = current_kid_grades()
+    if not grades:
+        return False
+    return g not in grades
 
 
 # Calendar/title pairs that should ALWAYS be marked important, even without
@@ -131,6 +155,50 @@ def _credentials(s: Session) -> Credentials:
 
 def _service(s: Session):
     return build("calendar", "v3", credentials=_credentials(s), cache_discovery=False)
+
+
+def cached_calendars(s: Session, *, refresh_if_empty: bool = True) -> list[dict]:
+    """Return the cached snapshot of the user's Google Calendar list. If
+    the cache is empty and ``refresh_if_empty`` is True, hits Google and
+    repopulates the cache before returning. Used by the Data tab's school
+    calendar picker — fast on warm cache, no live API call per page load.
+    """
+    from sqlalchemy import select as _select
+
+    from app.db import GoogleCalendar
+
+    stmt = _select(GoogleCalendar).order_by(
+        GoogleCalendar.primary.desc(), GoogleCalendar.name
+    )
+    rows = s.execute(stmt).scalars().all()
+    if rows:
+        return [{"id": r.id, "name": r.name, "primary": bool(r.primary)} for r in rows]
+    if not refresh_if_empty:
+        return []
+    return refresh_cached_calendars(s)
+
+
+def refresh_cached_calendars(s: Session) -> list[dict]:
+    """Hit Google's calendarList API, replace the cached snapshot, return
+    the fresh list. Raises if the OAuth row is missing."""
+    from sqlalchemy import delete as _delete
+
+    from app.db import GoogleCalendar
+
+    fresh = list_calendars(s)
+    s.execute(_delete(GoogleCalendar))
+    now = datetime.now(UTC)
+    for cal in fresh:
+        s.add(
+            GoogleCalendar(
+                id=cal["id"],
+                name=cal["name"],
+                primary=bool(cal.get("primary")),
+                fetched_at=now,
+            )
+        )
+    s.commit()
+    return fresh
 
 
 def list_calendars(s: Session) -> list[dict]:

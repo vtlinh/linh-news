@@ -39,12 +39,13 @@ def test_render_edition_html_emits_placeholders_and_layout():
     assert "<h3>head-0</h3>" in out
 
 
-def test_render_edition_html_orders_sections_by_canonical_keys():
+def test_render_edition_html_preserves_input_section_order():
+    """Section identity is per-user now; the renderer emits sections in the
+    order the LLM returned them (which the prompt asks to match the user's
+    configured order)."""
     sections = [_section("ai"), _section("global"), _section("us")]
     out = render_edition_html({"sections": sections, "stocks": []})
-    # Canonical order: global, us, …, ai. So global appears before us, and
-    # us appears before ai.
-    assert out.index("T-global") < out.index("T-us") < out.index("T-ai")
+    assert out.index("T-ai") < out.index("T-global") < out.index("T-us")
 
 
 def test_render_subsection_single_source_uses_anchor_shortcut():

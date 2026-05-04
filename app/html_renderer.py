@@ -27,8 +27,6 @@ from __future__ import annotations
 import html
 from typing import Any
 
-from app.llm_schema import SECTION_KEYS, SECTION_TITLES
-
 WEATHER_PLACEHOLDER = "<!-- WEATHER_PLACEHOLDER -->"
 CALENDAR_PLACEHOLDER = "<!-- CALENDAR_PLACEHOLDER -->"
 MOVIES_PLACEHOLDER = "<!-- MOVIES_PLACEHOLDER -->"
@@ -139,7 +137,7 @@ def _render_section(section: dict) -> str:
     h2-only header section, then one story <section> per subsection. This
     matches the pattern viewer.html's mobile-collapse JS expects."""
     key = section.get("key", "")
-    title = _esc(section.get("title", "") or SECTION_TITLES.get(key, key))
+    title = _esc(section.get("title", "") or key)
     parts: list[str] = [
         f'<section class="news-header" data-key="{_esc(key)}"><h2>{title}</h2></section>'
     ]
@@ -204,12 +202,11 @@ def _section_by_key(sections: list[dict]) -> dict[str, dict]:
 def render_edition_html(linhnews: dict[str, Any]) -> str:
     """Return the full screen-side body HTML for an edition.
 
-    Sections are emitted in the canonical ``SECTION_KEYS`` order. Sections
-    the model omitted are simply skipped (the generator's missing-section
-    re-roll fills them in before this is called).
+    Sections are emitted in the order the LLM returned them, which the
+    prompt template asks the model to keep aligned with the user's
+    configured section list.
     """
-    by_key = _section_by_key(linhnews.get("sections") or [])
-    flow_inner = "".join(_render_section(by_key[k]) for k in SECTION_KEYS if k in by_key)
+    flow_inner = "".join(_render_section(s) for s in (linhnews.get("sections") or []))
     stocks_html = _render_stocks_section(linhnews.get("stocks") or [])
 
     rail_parts: list[str] = []

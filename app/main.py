@@ -15,7 +15,16 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session, defer
 
-from app import auth, cache, calendar_oauth, calendar_summary, overlays, prefs, weather
+from app import (
+    auth,
+    cache,
+    calendar_oauth,
+    calendar_summary,
+    overlays,
+    prefs,
+    user_settings,
+    weather,
+)
 from app import movies as movies_mod
 from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, SubsectionImage, get_session
@@ -31,7 +40,7 @@ async def _lifespan(app):
     yield
 
 
-app = FastAPI(title="Linh News", lifespan=_lifespan)
+app = FastAPI(title="News", lifespan=_lifespan)
 templates = Jinja2Templates(directory=str(REPO_ROOT / "app" / "templates"))
 # Serve the masthead font (and any future static assets) at /fonts/*. Used by
 # base.html's @font-face rule so the home-page masthead matches the PDF's.
@@ -188,6 +197,13 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
     return html.replace("<!-- MOVIES_PLACEHOLDER -->", section, 1)
 
 
+def _masthead_name(s: Session, email: str) -> str:
+    """Display name for the home-page masthead. Falls back to a neutral
+    label when the user hasn't filled in their Data tab yet."""
+    settings_dict = user_settings.get(s, email)
+    return (settings_dict.get("display_name") or "Daily").strip() or "Daily"
+
+
 def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -> HTMLResponse:
     # Defer the multi-MB pdf column — the home page only needs html +
     # generated_at. Fetching pdf on every request through the Fly proxy
@@ -221,6 +237,7 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),
             "edition_generated_at": (edition.generated_at.isoformat() if edition else None),
+            "masthead_name": _masthead_name(s, viewer_email),
         },
     )
 
@@ -454,6 +471,58 @@ def edition_freshness(
         "last_error": cache.get_recent_edition_refresh_error(),
         "expected_seconds": cache.expected_refresh_seconds(),
     }
+
+
+# ────────────────────── Per-user Data tab ───────────────────────
+
+
+@app.get("/data", response_class=HTMLResponse)
+def data_get(
+    request: Request,
+    email: str = Depends(auth.require_viewer),
+    s: Session = Depends(get_session),
+):
+    settings_dict = user_settings.get(s, email)
+    return templates.TemplateResponse(
+        request,
+        "data.html",
+        {
+            "user_email": email,
+            "settings_json": settings_dict,
+        },
+    )
+
+
+@app.get("/api/calendars")
+def api_calendars(
+    refresh: int = 0,
+    email: str = Depends(auth.require_viewer),
+    s: Session = Depends(get_session),
+):
+    """Return the user's Google Calendar list (cached in DB). Pass
+    ``?refresh=1`` to force a re-fetch from Google."""
+    try:
+        if refresh:
+            cals = calendar_oauth.refresh_cached_calendars(s)
+        else:
+            cals = calendar_oauth.cached_calendars(s)
+    except Exception as e:  # noqa: BLE001 — Google may be unreachable / no OAuth row
+        return {"ok": False, "error": str(e), "calendars": []}
+    return {"ok": True, "calendars": cals}
+
+
+@app.post("/data/save")
+async def data_save(
+    request: Request,
+    email: str = Depends(auth.require_viewer),
+    s: Session = Depends(get_session),
+):
+    body = await request.json()
+    errors = user_settings.validate(body)
+    if errors:
+        return {"ok": False, "errors": errors}
+    saved = user_settings.save(s, email, body)
+    return {"ok": True, "settings": saved}
 
 
 # ──────────────────────── Admin ─────────────────────────

@@ -1,16 +1,6 @@
 from __future__ import annotations
 
-from app.llm_schema import (
-    EDITION_SCHEMA,
-    SECTION_KEYS,
-    SECTION_REROLL_SCHEMA,
-    SECTION_TITLES,
-)
-
-
-def test_section_keys_and_titles_cover_each_other():
-    assert set(SECTION_KEYS) == set(SECTION_TITLES.keys())
-    assert len(SECTION_KEYS) == 8
+from app.llm_schema import EDITION_SCHEMA, SECTION_REROLL_SCHEMA
 
 
 def test_edition_schema_top_level_shape():
@@ -18,7 +8,10 @@ def test_edition_schema_top_level_shape():
     assert set(EDITION_SCHEMA["required"]) == {"sections", "stocks"}
     sec = EDITION_SCHEMA["properties"]["sections"]
     assert sec["type"] == "array"
-    assert sec["items"]["properties"]["key"]["enum"] == SECTION_KEYS
+    # Section identity is per-user now; the schema accepts any string key.
+    key_schema = sec["items"]["properties"]["key"]
+    assert key_schema["type"] == "string"
+    assert "enum" not in key_schema
 
 
 def test_subsection_required_fields():

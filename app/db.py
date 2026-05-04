@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -180,6 +181,18 @@ class ImportantEvent(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class GoogleCalendar(Base):
+    """Cached snapshot of the user's Google Calendar list. Refreshed on
+    demand (no live polling). Used by the Data tab to show a calendar
+    picker without hitting the Google API on every request."""
+
+    __tablename__ = "google_calendars"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class GoogleOAuth(Base):
     __tablename__ = "google_oauth"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
@@ -246,6 +259,26 @@ class EventEmoji(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+
+
+class UserSettings(Base):
+    """Per-user newspaper configuration. Drives the section list, masthead
+    name (``The {display_name} News``), and weather coords for that user's
+    edition. ``sections_json`` is an ordered list (ordering = priority);
+    each entry: ``{key, title, description, subsection_count,
+    preferred_sources: list[str], use_global_sources: bool}``."""
+
+    __tablename__ = "user_settings"
+    email: Mapped[str] = mapped_column(String, primary_key=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    address: Mapped[str | None] = mapped_column(String, nullable=True)
+    # "lat,lon" — resolved from ``address`` on save via Nominatim.
+    weather_coords: Mapped[str | None] = mapped_column(String, nullable=True)
+    sections_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # List of ``{"name": str, "birthday": "YYYY-MM-DD"}``. Drives kid-age /
+    # grade computation that feeds the prompt's school grade-filter rule.
+    children_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class SessionRow(Base):

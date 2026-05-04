@@ -64,7 +64,6 @@ class Settings(BaseSettings):
     # Token for unauthenticated access to /pdf/latest (e.g. home screen shortcut).
     pdf_latest_token: str = ""
 
-    news_pr_path: Path = REPO_ROOT / "news.pr"
 
 
 @lru_cache

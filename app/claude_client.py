@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from anthropic import Anthropic
@@ -87,21 +86,17 @@ def call_with_schema(
     )
 
 
-def generate_edition(prompt_template: str, context: dict) -> dict:
-    """Send the rendered prompt to Claude, return parsed LinhNews dict
-    (see app.llm_schema.EDITION_SCHEMA).
+def generate_edition(rendered_prompt: str) -> dict:
+    """Send the fully-rendered prompt to Claude, return the parsed
+    NewsEdition dict (see :data:`app.llm_schema.EDITION_SCHEMA`).
     """
-    system_block = prompt_template
-    user_lines = ["Run for these inputs (substitute into the system prompt):"]
-    for k, v in context.items():
-        user_lines.append(f"- {k} = {_to_text(v)}")
-    user_lines.append(
-        "\nWhen done, call the return_edition tool with the structured "
-        "LinhNews payload (sections + stocks). Do NOT return HTML."
-    )
     return call_with_schema(
-        system=system_block,
-        user="\n".join(user_lines),
+        system=rendered_prompt,
+        user=(
+            "Run all web_search queries needed for this edition, then call "
+            "the return_edition tool exactly once with the structured "
+            "NewsEdition payload (sections + stocks). Do NOT return HTML."
+        ),
         schema=EDITION_SCHEMA,
         schema_name="return_edition",
         schema_description=(
@@ -110,9 +105,3 @@ def generate_edition(prompt_template: str, context: dict) -> dict:
         ),
         extra_tools=[WEB_SEARCH_TOOL],
     )
-
-
-def _to_text(v: Any) -> str:
-    if isinstance(v, str):
-        return v
-    return json.dumps(v, ensure_ascii=False, default=str)

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Linh News — {{ edition_date }}{% endblock %}
+{% block title %}{{ masthead_name }} News — {{ edition_date }}{% endblock %}
 {% block body %}
 <header class="site">
-  <h1 class="masthead">The Linh News</h1>
+  <h1 class="masthead">The {{ masthead_name }} News</h1>
   <form class="datepicker" method="get" action="/d/"
         onsubmit="event.preventDefault(); window.location='/d/'+this.d.value;">
     <a href="/d/{{ prev_date }}" class="actions" aria-label="Previous day">←</a>
@@ -23,6 +23,7 @@
         <a href="/admin/movies">Movies</a>
         <a href="/admin/stocks">Stocks</a>
       {% endif %}
+      <a href="/data">Data</a>
       <a href="/logout">Logout</a>
     </div>
   </div>

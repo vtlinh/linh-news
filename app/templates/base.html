@@ -531,8 +531,9 @@
       if (!a || a.target === '_blank') return;
       const href = a.getAttribute('href');
       if (!href || !href.startsWith('/')) return;
-      // Full-nav routes: logout, PDF download, image, OAuth.
-      if (/^\/(logout|pdf\/|edition-image\/|oauth\/|fonts\/|static\/)/.test(href)) return;
+      // Full-nav routes: PDF (binary download) and Logout (must reload the
+      // page in its logged-out state, not swap into the SPA shell).
+      if (href.startsWith('/pdf/') || href === '/logout') return;
       e.preventDefault();
       spaNavigate(href, true);
     });

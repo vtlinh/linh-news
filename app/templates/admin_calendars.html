@@ -42,6 +42,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   // ── Calendar toggles ───────────────────────────────────────────────
   document.querySelectorAll('input.calendar-toggle').forEach(cb => {
     cb.addEventListener('change', async () => {
@@ -234,7 +235,9 @@
       }
     } catch {}
   }
-  setInterval(checkFreshness, 5000);
+  const freshnessTimer = setInterval(checkFreshness, 5000);
+  window.spaOnUnload(() => clearInterval(freshnessTimer));
   checkFreshness();
+})();
 </script>
 {% endblock %}

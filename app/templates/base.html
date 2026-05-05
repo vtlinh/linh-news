@@ -494,6 +494,15 @@
         old.replaceWith(s);
       });
     }
+    // Page scripts can register cleanup callbacks (clear timers, disconnect
+    // observers, etc.) that run right before the next SPA swap.
+    window.__spaCleanups = window.__spaCleanups || [];
+    window.spaOnUnload = function(fn) { window.__spaCleanups.push(fn); };
+    function runSpaCleanups() {
+      const fns = window.__spaCleanups;
+      window.__spaCleanups = [];
+      for (const fn of fns) { try { fn(); } catch {} }
+    }
     async function spaNavigate(url, push) {
       let html;
       try {
@@ -511,6 +520,7 @@
       const newRoot = doc.getElementById('spa-root');
       const newScripts = doc.getElementById('spa-scripts');
       if (!newRoot) { window.location.href = url; return; }
+      runSpaCleanups();
       document.getElementById('spa-root').replaceWith(newRoot);
       document.title = doc.title;
       executeScripts(newRoot);

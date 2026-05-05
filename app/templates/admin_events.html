@@ -18,6 +18,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   const tbody = document.getElementById('events-tbody');
   const sentinel = document.getElementById('events-sentinel');
   const PAGE = 50;
@@ -172,7 +173,9 @@
       }
     } catch {}
   }
-  setInterval(checkFreshness, 5000);
+  const freshnessTimer = setInterval(checkFreshness, 5000);
+  window.spaOnUnload(() => clearInterval(freshnessTimer));
   checkFreshness();
+})();
 </script>
 {% endblock %}

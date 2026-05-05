@@ -136,6 +136,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   const grid = document.getElementById('movies-grid');
   const hiddenGrid = document.getElementById('hidden-grid');
   const hiddenSection = document.getElementById('hidden-section');
@@ -475,5 +476,6 @@
   });
 
   load(false);
+})();
 </script>
 {% endblock %}

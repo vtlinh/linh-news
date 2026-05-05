@@ -18,6 +18,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   // All Jinja interpolation goes through `| tojson` so HTML autoescape
   // (which would turn " into &#34; and break the script parse) never bites.
   const isAdmin = {{ is_admin | tojson }};
@@ -175,5 +176,6 @@
   // Movie cards no longer carry an inline ✕ — admins hide titles from the
   // dedicated /movies admin page (the X visually attaches to the backdrop
   // image and reads as "discard the image", which we don't support).
+})();
 </script>
 {% endblock %}

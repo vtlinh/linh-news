@@ -112,6 +112,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   const initial = {{ settings_json | tojson }};
 
   const $sections = document.getElementById('sections');
@@ -519,5 +520,6 @@
   });
 
   loadInto(initial);
+})();
 </script>
 {% endblock %}

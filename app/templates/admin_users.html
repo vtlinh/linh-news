@@ -67,6 +67,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
   const rowEmail = (el) => el.closest('tr').dataset.email;
 
@@ -180,5 +181,6 @@
       }
     });
   });
+})();
 </script>
 {% endblock %}

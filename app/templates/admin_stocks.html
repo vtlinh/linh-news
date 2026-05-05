@@ -30,6 +30,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function() {
   const tbody = document.getElementById('stocks-tbody');
   const addForm = document.getElementById('add-form');
   const input = document.getElementById('symbol-input');
@@ -95,5 +96,6 @@
       window.toast('Remove failed', true);
     }
   });
+})();
 </script>
 {% endblock %}

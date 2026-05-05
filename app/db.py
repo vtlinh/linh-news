@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
 import secrets
+from collections.abc import Iterator
 from datetime import date, datetime
 
 from sqlalchemy import (

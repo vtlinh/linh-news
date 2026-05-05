@@ -1,21 +1,41 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from app.auth import is_admin, is_allowed, load_allowlist
+from app.db import UserSettings
 
 
-def test_load_allowlist_parses_csv_and_normalizes(users_csv):
-    emails = load_allowlist(users_csv)
-    assert emails == {"vtlinh87@gmail.com", "friend@example.com"}
+def _add(s, email: str) -> None:
+    s.add(
+        UserSettings(
+            email=email,
+            display_name=None,
+            sections_json=[],
+            children_json=[],
+            updated_at=datetime.now(UTC),
+        )
+    )
+    s.commit()
 
 
-def test_load_allowlist_skips_blanks():
-    assert load_allowlist("a@x.com, ,b@y.com,,") == {"a@x.com", "b@y.com"}
+def test_load_allowlist_reads_user_settings(db_session):
+    _add(db_session, "friend@example.com")
+    emails = load_allowlist(db_session)
+    # Admin email is always included even without an explicit row.
+    assert "vtlinh87@gmail.com" in emails
+    assert "friend@example.com" in emails
 
 
-def test_is_allowed_case_insensitive(users_csv):
-    assert is_allowed("VTLinh87@Gmail.com", users_csv)
-    assert is_allowed("friend@EXAMPLE.com", users_csv)
-    assert not is_allowed("stranger@example.com", users_csv)
+def test_load_allowlist_admin_always_present_when_table_empty(db_session):
+    assert load_allowlist(db_session) == {"vtlinh87@gmail.com"}
+
+
+def test_is_allowed_case_insensitive(db_session):
+    _add(db_session, "friend@example.com")
+    assert is_allowed("VTLinh87@Gmail.com", db_session)
+    assert is_allowed("friend@EXAMPLE.com", db_session)
+    assert not is_allowed("stranger@example.com", db_session)
 
 
 def test_is_admin_only_linh():

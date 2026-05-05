@@ -9,12 +9,13 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
-    ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.engine import Engine
@@ -32,6 +33,10 @@ class Base(DeclarativeBase):
 class Edition(Base):
     __tablename__ = "editions"
     date: Mapped[date] = mapped_column(Date, primary_key=True)
+    # Owner of this rendering. The same calendar date can have multiple
+    # rows — one per user with personalization enabled — so the calendar /
+    # watchlist / overlays in each row reflect that user.
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     html: Mapped[str] = mapped_column(Text, nullable=False)
     # The print-styled HTML we hand to WeasyPrint. Stored alongside the rendered
     # PDF so we can reproduce / debug image-fetch failures and font sizing
@@ -68,12 +73,8 @@ class SubsectionImage(Base):
 
     __tablename__ = "subsection_images"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    edition_date: Mapped[date] = mapped_column(
-        Date,
-        ForeignKey("editions.date", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    edition_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    edition_email: Mapped[str] = mapped_column(Text, nullable=False)
     section_key: Mapped[str] = mapped_column(String, nullable=False)
     subsection_idx: Mapped[int] = mapped_column(Integer, nullable=False)
     bytes_: Mapped[bytes] = mapped_column("bytes", LargeBinary, nullable=False)
@@ -84,20 +85,31 @@ class SubsectionImage(Base):
     # appeared in a different edition (e.g. site banners served as og:image).
     image_hash: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["edition_date", "edition_email"],
+            ["editions.date", "editions.email"],
+            name="subsection_images_edition_fkey",
+            ondelete="CASCADE",
+        ),
+    )
+
 
 class HiddenMovie(Base):
     __tablename__ = "hidden_movies"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     title: Mapped[str] = mapped_column(String, primary_key=True)
     hidden_until: Mapped[date] = mapped_column(Date, nullable=False)
 
 
 class FavoriteMovie(Base):
-    """Admin-marked must-watch titles. Bypass the MPAA rating filter on the
+    """Per-user must-watch titles. Bypass the MPAA rating filter on the
     admin Movies page (always visible) and force inclusion in the daily
     edition / PDF when their release date falls in the favorite window
     (today - 3 weeks, today + 1 month)."""
 
     __tablename__ = "favorite_movies"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     title: Mapped[str] = mapped_column(String, primary_key=True)
 
 
@@ -140,23 +152,26 @@ class Movie(Base):
 
 class HiddenCalendar(Base):
     __tablename__ = "hidden_calendars"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     calendar_id: Mapped[str] = mapped_column(String, primary_key=True)
     calendar_name: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class SuppressedEvent(Base):
-    """Events explicitly marked unimportant — excluded from both HTML and
-    PDF generation, keyed by iCalUID."""
+    """Per-user events explicitly marked unimportant — excluded from both
+    HTML and PDF generation, keyed by (email, iCalUID)."""
 
     __tablename__ = "suppressed_events"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     ical_uid: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class WatchlistStock(Base):
-    """Stocks the user wants tracked in the daily edition's stocks section."""
+    """Per-user stocks tracked in the daily edition's stocks section."""
 
     __tablename__ = "watchlist_stocks"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     symbol: Mapped[str] = mapped_column(String, primary_key=True)
 
 
@@ -172,13 +187,18 @@ class KvCache(Base):
 class ImportantEvent(Base):
     __tablename__ = "important_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     # Stable identifier for calendar-sourced events. None for manual entries.
     # Survives recurring instances + edits to title/date/location.
-    ical_uid: Mapped[str | None] = mapped_column(String, nullable=True, index=True, unique=True)
+    ical_uid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
     importance: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("email", "ical_uid", name="uq_important_events_email_ical_uid"),
+    )
 
 
 class GoogleCalendar(Base):
@@ -195,18 +215,49 @@ class GoogleCalendar(Base):
 
 class GoogleOAuth(Base):
     __tablename__ = "google_oauth"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Google account email this credential belongs to. Unique — only one
+    # row per account is ever needed.
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
     client_id: Mapped[str] = mapped_column(Text, nullable=False)
     client_secret: Mapped[str] = mapped_column(Text, nullable=False)
+    # Admin-controlled toggle. When false, this user sees the admin's
+    # shared "Linh News" edition. When true, cron generates a personalized
+    # edition for them and / serves it.
+    personalized_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # Timestamp of the most recent successful per-user generation. NULL until
+    # the first run. Surfaced on the admin Users page.
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SharedEdition(Base):
+    """Phase A LLM output for a date — the shared parts of the edition
+    minus per-user customization. Phase B reads this once per user and
+    assembles the per-user edition without another LLM call."""
+
+    __tablename__ = "shared_editions"
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class CalendarDaySummary(Base):
-    """Persisted raw calendar events per day, written by the refresh
+    """Persisted raw calendar events per (user, day), written by the refresh
     pipeline. The HTML summary is rendered inline at view time from
     ``events_json`` plus the ``event_emojis`` map — no cached HTML."""
 
     __tablename__ = "calendar_day_summaries"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     events_json: Mapped[str] = mapped_column(Text, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

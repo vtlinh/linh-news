@@ -19,11 +19,12 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 - **Calendars & Events** (`/admin/calendars`): collapsible calendar list with hide toggles; events list with ⭐ Important / 🚫 Hide checkboxes per row, infinite scroll.
 - **Movies** (`/admin/movies`): 4-column poster grid for the next 12 months; per-tile hide checkbox; trailer button(s); MPAA filter row.
 - **Stocks** (`/admin/stocks`): add/remove watchlist tickers.
+- **Users** (`/admin/users`): manage the allowlist — add/remove users, set placeholder names (until the user signs in and Google's `given_name` takes over), toggle per-user personalization, and trigger a one-off refresh of any signed-in user's edition.
 
 ## Tooling
 
 - Python 3.12, managed with **uv** (`uv sync`, `uv run …`). `uv.lock` is committed.
-- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (11 migrations).
+- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (22 migrations).
 - Anthropic SDK with prompt caching, streaming, structured-output tool schemas.
 - WeasyPrint for the PDF (custom User-Agent so Wikimedia thumbnails load).
 - Persistent cache layer (`app/cache.py`): Redis when `REDIS_URL` is set, SQLite `kv_cache` table otherwise.
@@ -51,7 +52,7 @@ Hosted on Fly.io. Two scheduled machines run `python -m app.generate morning` at
 
 ## Authorized users
 
-Set the `AUTHORIZED_USERS` env var (comma-separated Google account emails) to grant access; the admin email must also appear in that list. The sole admin is configured via `ADMIN_EMAIL` (default `vtlinh87@gmail.com`). Update either with `fly secrets set …` and redeploy.
+The allowlist is stored in the `user_settings` DB table — every row is an authorized email. The admin (`ADMIN_EMAIL`, default `vtlinh87@gmail.com`) is always allowed even if their row is missing. Manage the list at `/admin/users`: add a user (optionally with a placeholder name), remove one, or toggle per-user personalization. On first sign-in Google's `given_name` populates `display_name` if it's still empty.
 
 ## Configuration
 

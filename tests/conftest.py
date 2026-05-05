@@ -42,21 +42,30 @@ def db_session() -> Iterator[Session]:
 
 @pytest.fixture()
 def client(db_session, monkeypatch, users_csv):
-    """FastAPI TestClient with the SQLite session factory installed."""
+    """FastAPI TestClient with the SQLite session factory installed.
+
+    Seeds the DB allowlist with the two test users via the same
+    ``user_settings`` table the production allowlist reads from.
+    """
+    from datetime import UTC, datetime
+
     from fastapi.testclient import TestClient
 
-    from app import auth as auth_module
-    from app.db import get_session, session_factory
+    from app.db import UserSettings, get_session, session_factory
     from app.main import app
 
-    monkeypatch.setattr(
-        auth_module,
-        "load_allowlist",
-        lambda csv=None: {
-            "vtlinh87@gmail.com",
-            "friend@example.com",
-        },
-    )
+    for em in ("vtlinh87@gmail.com", "friend@example.com"):
+        if db_session.get(UserSettings, em) is None:
+            db_session.add(
+                UserSettings(
+                    email=em,
+                    display_name=None,
+                    sections_json=[],
+                    children_json=[],
+                    updated_at=datetime.now(UTC),
+                )
+            )
+    db_session.commit()
 
     def override_session():
         Maker = session_factory()

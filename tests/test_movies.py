@@ -449,7 +449,7 @@ def test_hidden_title_filtered_without_touching_table(db_session):
     ):
         rows = movies.fetch_year_movie_list()
 
-    overlays.hide_movie(db_session, "Will Be Hidden")
+    overlays.hide_movie(db_session, "vtlinh87@gmail.com", "Will Be Hidden")
 
     in_theaters, coming_soon = movies.filter_for_edition(
         rows,

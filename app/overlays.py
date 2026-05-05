@@ -15,21 +15,37 @@ from app.db import (
 )
 
 
-def active_hidden_movie_titles(s: Session, today: date) -> list[str]:
-    rows = s.execute(select(HiddenMovie).where(HiddenMovie.hidden_until >= today)).scalars().all()
+def active_hidden_movie_titles(s: Session, email: str, today: date) -> list[str]:
+    rows = (
+        s.execute(
+            select(HiddenMovie).where(
+                HiddenMovie.email == email,
+                HiddenMovie.hidden_until >= today,
+            )
+        )
+        .scalars()
+        .all()
+    )
     return [r.title for r in rows]
 
 
-def hidden_calendar_ids(s: Session) -> list[dict]:
-    rows = s.execute(select(HiddenCalendar)).scalars().all()
+def hidden_calendar_ids(s: Session, email: str) -> list[dict]:
+    rows = (
+        s.execute(select(HiddenCalendar).where(HiddenCalendar.email == email))
+        .scalars()
+        .all()
+    )
     return [{"id": r.calendar_id, "name": r.calendar_name} for r in rows]
 
 
-def important_events_from(s: Session, today: date) -> list[dict]:
+def important_events_from(s: Session, email: str, today: date) -> list[dict]:
     rows = (
         s.execute(
             select(ImportantEvent)
-            .where(ImportantEvent.event_date >= today)
+            .where(
+                ImportantEvent.email == email,
+                ImportantEvent.event_date >= today,
+            )
             .order_by(ImportantEvent.importance.desc(), ImportantEvent.event_date.asc())
         )
         .scalars()
@@ -46,101 +62,129 @@ def important_events_from(s: Session, today: date) -> list[dict]:
     ]
 
 
-def hide_movie(s: Session, title: str, days: int = 60) -> None:
+def hide_movie(s: Session, email: str, title: str, days: int = 60) -> None:
     today = date.today()
-    existing = s.get(HiddenMovie, title)
+    existing = s.get(HiddenMovie, (email, title))
     until = today + timedelta(days=days)
     if existing:
         existing.hidden_until = until
     else:
-        s.add(HiddenMovie(title=title, hidden_until=until))
+        s.add(HiddenMovie(email=email, title=title, hidden_until=until))
     s.commit()
 
 
-def unhide_movie(s: Session, title: str) -> None:
-    row = s.get(HiddenMovie, title)
+def unhide_movie(s: Session, email: str, title: str) -> None:
+    row = s.get(HiddenMovie, (email, title))
     if row:
         s.delete(row)
         s.commit()
 
 
-def all_hidden_movies(s: Session) -> list[dict]:
-    rows = s.execute(select(HiddenMovie).order_by(HiddenMovie.title)).scalars().all()
+def all_hidden_movies(s: Session, email: str) -> list[dict]:
+    rows = (
+        s.execute(
+            select(HiddenMovie)
+            .where(HiddenMovie.email == email)
+            .order_by(HiddenMovie.title)
+        )
+        .scalars()
+        .all()
+    )
     return [{"title": r.title, "hidden_until": r.hidden_until.isoformat()} for r in rows]
 
 
-def favorite_movie_titles(s: Session) -> set[str]:
-    return set(s.execute(select(FavoriteMovie.title)).scalars().all())
+def favorite_movie_titles(s: Session, email: str) -> set[str]:
+    return set(
+        s.execute(
+            select(FavoriteMovie.title).where(FavoriteMovie.email == email)
+        ).scalars()
+    )
 
 
-def favorite_movie(s: Session, title: str) -> None:
-    if not title or s.get(FavoriteMovie, title):
+def favorite_movie(s: Session, email: str, title: str) -> None:
+    if not title or s.get(FavoriteMovie, (email, title)):
         return
-    s.add(FavoriteMovie(title=title))
+    s.add(FavoriteMovie(email=email, title=title))
     s.commit()
 
 
-def unfavorite_movie(s: Session, title: str) -> None:
-    row = s.get(FavoriteMovie, title)
+def unfavorite_movie(s: Session, email: str, title: str) -> None:
+    row = s.get(FavoriteMovie, (email, title))
     if row:
         s.delete(row)
         s.commit()
 
 
-def hide_calendar(s: Session, calendar_id: str, calendar_name: str) -> None:
-    if s.get(HiddenCalendar, calendar_id):
+def hide_calendar(s: Session, email: str, calendar_id: str, calendar_name: str) -> None:
+    if s.get(HiddenCalendar, (email, calendar_id)):
         return
-    s.add(HiddenCalendar(calendar_id=calendar_id, calendar_name=calendar_name))
+    s.add(HiddenCalendar(email=email, calendar_id=calendar_id, calendar_name=calendar_name))
     s.commit()
 
 
-def unhide_calendar(s: Session, calendar_id: str) -> None:
-    row = s.get(HiddenCalendar, calendar_id)
+def unhide_calendar(s: Session, email: str, calendar_id: str) -> None:
+    row = s.get(HiddenCalendar, (email, calendar_id))
     if row:
         s.delete(row)
         s.commit()
 
 
-def suppressed_event_uids(s: Session) -> set[str]:
-    return set(s.execute(select(SuppressedEvent.ical_uid)).scalars().all())
+def suppressed_event_uids(s: Session, email: str) -> set[str]:
+    return set(
+        s.execute(
+            select(SuppressedEvent.ical_uid).where(SuppressedEvent.email == email)
+        ).scalars()
+    )
 
 
-def suppressed_events_list(s: Session) -> list[dict]:
-    rows = s.execute(select(SuppressedEvent)).scalars().all()
+def suppressed_events_list(s: Session, email: str) -> list[dict]:
+    rows = (
+        s.execute(select(SuppressedEvent).where(SuppressedEvent.email == email))
+        .scalars()
+        .all()
+    )
     return [{"ical_uid": r.ical_uid, "title": r.title} for r in rows]
 
 
-def suppress_event(s: Session, ical_uid: str, title: str) -> None:
-    if s.get(SuppressedEvent, ical_uid):
+def suppress_event(s: Session, email: str, ical_uid: str, title: str) -> None:
+    if s.get(SuppressedEvent, (email, ical_uid)):
         return
-    s.add(SuppressedEvent(ical_uid=ical_uid, title=title))
+    s.add(SuppressedEvent(email=email, ical_uid=ical_uid, title=title))
     s.commit()
 
 
-def unsuppress_event(s: Session, ical_uid: str) -> None:
-    row = s.get(SuppressedEvent, ical_uid)
+def unsuppress_event(s: Session, email: str, ical_uid: str) -> None:
+    row = s.get(SuppressedEvent, (email, ical_uid))
     if row:
         s.delete(row)
         s.commit()
 
 
-def watchlist_symbols(s: Session) -> list[str]:
-    rows = s.execute(select(WatchlistStock).order_by(WatchlistStock.symbol)).scalars().all()
+def watchlist_symbols(s: Session, email: str) -> list[str]:
+    rows = (
+        s.execute(
+            select(WatchlistStock)
+            .where(WatchlistStock.email == email)
+            .order_by(WatchlistStock.symbol)
+        )
+        .scalars()
+        .all()
+    )
     return [r.symbol for r in rows]
 
 
-def add_watchlist_symbol(s: Session, symbol: str) -> None:
+def add_watchlist_symbol(s: Session, email: str, symbol: str) -> None:
     sym = symbol.strip().upper()
     if not sym:
         return
-    if s.get(WatchlistStock, sym):
+    if s.get(WatchlistStock, (email, sym)):
         return
-    s.add(WatchlistStock(symbol=sym))
+    s.add(WatchlistStock(email=email, symbol=sym))
     s.commit()
 
 
-def remove_watchlist_symbol(s: Session, symbol: str) -> None:
-    row = s.get(WatchlistStock, symbol.strip().upper())
+def remove_watchlist_symbol(s: Session, email: str, symbol: str) -> None:
+    row = s.get(WatchlistStock, (email, symbol.strip().upper()))
     if row:
         s.delete(row)
         s.commit()

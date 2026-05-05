@@ -49,7 +49,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         fake_now,
     ):
         generate.run("morning", today=today)
-        row = db_session.get(Edition, today)
+        row = db_session.get(Edition, (today, "vtlinh87@gmail.com"))
         assert row.html  # non-empty, even with zero sections
         assert row.pdf == b"%PDF-v1"
         assert row.content_json == {"sections": [], "stocks": []}
@@ -76,7 +76,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         generate.run("evening", today=today)
 
     db_session.expire_all()
-    row = db_session.get(Edition, today)
+    row = db_session.get(Edition, (today, "vtlinh87@gmail.com"))
     assert row.pdf == b"%PDF-v2"
 
 
@@ -207,7 +207,7 @@ def test_build_context_dedupes_calendar_events(db_session, monkeypatch):
     ]
     captured: dict = {}
 
-    def fake_persist(s, by_day, **kwargs):
+    def fake_persist(s, email, by_day, **kwargs):
         captured["by_day"] = by_day
 
     with (

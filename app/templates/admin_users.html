@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Admin · Users{% endblock %}
+{% block body %}
+<header class="site admin">
+  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Users</h1>
+</header>
+<main>
+  <p style="color:var(--muted);">
+    A row in this table authorizes that email to sign in. Personalization
+    controls whether cron generates a per-user edition for them — when off
+    they see the admin's edition.
+  </p>
+  <form id="add-user-form" style="display:flex; gap:8px; align-items:center; margin:12px 0;">
+    <input type="email" name="email" placeholder="user@example.com" required style="flex:1;" />
+    <input type="text" name="name" placeholder="Name (optional)" style="flex:1;" />
+    <button type="submit">Add user</button>
+  </form>
+  <table style="width:100%; border-collapse:collapse;">
+    <thead><tr>
+      <th align="left" style="width:25%;">Name</th>
+      <th align="left">Email</th>
+      <th align="center" style="width:90px;">Signed in</th>
+      <th align="center" style="width:120px;">Personalized</th>
+      <th align="left" style="width:180px;">Last refreshed</th>
+      <th align="center" style="width:200px;">Actions</th>
+    </tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr style="border-top:1px solid var(--rule);" data-email="{{ u.email }}">
+        <td>
+          {% if u.signed_in %}
+            <span title="User has signed in — they edit their name on /data.">{{ u.name or '—' }}</span>
+          {% else %}
+            <input type="text" class="name-input" value="{{ u.name }}"
+                   placeholder="(set name)" style="width:100%;" />
+          {% endif %}
+        </td>
+        <td>
+          {{ u.email }}{% if u.is_admin %} <small>(admin)</small>{% endif %}
+        </td>
+        <td align="center">{% if u.signed_in %}✓{% else %}—{% endif %}</td>
+        <td align="center">
+          {% if u.is_admin %}
+            <span style="color:var(--muted);">always on</span>
+          {% elif u.signed_in %}
+            <input type="checkbox" class="personalized-toggle"
+                   {% if u.personalized_enabled %}checked{% endif %} />
+          {% else %}
+            <span style="color:var(--muted);">—</span>
+          {% endif %}
+        </td>
+        <td>{% if u.last_refreshed_at %}{{ u.last_refreshed_at }}{% else %}<span style="color:var(--muted);">never</span>{% endif %}</td>
+        <td align="center" style="display:flex; gap:6px; justify-content:center;">
+          {% if u.personalized_enabled or u.is_admin %}
+            <button type="button" class="refresh-now">Refresh</button>
+          {% endif %}
+          {% if not u.is_admin %}
+            <button type="button" class="delete-user" style="color:#a00;">Delete</button>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</main>
+{% endblock %}
+{% block scripts %}
+<script>
+  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  const rowEmail = (el) => el.closest('tr').dataset.email;
+
+  document.getElementById('add-user-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    const r = await fetch('/admin/users/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        email: data.get('email'),
+        name: data.get('name'),
+      }),
+    });
+    if (r.ok) {
+      location.reload();
+    } else {
+      const msg = await r.text();
+      alert('Add failed: ' + r.status + ' ' + msg);
+    }
+  });
+
+  $$('input.personalized-toggle').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const email = rowEmail(cb);
+      const enabled = cb.checked;
+      const r = await fetch(`/admin/users/${encodeURIComponent(email)}/personalized`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled}),
+      });
+      if (!r.ok) {
+        cb.checked = !enabled;
+        alert('Toggle failed: ' + r.status);
+      } else {
+        location.reload();
+      }
+    });
+  });
+
+  $$('input.name-input').forEach(input => {
+    input.addEventListener('change', async () => {
+      const email = rowEmail(input);
+      const r = await fetch(`/admin/users/${encodeURIComponent(email)}/name`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: input.value}),
+      });
+      if (!r.ok) {
+        const msg = await r.text();
+        alert('Save failed: ' + r.status + ' ' + msg);
+      }
+    });
+  });
+
+  $$('button.refresh-now').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const email = rowEmail(btn);
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      const r = await fetch(`/admin/users/${encodeURIComponent(email)}/refresh`, {method: 'POST'});
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+      if (r.ok) {
+        location.reload();
+      } else {
+        alert('Refresh failed: ' + r.status);
+      }
+    });
+  });
+
+  $$('button.delete-user').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const email = rowEmail(btn);
+      if (!confirm(`Remove ${email}? They will lose access immediately.`)) return;
+      const r = await fetch(`/admin/users/${encodeURIComponent(email)}/delete`, {method: 'POST'});
+      if (r.ok) {
+        location.reload();
+      } else {
+        alert('Delete failed: ' + r.status);
+      }
+    });
+  });
+</script>
+{% endblock %}

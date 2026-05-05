@@ -3,13 +3,16 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from unittest.mock import patch
 
-from app.db import Edition, HiddenMovie
+from app.db import Edition, GoogleOAuth, HiddenMovie, UserSettings
+
+ADMIN = "vtlinh87@gmail.com"
 
 
 def _seed_edition(db_session, day: date) -> None:
     db_session.add(
         Edition(
             date=day,
+            email=ADMIN,
             html="<p>hello</p>",
             pdf=b"%PDF-1.4 fake",
             generated_at=datetime.now(UTC),
@@ -39,6 +42,7 @@ def test_home_substitutes_weather_placeholder(client, login_as, db_session):
     db_session.add(
         Edition(
             date=date(2026, 5, 2),
+            email=ADMIN,
             html="<!-- WEATHER_PLACEHOLDER --><div>x</div>",
             pdf=b"%PDF-1.4 fake",
             generated_at=datetime.now(UTC),
@@ -99,7 +103,7 @@ def test_pdf_filename_changes_when_content_changes(client, login_as, db_session)
     r1 = client.get("/pdf/2026-04-30")
     fn1 = r1.headers["content-disposition"]
     # Mutate the stored bytes and re-download.
-    edition = db_session.get(Edition, date(2026, 4, 30))
+    edition = db_session.get(Edition, (date(2026, 4, 30), ADMIN))
     edition.pdf = b"%PDF-1.4 different-bytes"
     db_session.commit()
     r2 = client.get("/pdf/2026-04-30")
@@ -115,7 +119,7 @@ def test_hide_movie_admin_only(client, login_as, db_session):
     login_as("vtlinh87@gmail.com")
     r = client.post("/hide-movie", json={"title": "Frozen 4"})
     assert r.status_code == 200
-    assert db_session.get(HiddenMovie, "Frozen 4") is not None
+    assert db_session.get(HiddenMovie, (ADMIN, "Frozen 4")) is not None
 
 
 def test_admin_pages_blocked_for_viewer(client, login_as):
@@ -161,6 +165,7 @@ def _seed_latest(db_session, day: date) -> None:
     db_session.add(
         Edition(
             date=day,
+            email=ADMIN,
             html="<p>hi</p>",
             pdf=b"%PDF-1.4 fake-latest",
             generated_at=datetime.now(UTC),
@@ -254,6 +259,145 @@ def test_pdf_day_wrong_token_falls_back_to_login(client, db_session, monkeypatch
     # Non-browser request → 401.
     r = client.get("/pdf/2026-04-30?token=wrong", follow_redirects=False)
     assert r.status_code == 401
+
+
+# ── /admin/users ──────────────────────────────────────────────────────────
+
+
+def _seed_oauth(db_session, email: str, *, personalized: bool = False) -> None:
+    db_session.add(
+        GoogleOAuth(
+            email=email,
+            refresh_token="rt",
+            client_id="cid",
+            client_secret="cs",
+            personalized_enabled=personalized,
+            created_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+
+def test_admin_users_get_admin_only(client, login_as):
+    login_as("friend@example.com")
+    assert client.get("/admin/users").status_code == 403
+
+
+def test_admin_users_get_lists_users(client, login_as, db_session):
+    _seed_oauth(db_session, "friend@example.com", personalized=True)
+    login_as(ADMIN)
+    r = client.get("/admin/users")
+    assert r.status_code == 200
+    assert "friend@example.com" in r.text
+    assert ADMIN in r.text
+
+
+def test_admin_users_add_creates_row(client, login_as, db_session):
+    login_as(ADMIN)
+    r = client.post(
+        "/admin/users/add", json={"email": "New@Example.com", "name": "Newbie"}
+    )
+    assert r.status_code == 200
+    row = db_session.get(UserSettings, "new@example.com")
+    assert row is not None
+    assert row.display_name == "Newbie"
+
+
+def test_admin_users_add_rejects_invalid_email(client, login_as):
+    login_as(ADMIN)
+    r = client.post("/admin/users/add", json={"email": "not-an-email"})
+    assert r.status_code == 400
+
+
+def test_admin_users_add_rejects_duplicate(client, login_as):
+    login_as(ADMIN)
+    r = client.post("/admin/users/add", json={"email": "friend@example.com"})
+    assert r.status_code == 409
+
+
+def test_admin_users_set_name_blocked_after_signin(client, login_as, db_session):
+    _seed_oauth(db_session, "friend@example.com")
+    login_as(ADMIN)
+    r = client.post(
+        "/admin/users/friend@example.com/name", json={"name": "Override"}
+    )
+    assert r.status_code == 403
+
+
+def test_admin_users_set_name_works_before_signin(client, login_as, db_session):
+    login_as(ADMIN)
+    r = client.post(
+        "/admin/users/friend@example.com/name", json={"name": "Buddy"}
+    )
+    assert r.status_code == 200
+    assert db_session.get(UserSettings, "friend@example.com").display_name == "Buddy"
+
+
+def test_admin_users_delete_protects_admin(client, login_as):
+    login_as(ADMIN)
+    r = client.post(f"/admin/users/{ADMIN}/delete")
+    assert r.status_code == 400
+
+
+def test_admin_users_delete_removes_user_and_oauth(client, login_as, db_session):
+    _seed_oauth(db_session, "friend@example.com")
+    login_as(ADMIN)
+    r = client.post("/admin/users/friend@example.com/delete")
+    assert r.status_code == 200
+    assert db_session.get(UserSettings, "friend@example.com") is None
+    assert db_session.get(GoogleOAuth, "friend@example.com") is None
+
+
+def test_admin_users_personalized_protects_admin(client, login_as):
+    login_as(ADMIN)
+    r = client.post(
+        f"/admin/users/{ADMIN}/personalized", json={"enabled": False}
+    )
+    assert r.status_code == 400
+
+
+def test_admin_users_personalized_requires_signin(client, login_as):
+    login_as(ADMIN)
+    r = client.post(
+        "/admin/users/friend@example.com/personalized", json={"enabled": True}
+    )
+    assert r.status_code == 404
+
+
+def test_admin_users_personalized_toggles(client, login_as, db_session):
+    _seed_oauth(db_session, "friend@example.com", personalized=False)
+    login_as(ADMIN)
+    r = client.post(
+        "/admin/users/friend@example.com/personalized", json={"enabled": True}
+    )
+    assert r.status_code == 200
+    db_session.expire_all()
+    assert db_session.get(GoogleOAuth, "friend@example.com").personalized_enabled is True
+
+
+def test_admin_users_refresh_requires_signin(client, login_as):
+    login_as(ADMIN)
+    r = client.post("/admin/users/friend@example.com/refresh")
+    assert r.status_code == 404
+
+
+def test_admin_users_refresh_requires_personalized(client, login_as, db_session):
+    _seed_oauth(db_session, "friend@example.com", personalized=False)
+    login_as(ADMIN)
+    r = client.post("/admin/users/friend@example.com/refresh")
+    assert r.status_code == 400
+
+
+def test_admin_users_refresh_spawns_subprocess(client, login_as, db_session):
+    _seed_oauth(db_session, "friend@example.com", personalized=True)
+    login_as(ADMIN)
+    with patch("app.main.subprocess.Popen") as popen:
+        popen.return_value.pid = 12345
+        r = client.post("/admin/users/friend@example.com/refresh")
+    assert r.status_code == 200
+    popen.assert_called_once()
+    cmd = popen.call_args[0][0]
+    assert cmd[-4:] == ["app.generate", "refresh", "--email", "friend@example.com"]
 
 
 def test_pdf_latest_does_not_require_login(client, db_session, monkeypatch):

@@ -393,7 +393,7 @@ def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) ->
     return f"<div><strong>{day_label}:</strong> " + " • ".join(pieces) + "</div>"
 
 
-def _upsert_day(s: Session, day: date, events_json: str) -> None:
+def _upsert_day(s: Session, email: str, day: date, events_json: str) -> None:
     from app.db import CalendarDaySummary
 
     now = datetime.now(UTC)
@@ -401,12 +401,13 @@ def _upsert_day(s: Session, day: date, events_json: str) -> None:
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
         stmt = pg_insert(CalendarDaySummary).values(
+            email=email,
             day=day,
             events_json=events_json,
             generated_at=now,
         )
         stmt = stmt.on_conflict_do_update(
-            index_elements=[CalendarDaySummary.day],
+            index_elements=[CalendarDaySummary.email, CalendarDaySummary.day],
             set_={
                 "events_json": stmt.excluded.events_json,
                 "generated_at": stmt.excluded.generated_at,
@@ -414,13 +415,14 @@ def _upsert_day(s: Session, day: date, events_json: str) -> None:
         )
         s.execute(stmt)
     except Exception:
-        existing = s.get(CalendarDaySummary, day)
+        existing = s.get(CalendarDaySummary, (email, day))
         if existing:
             existing.events_json = events_json
             existing.generated_at = now
         else:
             s.add(
                 CalendarDaySummary(
+                    email=email,
                     day=day,
                     events_json=events_json,
                     generated_at=now,
@@ -431,6 +433,7 @@ def _upsert_day(s: Session, day: date, events_json: str) -> None:
 
 def persist_events_for_days(
     s: Session,
+    email: str,
     events_by_day: dict[date, list[dict]],
     *,
     use_batch: bool = False,
@@ -458,7 +461,7 @@ def persist_events_for_days(
     for day in sorted(events_by_day):
         events = events_by_day[day]
         events_json = json.dumps(events, ensure_ascii=False, default=str)
-        _upsert_day(s, day, events_json)
+        _upsert_day(s, email, day, events_json)
 
 
 def read_emoji_map(s: Session, titles: list[str]) -> dict[str, str]:
@@ -492,7 +495,7 @@ def build_calendar_section(day_htmls: dict[date, str]) -> str:
     return f"<section>\n<h2>\U0001f4c5 Calendar</h2>\n{inner}\n</section>"
 
 
-def load_calendar_section(s: Session, today: date) -> str:
+def load_calendar_section(s: Session, email: str, today: date) -> str:
     """View-time: render the calendar section inline from persisted events.
 
     Reads the raw events for ``[today, today+30d]`` from
@@ -507,7 +510,11 @@ def load_calendar_section(s: Session, today: date) -> str:
     rows = (
         s.execute(
             select(CalendarDaySummary)
-            .where(CalendarDaySummary.day >= today, CalendarDaySummary.day <= horizon)
+            .where(
+                CalendarDaySummary.email == email,
+                CalendarDaySummary.day >= today,
+                CalendarDaySummary.day <= horizon,
+            )
             .order_by(CalendarDaySummary.day)
         )
         .scalars()

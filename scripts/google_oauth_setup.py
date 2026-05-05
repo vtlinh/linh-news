@@ -46,19 +46,24 @@ def main() -> None:
     if not creds.refresh_token:
         raise SystemExit("No refresh token returned. Re-run with prompt=consent.")
 
+    from datetime import UTC, datetime
+
+    admin_email = s.admin_email.lower()
     Maker = session_factory()
     with Maker() as db:
-        db.execute(delete(GoogleOAuth))
+        db.execute(delete(GoogleOAuth).where(GoogleOAuth.email == admin_email))
         db.add(
             GoogleOAuth(
-                id=1,
+                email=admin_email,
                 refresh_token=creds.refresh_token,
                 client_id=s.google_client_id,
                 client_secret=s.google_client_secret,
+                personalized_enabled=True,
+                created_at=datetime.now(UTC),
             )
         )
         db.commit()
-    print("Stored refresh token in google_oauth (id=1).")
+    print(f"Stored refresh token in google_oauth (email={admin_email}).")
 
 
 if __name__ == "__main__":

@@ -137,10 +137,22 @@ def is_auto_important(calendar_name: str, title: str) -> bool:
     return False
 
 
-def _credentials(s: Session) -> Credentials:
-    row = s.execute(select(GoogleOAuth).limit(1)).scalar_one_or_none()
+class MissingUserCredentials(RuntimeError):
+    """Raised when no ``google_oauth`` row exists for the requested user."""
+
+
+def _credentials(s: Session, email: str | None = None) -> Credentials:
+    from app.settings import get_settings
+
+    target = (email or get_settings().admin_email).lower()
+    row = s.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == target)
+    ).scalar_one_or_none()
     if row is None:
-        raise RuntimeError("No Google OAuth row. Run scripts/google_oauth_setup.py first.")
+        raise MissingUserCredentials(
+            f"No Google OAuth row for {target}. The user must sign in (and re-consent) "
+            f"so a refresh token gets captured."
+        )
     creds = Credentials(
         token=None,
         refresh_token=row.refresh_token,
@@ -153,11 +165,15 @@ def _credentials(s: Session) -> Credentials:
     return creds
 
 
-def _service(s: Session):
-    return build("calendar", "v3", credentials=_credentials(s), cache_discovery=False)
+def _service(s: Session, email: str | None = None):
+    return build(
+        "calendar", "v3", credentials=_credentials(s, email), cache_discovery=False
+    )
 
 
-def cached_calendars(s: Session, *, refresh_if_empty: bool = True) -> list[dict]:
+def cached_calendars(
+    s: Session, *, refresh_if_empty: bool = True, email: str | None = None
+) -> list[dict]:
     """Return the cached snapshot of the user's Google Calendar list. If
     the cache is empty and ``refresh_if_empty`` is True, hits Google and
     repopulates the cache before returning. Used by the Data tab's school
@@ -175,17 +191,17 @@ def cached_calendars(s: Session, *, refresh_if_empty: bool = True) -> list[dict]
         return [{"id": r.id, "name": r.name, "primary": bool(r.primary)} for r in rows]
     if not refresh_if_empty:
         return []
-    return refresh_cached_calendars(s)
+    return refresh_cached_calendars(s, email=email)
 
 
-def refresh_cached_calendars(s: Session) -> list[dict]:
+def refresh_cached_calendars(s: Session, *, email: str | None = None) -> list[dict]:
     """Hit Google's calendarList API, replace the cached snapshot, return
     the fresh list. Raises if the OAuth row is missing."""
     from sqlalchemy import delete as _delete
 
     from app.db import GoogleCalendar
 
-    fresh = list_calendars(s)
+    fresh = list_calendars(s, email)
     s.execute(_delete(GoogleCalendar))
     now = datetime.now(UTC)
     for cal in fresh:
@@ -201,8 +217,8 @@ def refresh_cached_calendars(s: Session) -> list[dict]:
     return fresh
 
 
-def list_calendars(s: Session) -> list[dict]:
-    svc = _service(s)
+def list_calendars(s: Session, email: str | None = None) -> list[dict]:
+    svc = _service(s, email)
     page_token = None
     out: list[dict] = []
     while True:
@@ -255,6 +271,7 @@ def fetch_events(
     end: date,
     *,
     calendar_names: dict[str, str] | None = None,
+    email: str | None = None,
 ) -> list[dict]:
     """Fetch events from given calendars in [start, end). Drops any titles
     caught by EVENT_TITLE_FILTERS for that calendar.
@@ -265,7 +282,7 @@ def fetch_events(
     date picker can still surface them when viewing today's or a past
     edition.
     """
-    svc = _service(s)
+    svc = _service(s, email)
     time_min = datetime.combine(start, time.min, tzinfo=UTC).isoformat()
     time_max = datetime.combine(end, time.min, tzinfo=UTC).isoformat()
     cal_names = calendar_names or {}

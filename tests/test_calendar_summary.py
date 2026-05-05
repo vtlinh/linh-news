@@ -126,14 +126,14 @@ def test_persist_events_for_days_writes_events_and_loads_inline(db_session):
         ],
     }
     with patch.object(calendar_summary, "_emoji_lookup_single_call") as llm:
-        calendar_summary.persist_events_for_days(db_session, events_by_day)
+        calendar_summary.persist_events_for_days(db_session, "vtlinh87@gmail.com", events_by_day)
     llm.assert_not_called()
 
-    row = db_session.get(CalendarDaySummary, date(2026, 5, 2))
+    row = db_session.get(CalendarDaySummary, ("vtlinh87@gmail.com", date(2026, 5, 2)))
     assert row is not None
     assert "Library visit" in row.events_json
 
-    section = calendar_summary.load_calendar_section(db_session, date(2026, 5, 2))
+    section = calendar_summary.load_calendar_section(db_session, "vtlinh87@gmail.com", date(2026, 5, 2))
     assert "📚" in section
     assert "🎂" in section
     assert " • " in section
@@ -159,9 +159,9 @@ def test_load_calendar_section_re_renders_after_renderer_change(db_session):
         date(2026, 5, 2): [_ev("Soccer practice", "2026-05-02T17:00:00")],
     }
     with patch.object(calendar_summary, "_emoji_lookup_single_call"):
-        calendar_summary.persist_events_for_days(db_session, events_by_day)
+        calendar_summary.persist_events_for_days(db_session, "vtlinh87@gmail.com", events_by_day)
 
-    section1 = calendar_summary.load_calendar_section(db_session, date(2026, 5, 2))
+    section1 = calendar_summary.load_calendar_section(db_session, "vtlinh87@gmail.com", date(2026, 5, 2))
     assert "⚽" in section1
 
     # Update the emoji directly; no refresh, no cache bust — just reload.
@@ -169,12 +169,12 @@ def test_load_calendar_section_re_renders_after_renderer_change(db_session):
     row.emoji = "🥅"
     db_session.commit()
 
-    section2 = calendar_summary.load_calendar_section(db_session, date(2026, 5, 2))
+    section2 = calendar_summary.load_calendar_section(db_session, "vtlinh87@gmail.com", date(2026, 5, 2))
     assert "🥅" in section2
     assert "⚽" not in section2
 
     # And events_json is still there exactly as written.
-    persisted = db_session.get(CalendarDaySummary, date(2026, 5, 2))
+    persisted = db_session.get(CalendarDaySummary, ("vtlinh87@gmail.com", date(2026, 5, 2)))
     assert "Soccer practice" in persisted.events_json
 
 

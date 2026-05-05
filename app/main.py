@@ -40,6 +40,79 @@ async def _lifespan(app):
     yield
 
 
+def _admin_email() -> str:
+    """Owner email — single source of truth for non-personalized lookups."""
+    return get_settings().admin_email.lower()
+
+
+def _upsert_google_oauth(s: Session, email: str, refresh_token: str | None) -> None:
+    """Persist or update the user's Google credentials after a successful
+    OAuth callback. Never overwrites an existing refresh_token with NULL —
+    Google only emits one when ``prompt=consent`` actually re-prompts; on
+    silent re-auth the stored token must be kept.
+
+    New rows default to ``personalized_enabled=False``. The admin's row is
+    seeded by ``scripts/google_oauth_setup.py`` with the flag set to true.
+    """
+    from datetime import UTC, datetime
+
+    from app.db import GoogleOAuth
+
+    settings_obj = get_settings()
+    s_email = email.lower()
+    row = s.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == s_email)
+    ).scalar_one_or_none()
+    if row is None:
+        if not refresh_token:
+            # First-time consent must produce a refresh_token. Without one
+            # we can't help the user later, so don't create an empty row.
+            return
+        s.add(
+            GoogleOAuth(
+                email=s_email,
+                refresh_token=refresh_token,
+                client_id=settings_obj.google_client_id,
+                client_secret=settings_obj.google_client_secret,
+                personalized_enabled=(s_email == settings_obj.admin_email.lower()),
+                created_at=datetime.now(UTC),
+            )
+        )
+    elif refresh_token:
+        row.refresh_token = refresh_token
+        row.client_id = settings_obj.google_client_id
+        row.client_secret = settings_obj.google_client_secret
+    s.commit()
+
+
+def _seed_display_name(s: Session, email: str, profile: dict) -> None:
+    """On first sign-in, populate ``user_settings.display_name`` from
+    Google's ``given_name`` — but only when the row already exists (the
+    admin must add the user via the Users page first) and ``display_name``
+    is still empty (so a placeholder name the admin set is overwritten by
+    the user's real first name on first login). Subsequent logins never
+    touch ``display_name`` — the user owns it via the Data tab.
+    """
+    from datetime import UTC, datetime
+
+    from app.db import UserSettings
+
+    given = (profile.get("given_name") or "").strip()
+    if not given:
+        full = (profile.get("name") or "").strip()
+        given = full.split()[0] if full else ""
+    if not given:
+        return
+    row = s.get(UserSettings, email.lower())
+    if row is None:
+        # No allowlist row → callback already rejected this user above.
+        return
+    if not (row.display_name or "").strip():
+        row.display_name = given
+        row.updated_at = datetime.now(UTC)
+        s.commit()
+
+
 app = FastAPI(title="News", lifespan=_lifespan)
 templates = Jinja2Templates(directory=str(REPO_ROOT / "app" / "templates"))
 # Serve the masthead font (and any future static assets) at /fonts/*. Used by
@@ -95,11 +168,13 @@ async def auth_callback(
     if not code or state != request.cookies.get("oauth_state"):
         return RedirectResponse("/login?error=invalid_state")
     try:
-        email = await auth.exchange_code_for_email(code)
+        email, refresh_token, profile = await auth.exchange_code_for_email(code)
     except HTTPException:
         return RedirectResponse("/login?error=oauth_failed")
-    if not auth.is_allowed(email):
+    if not auth.is_allowed(email, s):
         return RedirectResponse("/login?error=not_authorized")
+    _upsert_google_oauth(s, email, refresh_token)
+    _seed_display_name(s, email, profile)
     sid = auth.create_session(s, email)
     resp = RedirectResponse("/", status_code=status.HTTP_302_FOUND)
     resp.set_cookie(
@@ -160,15 +235,15 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     return html.replace("<!-- WEATHER_PLACEHOLDER -->", replacement, 1)
 
 
-def _inject_calendar(html: str, s: Session, today: date) -> str:
+def _inject_calendar(html: str, s: Session, today: date, email: str) -> str:
     """Replace <!-- CALENDAR_PLACEHOLDER --> with live calendar from DB."""
     if "<!-- CALENDAR_PLACEHOLDER -->" not in html:
         return html
-    section = calendar_summary.load_calendar_section(s, today)
+    section = calendar_summary.load_calendar_section(s, email, today)
     return html.replace("<!-- CALENDAR_PLACEHOLDER -->", section, 1)
 
 
-def _inject_movies(html: str, s: Session, today: date) -> str:
+def _inject_movies(html: str, s: Session, today: date, email: str) -> str:
     """Replace ``<!-- MOVIES_PLACEHOLDER -->`` with the cached movie list,
     filtered to the daily-edition date window and the admin-hidden titles.
 
@@ -184,8 +259,8 @@ def _inject_movies(html: str, s: Session, today: date) -> str:
     cached = movies_mod.get_movies()
     if not cached:
         return html.replace("<!-- MOVIES_PLACEHOLDER -->", "", 1)
-    hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
-    favorites = overlays.favorite_movie_titles(s)
+    hidden = {m["title"] for m in overlays.all_hidden_movies(s, email)}
+    favorites = overlays.favorite_movie_titles(s, email)
     allowed = set(prefs.get_allowed_ratings(today))
     section = movies_mod.render_html_section(
         cached,
@@ -208,20 +283,33 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
     # Defer the multi-MB pdf column — the home page only needs html +
     # generated_at. Fetching pdf on every request through the Fly proxy
     # was the dominant page-load cost.
+    # Look up the viewer's own edition first; if none exists (e.g. viewer
+    # has personalization disabled, or their first cron run hasn't happened
+    # yet), fall back to the admin's shared edition for that date.
+    admin = _admin_email()
     edition = s.execute(
         select(Edition)
-        .where(Edition.date == day)
+        .where(Edition.date == day, Edition.email == viewer_email)
         .options(defer(Edition.pdf), defer(Edition.pdf_html))
     ).scalar_one_or_none()
+    if edition is None and viewer_email != admin:
+        edition = s.execute(
+            select(Edition)
+            .where(Edition.date == day, Edition.email == admin)
+            .options(defer(Edition.pdf), defer(Edition.pdf_html))
+        ).scalar_one_or_none()
     today = local_today()
     next_date = day + timedelta(days=1)
     edition_html = edition.html if edition else None
+    # Use the edition's owner-email when injecting overlays so the calendar
+    # / hidden-movies honor that edition's user, not the viewer.
+    overlay_email = edition.email if edition else viewer_email
     if edition_html:
         edition_html = _inject_weather(edition_html, s, edition)
         # Calendar and movies honor the viewed date (date picker), not now —
         # so picking a past edition shows that edition's calendar/movies.
-        edition_html = _inject_calendar(edition_html, s, day)
-        edition_html = _inject_movies(edition_html, s, day)
+        edition_html = _inject_calendar(edition_html, s, day, overlay_email)
+        edition_html = _inject_movies(edition_html, s, day, overlay_email)
     return templates.TemplateResponse(
         request,
         "viewer.html",
@@ -323,6 +411,7 @@ def pdf_latest(
         raise HTTPException(401, "Invalid or missing token")
     edition = s.execute(
         select(Edition)
+        .where(Edition.email == _admin_email())
         .order_by(Edition.date.desc())
         .options(defer(Edition.html), defer(Edition.pdf_html))
         .limit(1)
@@ -353,7 +442,7 @@ def view_pdf(
         auth.require_viewer(request, s)
     edition = s.execute(
         select(Edition)
-        .where(Edition.date == _parse_date(day))
+        .where(Edition.date == _parse_date(day), Edition.email == _admin_email())
         .options(defer(Edition.html), defer(Edition.pdf_html))
     ).scalar_one_or_none()
     if not edition:
@@ -463,7 +552,10 @@ def edition_freshness(
 ):
     # Only need generated_at — skip the multi-MB pdf / pdf_html / html columns.
     row = s.execute(
-        select(Edition.generated_at).where(Edition.date == _parse_date(day))
+        select(Edition.generated_at).where(
+            Edition.date == _parse_date(day),
+            Edition.email == _admin_email(),
+        )
     ).scalar_one_or_none()
     return {
         "generated_at": row.isoformat() if row else None,
@@ -538,7 +630,7 @@ async def hide_movie(
     title = (body.get("title") or "").strip()
     if not title:
         raise HTTPException(400, "title required")
-    overlays.hide_movie(s, title)
+    overlays.hide_movie(s, _admin_email(), title)
     return {"ok": True}
 
 
@@ -577,7 +669,7 @@ def _calendar_events_for_year(s: Session) -> tuple[list[dict], list[dict]]:
     horizon = today + timedelta(days=365)
     all_cals = list_calendars(s)
     cal_name = {c["id"]: c["name"] for c in all_cals}
-    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s)}
+    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, _admin_email())}
     active_ids = [c["id"] for c in all_cals if c["id"] not in hidden_ids]
     raw = calendar_oauth.fetch_events(
         s,
@@ -650,12 +742,15 @@ def admin_events_data(
     cal_events, _ = _calendar_events_for_year_cached(s, email)
     # Filter out events from currently-hidden calendars at READ time so toggles
     # take effect immediately without forcing a Google re-fetch.
-    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s)}
+    admin = _admin_email()
+    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, admin)}
     cal_events = [e for e in cal_events if e.get("calendar_id") not in hidden_ids]
     page = cal_events[offset : offset + limit]
-    rows = s.execute(select(ImportantEvent.ical_uid)).all()
+    rows = s.execute(
+        select(ImportantEvent.ical_uid).where(ImportantEvent.email == admin)
+    ).all()
     important_uids = {r[0] for r in rows if r[0]}
-    suppressed_uids = overlays.suppressed_event_uids(s)
+    suppressed_uids = overlays.suppressed_event_uids(s, admin)
     return {
         "events": [
             {
@@ -688,12 +783,17 @@ async def admin_events_suppress(
         cal_events, _ = _calendar_events_for_year_cached(s, email)
         match = next((e for e in cal_events if e["ical_uid"] == ical_uid), None)
         title = match["title"] if match else ical_uid
-        overlays.suppress_event(s, ical_uid, title)
+        admin = _admin_email()
+        overlays.suppress_event(s, admin, ical_uid, title)
         # Mutually exclusive: a suppressed event can't be important.
-        s.execute(delete(ImportantEvent).where(and_(ImportantEvent.ical_uid == ical_uid)))
+        s.execute(
+            delete(ImportantEvent).where(
+                and_(ImportantEvent.ical_uid == ical_uid, ImportantEvent.email == admin)
+            )
+        )
         s.commit()
     else:
-        overlays.unsuppress_event(s, ical_uid)
+        overlays.unsuppress_event(s, _admin_email(), ical_uid)
     return {"ok": True, "suppressed": suppressed}
 
 
@@ -711,7 +811,12 @@ async def admin_events_toggle(
     important = bool(body.get("important"))
     if not ical_uid:
         raise HTTPException(400, "ical_uid required")
-    s.execute(delete(ImportantEvent).where(and_(ImportantEvent.ical_uid == ical_uid)))
+    admin = _admin_email()
+    s.execute(
+        delete(ImportantEvent).where(
+            and_(ImportantEvent.ical_uid == ical_uid, ImportantEvent.email == admin)
+        )
+    )
     if important:
         cal_events, _ = _calendar_events_for_year_cached(s, email)
         match = next((e for e in cal_events if e["ical_uid"] == ical_uid), None)
@@ -719,6 +824,7 @@ async def admin_events_toggle(
             raise HTTPException(404, "event not found in calendar")
         s.add(
             ImportantEvent(
+                email=admin,
                 ical_uid=ical_uid,
                 title=match["title"],
                 event_date=_parse_date(match["date"]),
@@ -736,7 +842,12 @@ def admin_events_delete(
     email: str = Depends(auth.require_admin),
     s: Session = Depends(get_session),
 ):
-    s.execute(delete(ImportantEvent).where(ImportantEvent.id == event_id))
+    s.execute(
+        delete(ImportantEvent).where(
+            ImportantEvent.id == event_id,
+            ImportantEvent.email == _admin_email(),
+        )
+    )
     s.commit()
     return RedirectResponse("/admin/events", status_code=303)
 
@@ -751,7 +862,7 @@ def admin_calendars_get(
         calendars = list_calendars(s)
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
-    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s)}
+    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, _admin_email())}
     # Sort: visible calendars first (primary first within that), hidden last.
     calendars.sort(key=lambda c: (c["id"] in hidden_ids, not c.get("primary"), c["name"].lower()))
     return templates.TemplateResponse(
@@ -795,7 +906,8 @@ def admin_movies_data(
     selected = set(requested) if requested else set(prefs.get_allowed_ratings())
     include_unrated = "Unrated" in selected
     movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
-    favorites = overlays.favorite_movie_titles(s)
+    admin = _admin_email()
+    favorites = overlays.favorite_movie_titles(s, admin)
 
     def _matches(m: dict) -> bool:
         # Favorites bypass the rating filter — always visible regardless of
@@ -822,7 +934,7 @@ def admin_movies_data(
             return True
 
     movies = [m for m in movies if _still_fresh(m)]
-    hidden = {m["title"] for m in overlays.all_hidden_movies(s)}
+    hidden = {m["title"] for m in overlays.all_hidden_movies(s, admin)}
     return {
         "movies": [
             {
@@ -862,10 +974,11 @@ async def admin_movies_toggle(
     hide = bool(body.get("hidden"))
     if not title:
         raise HTTPException(400, "title required")
+    admin = _admin_email()
     if hide:
-        overlays.hide_movie(s, title)
+        overlays.hide_movie(s, admin, title)
     else:
-        overlays.unhide_movie(s, title)
+        overlays.unhide_movie(s, admin, title)
     return {"ok": True, "hidden": hide}
 
 
@@ -883,10 +996,11 @@ async def admin_movies_favorite(
     favorite = bool(body.get("favorite"))
     if not title:
         raise HTTPException(400, "title required")
+    admin = _admin_email()
     if favorite:
-        overlays.favorite_movie(s, title)
+        overlays.favorite_movie(s, admin, title)
     else:
-        overlays.unfavorite_movie(s, title)
+        overlays.unfavorite_movie(s, admin, title)
     return {"ok": True, "favorite": favorite}
 
 
@@ -899,7 +1013,7 @@ def admin_stocks_get(
     return templates.TemplateResponse(
         request,
         "admin_stocks.html",
-        {"symbols": overlays.watchlist_symbols(s)},
+        {"symbols": overlays.watchlist_symbols(s, _admin_email())},
     )
 
 
@@ -913,7 +1027,7 @@ async def admin_stocks_add(
     symbol = (body.get("symbol") or "").strip().upper()
     if not symbol or not symbol.isalnum() or len(symbol) > 8:
         raise HTTPException(400, "Invalid symbol — letters/digits, up to 8 chars.")
-    overlays.add_watchlist_symbol(s, symbol)
+    overlays.add_watchlist_symbol(s, _admin_email(), symbol)
     return {"ok": True, "symbol": symbol}
 
 
@@ -927,7 +1041,7 @@ async def admin_stocks_remove(
     symbol = (body.get("symbol") or "").strip().upper()
     if not symbol:
         raise HTTPException(400, "symbol required")
-    overlays.remove_watchlist_symbol(s, symbol)
+    overlays.remove_watchlist_symbol(s, _admin_email(), symbol)
     return {"ok": True}
 
 
@@ -949,19 +1063,230 @@ async def admin_calendars_toggle(
         raise HTTPException(503, str(e)) from e
     if calendar_id not in all_cals:
         raise HTTPException(404, "calendar not found")
+    admin = _admin_email()
     if hidden:
         # Hide is fast: events from this calendar are filtered out at read
         # time. No need to dump the cache.
-        if not s.get(HiddenCalendar, calendar_id):
-            s.add(HiddenCalendar(calendar_id=calendar_id, calendar_name=all_cals[calendar_id]))
+        if not s.get(HiddenCalendar, (admin, calendar_id)):
+            s.add(
+                HiddenCalendar(
+                    email=admin,
+                    calendar_id=calendar_id,
+                    calendar_name=all_cals[calendar_id],
+                )
+            )
         s.commit()
     else:
         # Un-hide must re-query Google for events from the now-visible
         # calendar — invalidate the cache so the next read triggers a fetch.
-        s.execute(delete(HiddenCalendar).where(HiddenCalendar.calendar_id == calendar_id))
+        s.execute(
+            delete(HiddenCalendar).where(
+                HiddenCalendar.email == admin,
+                HiddenCalendar.calendar_id == calendar_id,
+            )
+        )
         s.commit()
         _invalidate_events_cache()
     return {"ok": True, "hidden": hidden}
+
+
+# ──────────────────────── Admin Users ───────────────────────
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_get(
+    request: Request,
+    email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    from app.db import GoogleOAuth, UserSettings
+
+    admin = _admin_email()
+    settings_rows = (
+        s.execute(select(UserSettings).order_by(UserSettings.email)).scalars().all()
+    )
+    oauth_rows = s.execute(select(GoogleOAuth)).scalars().all()
+    oauth_by_email = {r.email.lower(): r for r in oauth_rows}
+    users = []
+    for r in settings_rows:
+        em = r.email.lower()
+        gauth = oauth_by_email.get(em)
+        users.append(
+            {
+                "email": em,
+                "name": r.display_name or "",
+                "is_admin": em == admin,
+                "signed_in": gauth is not None,
+                "personalized_enabled": bool(gauth.personalized_enabled) if gauth else False,
+                "last_refreshed_at": (
+                    gauth.last_refreshed_at.isoformat(sep=" ", timespec="seconds")
+                    if gauth and gauth.last_refreshed_at
+                    else None
+                ),
+            }
+        )
+    return templates.TemplateResponse(
+        request, "admin_users.html", {"users": users}
+    )
+
+
+@app.post("/admin/users/add")
+async def admin_users_add(
+    request: Request,
+    email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Create a new allowlist row. Email is required; name is the admin's
+    placeholder until the user signs in (then Google's given_name fills
+    any still-empty display_name)."""
+    from datetime import UTC, datetime
+
+    from app.db import UserSettings
+
+    body = await request.json()
+    new_email = (body.get("email") or "").strip().lower()
+    name = (body.get("name") or "").strip() or None
+    if not new_email or "@" not in new_email:
+        raise HTTPException(400, "Valid email required.")
+    if s.get(UserSettings, new_email) is not None:
+        raise HTTPException(409, "User already exists.")
+    s.add(
+        UserSettings(
+            email=new_email,
+            display_name=name,
+            address=None,
+            weather_coords=None,
+            sections_json=[],
+            children_json=[],
+            updated_at=datetime.now(UTC),
+        )
+    )
+    s.commit()
+    return {"ok": True, "email": new_email}
+
+
+@app.post("/admin/users/{user_email}/name")
+async def admin_users_set_name(
+    user_email: str,
+    request: Request,
+    admin_email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Update the placeholder name. Allowed only before the user has
+    signed in (no ``google_oauth`` row); after that the user owns their
+    name via the Data tab."""
+    from datetime import UTC, datetime
+
+    from app.db import GoogleOAuth, UserSettings
+
+    target = user_email.lower()
+    row = s.get(UserSettings, target)
+    if row is None:
+        raise HTTPException(404, "Unknown user.")
+    has_signed_in = (
+        s.execute(
+            select(GoogleOAuth.email).where(GoogleOAuth.email == target)
+        ).scalar_one_or_none()
+        is not None
+    )
+    if has_signed_in:
+        raise HTTPException(
+            403, "User has signed in — they manage their name on the Data tab."
+        )
+    body = await request.json()
+    name = (body.get("name") or "").strip() or None
+    row.display_name = name
+    row.updated_at = datetime.now(UTC)
+    s.commit()
+    return {"ok": True, "email": target, "name": name}
+
+
+@app.post("/admin/users/{user_email}/delete")
+def admin_users_delete(
+    user_email: str,
+    admin_email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Remove an authorized user. The admin's own row is locked — that
+    safeguard plus ADMIN_EMAIL being always-allowed means deleting it
+    wouldn't lock the admin out, but the row carries the admin's masthead
+    name so we still refuse here."""
+    from app.db import GoogleOAuth, UserSettings
+
+    target = user_email.lower()
+    if target == _admin_email():
+        raise HTTPException(400, "Admin row is protected.")
+    row = s.get(UserSettings, target)
+    if row is None:
+        raise HTTPException(404, "Unknown user.")
+    s.delete(row)
+    # Their stored credentials become useless without an allowlist row.
+    s.execute(delete(GoogleOAuth).where(GoogleOAuth.email == target))
+    s.commit()
+    return {"ok": True, "email": target}
+
+
+@app.post("/admin/users/{user_email}/personalized")
+async def admin_users_personalized(
+    user_email: str,
+    request: Request,
+    admin_email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Toggle personalization for one user. The admin's own row is locked
+    on (always personalized) — server-side reject any attempt to flip it."""
+    from app.db import GoogleOAuth
+
+    target = user_email.lower()
+    if target == _admin_email():
+        raise HTTPException(400, "Admin row is always personalized.")
+    body = await request.json()
+    enabled = bool(body.get("enabled"))
+    row = s.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == target)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "User has not signed in yet.")
+    row.personalized_enabled = enabled
+    s.commit()
+    return {"ok": True, "email": target, "personalized_enabled": enabled}
+
+
+@app.post("/admin/users/{user_email}/refresh")
+def admin_users_refresh(
+    user_email: str,
+    admin_email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Manually run the per-user pipeline for a single user, in a detached
+    subprocess so the admin's HTTP request returns immediately."""
+    from app.db import GoogleOAuth
+
+    target = user_email.lower()
+    row = s.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == target)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "User has not signed in yet.")
+    if not row.personalized_enabled and target != _admin_email():
+        raise HTTPException(400, "Personalization disabled for this user.")
+    # Spawn the same generate subprocess used by /refresh, scoped to this user.
+    cmd = [sys.executable, "-m", "app.generate", "refresh", "--email", target]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    kwargs: dict = {
+        "cwd": str(REPO_ROOT),
+        "env": env,
+        "stdin": subprocess.DEVNULL,
+        "stdout": None,
+        "stderr": None,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(cmd, **kwargs)
+    return {"ok": True, "email": target, "pid": proc.pid}
 
 
 # ──────────────────────── Helpers ───────────────────────

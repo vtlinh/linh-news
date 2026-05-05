@@ -64,7 +64,7 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
     today = today or local_today()
     settings = get_settings()
     Maker = session_factory()
-    target_email = email or settings.admin_email
+    target_email = (email or settings.admin_email).lower()
     with Maker() as s:
         usettings = user_settings_mod.get(s, target_email)
     masthead_name = (usettings.get("display_name") or "the reader").strip() or "the reader"
@@ -73,10 +73,10 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
     user_children = list(usettings.get("children") or [])
 
     overall_t0 = time.monotonic()
-    log.info("⏱  ── refresh pipeline begin (slot=%s, date=%s) ──", slot, today)
+    log.info("⏱  ── refresh pipeline begin (slot=%s, date=%s, email=%s) ──", slot, today, target_email)
 
     with Maker() as s:
-        cached_rail = _load_cached_rail(s, today)
+        cached_rail = _load_cached_rail(s, today, target_email)
     if cached_rail is not None:
         log.info(
             "Reusing cached PDF rail for %s (version=%d) — skipping movie/calendar rail rebuild",
@@ -87,6 +87,7 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
     with _step("build_context"), Maker() as s:
         ctx = _build_context(
             s, today, slot,
+            email=target_email,
             cached_rail=cached_rail,
             weather_coords=weather_coords,
         )
@@ -112,7 +113,7 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
         linhnews = _backfill_missing_sections(linhnews, today, user_sections, masthead_name)
 
     with _step("fetch_subsection_images"), Maker() as s:
-        image_bytes_by_id = _fetch_and_persist_images(s, today, linhnews)
+        image_bytes_by_id = _fetch_and_persist_images(s, today, target_email, linhnews)
 
     with _step("html_renderer.render_edition_html"):
         html_body = html_renderer.render_edition_html(linhnews)
@@ -206,6 +207,7 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
         _upsert_edition(
             s,
             today,
+            target_email,
             html_body,
             pdf_bytes,
             pdf_html,
@@ -220,14 +222,14 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
     return today
 
 
-def _load_cached_rail(s: Session, today: date) -> dict | None:
-    """Return the previously persisted PDF rail for ``today`` if it was
-    produced by the current ``PDF_RAIL_VERSION``; ``None`` otherwise.
+def _load_cached_rail(s: Session, today: date, email: str) -> dict | None:
+    """Return the previously persisted PDF rail for ``(today, email)`` if it
+    was produced by the current ``PDF_RAIL_VERSION``; ``None`` otherwise.
 
     The shape on disk is ``{"version", "calendar_html", "movies_html"}``.
     A version mismatch means the renderer has changed and we must rebuild.
     """
-    row = s.get(Edition, today)
+    row = s.get(Edition, (today, email))
     if row is None:
         return None
     rail = row.pdf_rail_json
@@ -252,17 +254,19 @@ def _build_context(
     today: date,
     slot: Slot,
     *,
+    email: str | None = None,
     cached_rail: dict | None = None,
     weather_coords: str | None = None,
 ) -> dict:
     settings = get_settings()
+    target_email = (email or settings.admin_email).lower()
     horizon = today + timedelta(days=30)
     coords = weather_coords or settings.weather_coords
 
     with _step("overlays (hidden movies + watchlist)"):
-        hidden_movies = overlays.active_hidden_movie_titles(s, today)
-        favorite_movies = overlays.favorite_movie_titles(s)
-        watchlist = overlays.watchlist_symbols(s)
+        hidden_movies = overlays.active_hidden_movie_titles(s, target_email, today)
+        favorite_movies = overlays.favorite_movie_titles(s, target_email)
+        watchlist = overlays.watchlist_symbols(s, target_email)
 
     with _step("prefs.get_allowed_ratings"):
         allowed_ratings = set(prefs.get_allowed_ratings(today, session=s))
@@ -291,20 +295,21 @@ def _build_context(
     cal_names: dict[str, str] = {}
     try:
         with _step("overlays (calendar/event lookups)"):
-            hidden_cals = overlays.hidden_calendar_ids(s)
-            suppressed_uids = overlays.suppressed_event_uids(s)
-            important = overlays.important_events_from(s, today)
+            hidden_cals = overlays.hidden_calendar_ids(s, target_email)
+            suppressed_uids = overlays.suppressed_event_uids(s, target_email)
+            important = overlays.important_events_from(s, target_email, today)
             important_uids = {e["ical_uid"] for e in important if e.get("ical_uid")}
 
         with _step("google list_calendars"):
-            all_calendars = calendar_oauth.list_calendars(s)
+            all_calendars = calendar_oauth.list_calendars(s, target_email)
             hidden_ids = {c["id"] for c in hidden_cals}
             active_ids = [c["id"] for c in all_calendars if c["id"] not in hidden_ids]
             cal_names = {c["id"]: c["name"] for c in all_calendars}
 
         with _step("google fetch_events (today..+30d)"):
             events = calendar_oauth.fetch_events(
-                s, active_ids, today, horizon, calendar_names=cal_names
+                s, active_ids, today, horizon,
+                calendar_names=cal_names, email=target_email,
             )
             events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
             events = calendar_oauth.dedupe_events(events)
@@ -326,6 +331,7 @@ def _build_context(
         with _step(f"calendar_persist ({len(events_by_day)} days, emoji_batch={emoji_use_batch})"):
             calendar_summary.persist_events_for_days(
                 s,
+                target_email,
                 events_by_day,
                 use_batch=emoji_use_batch,
             )
@@ -473,15 +479,16 @@ def _backfill_missing_sections(
 # ── Image fetch ─────────────────────────────────────────────────────────
 
 
-def _ensure_edition_stub(s: Session, day: date) -> None:
-    """Insert an empty ``editions`` row for ``day`` if one doesn't already
-    exist, so the ``subsection_images.edition_date`` FK has a parent. The
-    real content is filled in later by ``_upsert_edition``."""
-    if s.get(Edition, day) is not None:
+def _ensure_edition_stub(s: Session, day: date, email: str) -> None:
+    """Insert an empty ``editions`` row for ``(day, email)`` if one doesn't
+    already exist, so the ``subsection_images`` FK has a parent. The real
+    content is filled in later by ``_upsert_edition``."""
+    if s.get(Edition, (day, email)) is not None:
         return
     s.add(
         Edition(
             date=day,
+            email=email,
             html="",
             pdf=b"",
             pdf_html="",
@@ -567,6 +574,7 @@ def _candidate_image_urls(sub: dict) -> list[str]:
 def _fetch_and_persist_images(
     s: Session,
     day: date,
+    email: str,
     linhnews: dict,
 ) -> dict[int, tuple[bytes, str]]:
     """For each subsection, scrape og:image from its sources, download one
@@ -578,20 +586,28 @@ def _fetch_and_persist_images(
 
     Wipes any pre-existing rows for ``day`` so re-runs don't accumulate.
     """
-    _ensure_edition_stub(s, day)
-    s.execute(delete(SubsectionImage).where(SubsectionImage.edition_date == day))
+    _ensure_edition_stub(s, day, email)
+    s.execute(
+        delete(SubsectionImage).where(
+            SubsectionImage.edition_date == day,
+            SubsectionImage.edition_email == email,
+        )
+    )
     s.commit()
 
-    # Hashes seen on any *other* edition's images — used to drop generic
-    # site banners that recur day after day. Today's rows were just deleted
-    # above, so equality with ``day`` is a no-op; using != is conservative
-    # in case a parallel run interleaves.
+    # Hashes seen on any *other* (day, email) edition's images — used to
+    # drop generic site banners that recur day after day. The current
+    # (day, email)'s rows were just deleted above, so excluding them is
+    # conservative in case a parallel run interleaves.
     reject_hashes: set[str] = set(
         h
         for h in s.execute(
             select(SubsectionImage.image_hash).where(
                 SubsectionImage.image_hash.is_not(None),
-                SubsectionImage.edition_date != day,
+                ~(
+                    (SubsectionImage.edition_date == day)
+                    & (SubsectionImage.edition_email == email)
+                ),
             )
         ).scalars()
         if h
@@ -625,6 +641,7 @@ def _fetch_and_persist_images(
             reject_hashes.add(fetched.sha256)
             row = SubsectionImage(
                 edition_date=day,
+                edition_email=email,
                 section_key=key,
                 subsection_idx=idx,
                 bytes_=fetched.bytes_,
@@ -646,6 +663,7 @@ def _fetch_and_persist_images(
 def _upsert_edition(
     s: Session,
     day: date,
+    email: str,
     html: str,
     pdf_bytes: bytes,
     pdf_html: str | None = None,
@@ -659,6 +677,7 @@ def _upsert_edition(
     if s.bind.dialect.name == "postgresql":
         stmt = pg_insert(Edition).values(
             date=day,
+            email=email,
             html=html,
             pdf_html=pdf_html,
             pdf=pdf_bytes,
@@ -669,7 +688,7 @@ def _upsert_edition(
             pdf_rail_json=pdf_rail or None,
         )
         stmt = stmt.on_conflict_do_update(
-            index_elements=[Edition.date],
+            index_elements=[Edition.date, Edition.email],
             set_={
                 "html": stmt.excluded.html,
                 "pdf_html": stmt.excluded.pdf_html,
@@ -684,10 +703,14 @@ def _upsert_edition(
         s.execute(stmt)
     else:
         # Fallback path used by tests / sqlite.
-        s.execute(text("DELETE FROM editions WHERE date = :d"), {"d": day})
+        s.execute(
+            text("DELETE FROM editions WHERE date = :d AND email = :e"),
+            {"d": day, "e": email},
+        )
         s.add(
             Edition(
                 date=day,
+                email=email,
                 html=html,
                 pdf_html=pdf_html,
                 pdf=pdf_bytes,
@@ -743,7 +766,10 @@ def _cli() -> int:
     error_msg: str | None = None
     started = time.monotonic()
     try:
-        run(args.slot, today=target_date, email=args.email)
+        if args.email:
+            run(args.slot, today=target_date, email=args.email)
+        else:
+            error_msg = _run_for_all_enabled_users(args.slot, target_date)
     except Exception as e:  # noqa: BLE001
         error_msg = _summarize_error(e)
         log.exception("generate.run failed")
@@ -757,6 +783,54 @@ def _cli() -> int:
         if args.slot == "refresh":
             cache.end_edition_refresh()
     return 0 if error_msg is None else 1
+
+
+def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | None:
+    """Cron entry: run the per-user pipeline for every google_oauth row whose
+    ``personalized_enabled`` flag is true, plus the admin (always). Errors
+    on individual users are logged and skipped so one bad token doesn't
+    abort the whole batch. Returns an aggregate error string when at least
+    one user failed, else None.
+    """
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from app.db import GoogleOAuth
+
+    settings = get_settings()
+    admin_email = settings.admin_email.lower()
+    Maker = session_factory()
+    with Maker() as s:
+        rows = (
+            s.execute(
+                select(GoogleOAuth).where(
+                    (GoogleOAuth.personalized_enabled.is_(True))
+                    | (GoogleOAuth.email == admin_email)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        emails = [r.email for r in rows]
+    log.info("⏱  cron: %d enabled user(s) → %s", len(emails), emails)
+    failed: list[tuple[str, str]] = []
+    for email in emails:
+        try:
+            run(slot, today=target_date, email=email)
+            with Maker() as s:
+                row = s.execute(
+                    select(GoogleOAuth).where(GoogleOAuth.email == email)
+                ).scalar_one_or_none()
+                if row is not None:
+                    row.last_refreshed_at = _dt.now(UTC)
+                    s.commit()
+        except Exception as e:  # noqa: BLE001 — never abort the batch
+            log.exception("Per-user generate failed for %s", email)
+            failed.append((email, _summarize_error(e)))
+    if failed:
+        joined = "; ".join(f"{e}: {m}" for e, m in failed)
+        return f"{len(failed)}/{len(emails)} per-user runs failed — {joined}"
+    return None
 
 
 def _summarize_error(e: BaseException) -> str:

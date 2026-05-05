@@ -45,7 +45,7 @@ def test_fetch_events_drops_cancelled_keeps_past(monkeypatch, db_session):
     monkeypatch.setattr(
         calendar_oauth,
         "_service",
-        lambda s: _fake_service_with_events({"primary": items}),
+        lambda s, email=None: _fake_service_with_events({"primary": items}),
     )
     out = calendar_oauth.fetch_events(
         db_session,
@@ -108,7 +108,7 @@ def test_list_calendars_returns_normalized(monkeypatch, db_session):
         ]
     }
     svc.calendarList.return_value.list.return_value = page
-    monkeypatch.setattr(calendar_oauth, "_service", lambda s: svc)
+    monkeypatch.setattr(calendar_oauth, "_service", lambda s, email=None: svc)
     out = calendar_oauth.list_calendars(db_session)
     assert out == [
         {"id": "a", "name": "Primary", "primary": True},

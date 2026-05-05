@@ -302,32 +302,24 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
     # Defer the multi-MB pdf column — the home page only needs html +
     # generated_at. Fetching pdf on every request through the Fly proxy
     # was the dominant page-load cost.
-    # Look up the viewer's own edition first; if none exists (e.g. viewer
-    # has personalization disabled, or their first cron run hasn't happened
-    # yet), fall back to the admin's shared edition for that date.
     admin = _admin_email()
-    edition = s.execute(
-        select(Edition)
-        .where(Edition.date == day, Edition.email == viewer_email)
-        .options(defer(Edition.pdf), defer(Edition.pdf_html))
-    ).scalar_one_or_none()
-    if edition is None and viewer_email != admin:
-        edition = s.execute(
-            select(Edition)
-            .where(Edition.date == day, Edition.email == admin)
-            .options(defer(Edition.pdf), defer(Edition.pdf_html))
-        ).scalar_one_or_none()
-    today = local_today()
-    next_date = day + timedelta(days=1)
-    edition_html = edition.html if edition else None
-    # Non-admin viewers get the personalized-only nav (Refresh / Calendars /
-    # Movies / Stocks) when the admin has flipped their personalized flag on;
-    # otherwise they see only the read-only nav.
     is_admin = auth.is_admin(viewer_email)
     from app.db import UserSettings as _US
 
     us_row = s.get(_US, viewer_email)
     is_personalized = bool(us_row and us_row.personalized_enabled) or is_admin
+    # Personalized viewers (and admin) see only their own edition — never
+    # fall back to admin's shared edition. Non-personalized viewers see the
+    # admin's shared edition.
+    owner_email = viewer_email if is_personalized else admin
+    edition = s.execute(
+        select(Edition)
+        .where(Edition.date == day, Edition.email == owner_email)
+        .options(defer(Edition.pdf), defer(Edition.pdf_html))
+    ).scalar_one_or_none()
+    today = local_today()
+    next_date = day + timedelta(days=1)
+    edition_html = edition.html if edition else None
     # Use the edition's owner-email when injecting overlays so the calendar
     # / hidden-movies honor that edition's user, not the viewer.
     overlay_email = edition.email if edition else viewer_email
@@ -469,11 +461,20 @@ def view_pdf(
     token: str | None = None,
     s: Session = Depends(get_session),
 ):
+    # Token bypass keeps the admin's PDF reachable without a login (bookmark
+    # / home-screen). A signed-in viewer always sees their own when
+    # personalized; otherwise they share the admin's.
+    owner_email = _admin_email()
     if not _pdf_token_valid(request, token):
-        auth.require_viewer(request, s)
+        viewer_email = auth.require_viewer(request, s)
+        from app.db import UserSettings as _US
+
+        us_row = s.get(_US, viewer_email)
+        if auth.is_admin(viewer_email) or (us_row and us_row.personalized_enabled):
+            owner_email = viewer_email
     edition = s.execute(
         select(Edition)
-        .where(Edition.date == _parse_date(day), Edition.email == _admin_email())
+        .where(Edition.date == _parse_date(day), Edition.email == owner_email)
         .options(defer(Edition.html), defer(Edition.pdf_html))
     ).scalar_one_or_none()
     if not edition:
@@ -596,11 +597,16 @@ def edition_freshness(
     s: Session = Depends(get_session),
     email: str = Depends(auth.require_viewer),
 ):
+    from app.db import UserSettings as _US
+
+    us_row = s.get(_US, email)
+    is_personalized = bool(us_row and us_row.personalized_enabled) or auth.is_admin(email)
+    owner_email = email if is_personalized else _admin_email()
     # Only need generated_at — skip the multi-MB pdf / pdf_html / html columns.
     row = s.execute(
         select(Edition.generated_at).where(
             Edition.date == _parse_date(day),
-            Edition.email == _admin_email(),
+            Edition.email == owner_email,
         )
     ).scalar_one_or_none()
     return {

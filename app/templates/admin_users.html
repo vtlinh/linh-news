@@ -63,16 +63,21 @@
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
   const rowEmail = (el) => el.closest('tr').dataset.email;
 
-  // Render last-refreshed timestamps in the viewer's local timezone.
-  const fmt = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
+  // Render last-refreshed timestamps in NJ timezone as "HH:MM EST/EDT".
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+    timeZoneName: 'short',
   });
   $$('.last-refreshed').forEach(el => {
     const iso = el.dataset.iso;
     if (!iso) return;
     const d = new Date(iso);
-    if (!isNaN(d)) el.textContent = fmt.format(d);
+    if (isNaN(d)) return;
+    const parts = fmt.formatToParts(d);
+    const get = (t) => parts.find(p => p.type === t).value;
+    el.textContent = `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')} ${get('timeZoneName')}`;
   });
 
   document.getElementById('add-user-form').addEventListener('submit', async (e) => {

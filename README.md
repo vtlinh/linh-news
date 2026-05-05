@@ -19,12 +19,12 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 - **Calendars & Events** (`/admin/calendars`): collapsible calendar list with hide toggles; events list with ⭐ Important / 🚫 Hide checkboxes per row, infinite scroll.
 - **Movies** (`/admin/movies`): 4-column poster grid for the next 12 months; per-tile hide checkbox; trailer button(s); MPAA filter row.
 - **Stocks** (`/admin/stocks`): add/remove watchlist tickers.
-- **Users** (`/admin/users`): manage the allowlist — add/remove users, set placeholder names (until the user signs in and Google's `given_name` takes over), toggle per-user personalization, and trigger a one-off refresh of any signed-in user's edition.
+- **Users** (`/admin/users`): manage the allowlist — add/remove users, set placeholder names (until the user signs in and Google's `given_name` takes over), toggle per-user personalization, trigger a one-off refresh of any signed-in user's edition, and rotate the per-user **PDF token**. Each row also shows a stable numeric **ID** (1, 2, 3, …) used as a URL fallback when display names collide.
 
 ## Tooling
 
 - Python 3.12, managed with **uv** (`uv sync`, `uv run …`). `uv.lock` is committed.
-- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (22 migrations).
+- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (27 migrations).
 - Anthropic SDK with prompt caching, streaming, structured-output tool schemas.
 - WeasyPrint for the PDF (custom User-Agent so Wikimedia thumbnails load).
 - Persistent cache layer (`app/cache.py`): Redis when `REDIS_URL` is set, SQLite `kv_cache` table otherwise.
@@ -45,6 +45,15 @@ fly deploy                               # deploy app + scheduled machines
 ## Deployment
 
 Hosted on Fly.io. Two scheduled machines run `python -m app.generate morning` at `0 7 * * *` and `python -m app.generate evening` at `0 19 * * *` in `America/New_York`. Each cron run also refreshes the year-out movies cache used by the admin Movies page.
+
+## Per-user PDF & home-page links
+
+Every user row carries a secret `pdf_token` (auto-minted on creation, rotatable from the Users page). It gates two unauthenticated routes that map a date and a user handle to that user's rendered edition:
+
+- `GET /pdf/{date}/{name}?token=…` — the user's PDF (also accepts `Authorization: Bearer …`). The admin can fetch it by signing in instead of presenting the token.
+- `GET /d/{date}/{name}` — admin-only HTML preview of any user's home page.
+
+`{name}` is the user's `display_name` lower-cased. When two users share a name, use the numeric `ID` from the Users page (e.g. `/pdf/2026-05-05/3`) — the route detects a numeric segment and looks up `user_id` directly.
 
 ## Refresh button mechanics
 

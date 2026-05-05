@@ -373,6 +373,63 @@ def view_date(
     return _render_viewer(request, _parse_date(day), s, email)
 
 
+def _resolve_user_handle(s: Session, handle: str) -> str:
+    """Map a URL-segment user handle to the owning email.
+
+    A purely numeric ``handle`` is treated as ``user_settings.user_id``
+    (the stable numeric column shown on the Users page) — the admin must
+    use this form when two users share a display name. Otherwise the
+    handle is matched case-insensitively against ``display_name``.
+
+    Raises 404 when no row matches; raises 409 when a name handle resolves
+    to more than one user (the admin must use the numeric id instead)."""
+    from sqlalchemy import func
+
+    from app.db import UserSettings as _US
+
+    needle = (handle or "").strip()
+    if not needle:
+        raise HTTPException(404, "Unknown user.")
+    if needle.isdigit():
+        row = s.execute(
+            select(_US.email).where(_US.user_id == int(needle))
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, "Unknown user.")
+        return row.lower()
+    rows = (
+        s.execute(
+            select(_US.email).where(func.lower(_US.display_name) == needle.lower())
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise HTTPException(404, "Unknown user.")
+    if len(rows) > 1:
+        raise HTTPException(
+            409,
+            f"Multiple users share the name {handle!r}; "
+            f"use the numeric user id from the Users page instead.",
+        )
+    return rows[0].lower()
+
+
+@app.get("/d/{day}/{name}", response_class=HTMLResponse)
+def view_date_for_user(
+    day: str,
+    name: str,
+    request: Request,
+    admin_email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Admin-only: render any user's home page for a given date so the
+    admin can preview what that user sees. ``name`` is the target user's
+    display name (case-insensitive) as shown on the Users / Data page."""
+    target = _resolve_user_handle(s, name)
+    return _render_viewer(request, _parse_date(day), s, target)
+
+
 def _pdf_filename(day: date | str, pdf_bytes: bytes) -> str:
     """Build the user-facing PDF download name with a 10-char content-hash
     suffix. Each newly generated edition gets a distinct filename even when
@@ -383,19 +440,45 @@ def _pdf_filename(day: date | str, pdf_bytes: bytes) -> str:
     return f"linh-times-{day}-{digest}.pdf"
 
 
-def _pdf_token_valid(request: Request, token: str | None) -> bool:
-    """True iff the request presents a valid PDF_LATEST_TOKEN, either as
-    ``?token=…`` or as ``Authorization: Bearer …``. An unset/empty
-    expected token always fails (token auth disabled)."""
-    expected = get_settings().pdf_latest_token
+def _presented_token(request: Request, token: str | None) -> str:
+    """Extract the bearer token from ``?token=…`` or
+    ``Authorization: Bearer …``."""
     auth_header = request.headers.get("authorization", "")
     bearer = (
         auth_header[len("Bearer ") :].strip() if auth_header.lower().startswith("bearer ") else ""
     )
-    presented = (token or bearer or "").strip()
-    if not expected or not presented:
+    return (token or bearer or "").strip()
+
+
+def _pdf_token_matches(s: Session, owner_email: str, presented: str) -> bool:
+    """True iff ``presented`` matches the PDF token stored for ``owner_email``."""
+    from app.db import UserSettings as _US
+
+    if not presented:
+        return False
+    row = s.get(_US, owner_email.lower())
+    expected = (row.pdf_token if row else "") or ""
+    if not expected:
         return False
     return secrets.compare_digest(presented, expected)
+
+
+def _resolve_token_owner(s: Session, presented: str) -> str | None:
+    """Look up the user whose ``pdf_token`` equals ``presented``. Returns
+    ``None`` when no match (or no token presented)."""
+    from app.db import UserSettings as _US
+
+    if not presented:
+        return None
+    row = s.execute(
+        select(_US).where(_US.pdf_token == presented)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    # Constant-time confirm to avoid leaking timing info on partial matches.
+    if not secrets.compare_digest(presented, row.pdf_token or ""):
+        return None
+    return row.email.lower()
 
 
 @app.get("/edition-image/{image_id}")
@@ -430,7 +513,8 @@ def pdf_latest(
     ``?token=…`` (handy for bookmarks / home-screen shortcuts) or as
     ``Authorization: Bearer …`` (preferred — query strings end up in
     proxy and Fly access logs)."""
-    if not _pdf_token_valid(request, token):
+    presented = _presented_token(request, token)
+    if not _pdf_token_matches(s, _admin_email(), presented):
         raise HTTPException(401, "Invalid or missing token")
     edition = s.execute(
         select(Edition)
@@ -465,7 +549,8 @@ def view_pdf(
     # / home-screen). A signed-in viewer always sees their own when
     # personalized; otherwise they share the admin's.
     owner_email = _admin_email()
-    if not _pdf_token_valid(request, token):
+    presented = _presented_token(request, token)
+    if not _pdf_token_matches(s, owner_email, presented):
         viewer_email = auth.require_viewer(request, s)
         from app.db import UserSettings as _US
 
@@ -475,6 +560,45 @@ def view_pdf(
     edition = s.execute(
         select(Edition)
         .where(Edition.date == _parse_date(day), Edition.email == owner_email)
+        .options(defer(Edition.html), defer(Edition.pdf_html))
+    ).scalar_one_or_none()
+    if not edition:
+        raise HTTPException(404, "No edition for that date")
+    filename = _pdf_filename(day, edition.pdf)
+    return Response(
+        edition.pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+@app.get("/pdf/{day}/{name}")
+def view_pdf_for_user(
+    day: str,
+    name: str,
+    request: Request,
+    token: str | None = None,
+    s: Session = Depends(get_session),
+):
+    """Per-user PDF. Admin can view any user's PDF when signed in;
+    anyone holding that user's ``pdf_token`` (via ``?token=…`` or
+    ``Authorization: Bearer …``) can also fetch it without a session.
+    ``name`` is the target user's display name (case-insensitive) as
+    shown on the Users / Data page."""
+    target = _resolve_user_handle(s, name)
+    presented = _presented_token(request, token)
+    if not _pdf_token_matches(s, target, presented):
+        viewer_email = auth.require_viewer(request, s)
+        if not auth.is_admin(viewer_email):
+            raise HTTPException(403, "Admin only")
+    edition = s.execute(
+        select(Edition)
+        .where(Edition.date == _parse_date(day), Edition.email == target)
         .options(defer(Edition.html), defer(Edition.pdf_html))
     ).scalar_one_or_none()
     if not edition:
@@ -1194,11 +1318,13 @@ def admin_users_get(
         last_ts = last_refreshed_by_email.get(em)
         users.append(
             {
+                "id": r.user_id,
                 "email": em,
                 "name": r.display_name or "",
                 "is_admin": em == admin,
                 "signed_in": em in oauth_emails,
                 "personalized_enabled": bool(r.personalized_enabled),
+                "pdf_token": r.pdf_token or "",
                 # Emit ISO-8601 with offset so the client renders it in the
                 # user's local timezone (the DB column is timezone-aware).
                 "last_refreshed_at": (
@@ -1206,8 +1332,8 @@ def admin_users_get(
                 ),
             }
         )
-    # Admin first; everyone else alphabetical (already sorted by email).
-    users.sort(key=lambda u: (0 if u["is_admin"] else 1, u["email"]))
+    # Admin first; everyone else by ascending user_id (assignment order).
+    users.sort(key=lambda u: (0 if u["is_admin"] else 1, u["id"]))
     return templates.TemplateResponse(
         request,
         "admin_users.html",
@@ -1244,11 +1370,34 @@ async def admin_users_add(
             sections_json=[],
             children_json=[],
             personalized_enabled=False,
+            pdf_token=secrets.token_urlsafe(36),
             updated_at=datetime.now(UTC),
         )
     )
     s.commit()
     return {"ok": True, "email": new_email}
+
+
+@app.post("/admin/users/{user_email}/regenerate-token")
+def admin_users_regenerate_token(
+    user_email: str,
+    admin_email: str = Depends(auth.require_admin),
+    s: Session = Depends(get_session),
+):
+    """Mint a fresh ``pdf_token`` for one user, invalidating any previously
+    shared link."""
+    from datetime import UTC, datetime
+
+    from app.db import UserSettings
+
+    target = user_email.lower()
+    row = s.get(UserSettings, target)
+    if row is None:
+        raise HTTPException(404, "Unknown user.")
+    row.pdf_token = secrets.token_urlsafe(36)
+    row.updated_at = datetime.now(UTC)
+    s.commit()
+    return {"ok": True, "email": target, "pdf_token": row.pdf_token}
 
 
 @app.post("/admin/users/{user_email}/name")

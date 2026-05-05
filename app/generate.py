@@ -26,6 +26,7 @@ from app import (
     pdf_renderer,
     prefs,
     prompt_template,
+    prompts,
     weather,
     weather_prose,
 )
@@ -33,7 +34,7 @@ from app import movies as movies_mod
 from app import (
     user_settings as user_settings_mod,
 )
-from app.db import Edition, SubsectionImage, session_factory
+from app.db import DebugEdition, Edition, SubsectionImage, session_factory
 from app.llm_schema import (
     MIN_STOCK_SOURCES,
     MIN_SUBSECTIONS,
@@ -116,6 +117,13 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
 
     with _step("backfill_missing_sections"):
         linhnews = _backfill_missing_sections(linhnews, today, user_sections, masthead_name)
+
+    # Persist a debug copy of the structured response *before* anything that
+    # can fail downstream (image fetch, PDF render). Deleted after a successful
+    # upsert; otherwise self-expires via the 3-day TTL.
+    debug_generated_at = datetime.now(UTC)
+    with Maker() as s:
+        _save_debug_content(s, today, target_email, debug_generated_at, linhnews)
 
     with _step("fetch_subsection_images"), Maker() as s:
         image_bytes_by_id = _fetch_and_persist_images(s, today, target_email, linhnews)
@@ -221,10 +229,53 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
             weather_alerts=weather_alerts,
             pdf_rail=rail_to_persist,
         )
+        _delete_debug_content(s, today, target_email, debug_generated_at)
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
     log.info("⏱  ── refresh pipeline end (total %.2fs) ──", time.monotonic() - overall_t0)
     return today
+
+
+_DEBUG_TTL = timedelta(days=3)
+
+
+def _save_debug_content(
+    s: Session,
+    day: date,
+    email: str,
+    generated_at: datetime,
+    content_json: dict,
+) -> None:
+    """Insert a row into ``debug_editions`` retaining the LLM response for
+    this run. Also opportunistically purges any rows past their TTL so the
+    table self-trims without a separate cleaner."""
+    s.execute(delete(DebugEdition).where(DebugEdition.expires_at < generated_at))
+    s.add(
+        DebugEdition(
+            date=day,
+            email=email,
+            generated_at=generated_at,
+            content_json=content_json,
+            expires_at=generated_at + _DEBUG_TTL,
+            failure_reason=None,
+        )
+    )
+    s.commit()
+
+
+def _delete_debug_content(
+    s: Session, day: date, email: str, generated_at: datetime
+) -> None:
+    """Drop the debug row written at the start of this run — the upsert
+    succeeded so the structured response now lives on the real edition row."""
+    s.execute(
+        delete(DebugEdition).where(
+            DebugEdition.date == day,
+            DebugEdition.email == email,
+            DebugEdition.generated_at == generated_at,
+        )
+    )
+    s.commit()
 
 
 def _load_cached_rail(s: Session, today: date, email: str) -> dict | None:
@@ -414,21 +465,14 @@ def _regenerate_section(sec: dict, today: date, display_name: str) -> dict | Non
     title = sec.get("title", "")
     topic = sec.get("description", "") or ""
     target = int(sec.get("subsection_count", MIN_SUBSECTIONS))
-    system = (
-        f"You are filling in ONE missing news section for {display_name}'s "
-        "daily newspaper edition. Use web_search aggressively to find fresh "
-        "items dated within 1–2 days of the target date. Return STRICTLY the "
-        "subsections list for this section — no HTML, no extra fields. "
-        "Each subsection has plain-text title + text (use '- ' prefixes for "
-        "bullet lines), 0..N image URL candidates, and ≥1 source."
-    )
-    user = (
-        f"Target date: {today.isoformat()}.\n"
-        f"Section key: {key}\n"
-        f"Section title (informational only): {title}\n\n"
-        f"Topic: {topic}\n\n"
-        f"Run multiple web_search queries until you have at least "
-        f"{target} fresh, distinct items."
+    system = prompts.render("section_reroll_system", display_name=display_name)
+    user = prompts.render(
+        "section_reroll_user",
+        today_iso=today.isoformat(),
+        key=key,
+        title=title,
+        topic=topic,
+        target=target,
     )
     try:
         result = claude_client.call_with_schema(

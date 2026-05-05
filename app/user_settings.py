@@ -182,17 +182,12 @@ def normalize_with_llm(sections: list[dict]) -> list[dict]:
     if not targets:
         return sections  # nothing to fill — never call the LLM
 
-    system = (
-        "You write one-sentence descriptions for newspaper sections. For "
-        "each section in the input array, return a single concise sentence "
-        "describing what news belongs in that section, suitable for guiding "
-        "an LLM that fills in stories. Do NOT change titles. Return one "
-        "entry per input idx, in the same order."
-    )
-    user = (
-        "Sections needing a description (JSON):\n"
-        + json.dumps(targets, ensure_ascii=False)
-        + "\n\nCall return_normalized_sections with one description per idx."
+    from app import prompts
+
+    system = prompts.render("section_normalize_system")
+    user = prompts.render(
+        "section_normalize_user",
+        targets_json=json.dumps(targets, ensure_ascii=False),
     )
     try:
         from app import claude_client

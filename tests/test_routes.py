@@ -161,6 +161,14 @@ def test_refresh_forbidden_for_non_admin(client, login_as):
 # ── /pdf/latest: public, gated by shared secret ───────────────────────────
 
 
+def _set_admin_token(db_session, token: str) -> None:
+    """Overwrite the admin's auto-generated pdf_token so tests can predict it."""
+    row = db_session.get(UserSettings, ADMIN)
+    assert row is not None, "conftest must seed the admin user_settings row"
+    row.pdf_token = token
+    db_session.commit()
+
+
 def _seed_latest(db_session, day: date) -> None:
     db_session.add(
         Edition(
@@ -183,9 +191,8 @@ def test_pdf_latest_401_when_token_unset(client, db_session):
 
 def test_pdf_latest_query_param(client, db_session, monkeypatch):
     _seed_latest(db_session, date(2026, 4, 30))
-    from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+    _set_admin_token(db_session, "s3cret")
 
     r = client.get("/pdf/latest?token=s3cret")
     assert r.status_code == 200
@@ -200,9 +207,8 @@ def test_pdf_latest_query_param(client, db_session, monkeypatch):
 
 def test_pdf_latest_bearer_header(client, db_session, monkeypatch):
     _seed_latest(db_session, date(2026, 4, 30))
-    from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+    _set_admin_token(db_session, "s3cret")
 
     r = client.get("/pdf/latest", headers={"Authorization": "Bearer s3cret"})
     assert r.status_code == 200
@@ -214,9 +220,8 @@ def test_pdf_latest_bearer_header(client, db_session, monkeypatch):
 
 def test_pdf_day_with_token_query(client, db_session, monkeypatch):
     _seed_edition(db_session, date(2026, 4, 30))
-    from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+    _set_admin_token(db_session, "s3cret")
 
     client.cookies.clear()
     r = client.get("/pdf/2026-04-30?token=s3cret", follow_redirects=False)
@@ -226,9 +231,8 @@ def test_pdf_day_with_token_query(client, db_session, monkeypatch):
 
 def test_pdf_day_with_bearer_header(client, db_session, monkeypatch):
     _seed_edition(db_session, date(2026, 4, 30))
-    from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+    _set_admin_token(db_session, "s3cret")
 
     client.cookies.clear()
     r = client.get(
@@ -242,9 +246,8 @@ def test_pdf_day_with_bearer_header(client, db_session, monkeypatch):
 
 def test_pdf_day_wrong_token_falls_back_to_login(client, db_session, monkeypatch):
     _seed_edition(db_session, date(2026, 4, 30))
-    from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+    _set_admin_token(db_session, "s3cret")
 
     client.cookies.clear()
     # Browser-style request → require_viewer redirects to /login.
@@ -434,9 +437,8 @@ def test_pdf_latest_does_not_require_login(client, db_session, monkeypatch):
     """Sanity check: hitting /pdf/latest with the right token works without
     any session cookie — confirms no Google login redirect on this route."""
     _seed_latest(db_session, date(2026, 4, 30))
-    from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "pdf_latest_token", "s3cret", raising=False)
+    _set_admin_token(db_session, "s3cret")
 
     # Make absolutely sure we have no session cookie set on the client.
     client.cookies.clear()

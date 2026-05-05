@@ -4,6 +4,7 @@ from typing import Any
 
 from anthropic import Anthropic
 
+from app import prompts
 from app.llm_schema import EDITION_SCHEMA
 from app.settings import get_settings
 
@@ -92,11 +93,7 @@ def generate_edition(rendered_prompt: str) -> dict:
     """
     return call_with_schema(
         system=rendered_prompt,
-        user=(
-            "Run all web_search queries needed for this edition, then call "
-            "the return_edition tool exactly once with the structured "
-            "NewsEdition payload (sections + stocks). Do NOT return HTML."
-        ),
+        user=prompts.render("edition_user"),
         schema=EDITION_SCHEMA,
         schema_name="return_edition",
         schema_description=(

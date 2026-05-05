@@ -28,7 +28,7 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import claude_client
+from app import claude_client, prompts
 
 log = logging.getLogger(__name__)
 
@@ -108,13 +108,7 @@ _EMOJI_SCHEMA = {
     "additionalProperties": False,
 }
 
-_EMOJI_SYSTEM = (
-    "You assign a single representative emoji to each calendar event title. "
-    "Pick the most evocative emoji from the title's subject — birthday → 🎂, "
-    "soccer → ⚽, school → 🏫, dentist → 🦷, doctor → 🩺, flight/travel → ✈️, "
-    "library → 📚, dance → 💃, dinner → 🍽, etc. Use 📅 only when no other "
-    "emoji fits. Return one emoji per title, in the same order."
-)
+_EMOJI_SYSTEM = prompts.render("calendar_emoji_system")
 _EMOJI_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -145,11 +139,7 @@ def _emoji_lookup_single_call(missing: list[str]) -> dict[str, str]:
     """
     out = claude_client.call_with_schema(
         system=_EMOJI_SYSTEM,
-        user=(
-            "Return one representative emoji for each of these calendar "
-            "event titles. Output via the `return_emojis` tool with one "
-            "entry per title, in the same order:\n\n" + "\n".join(f"- {t}" for t in missing)
-        ),
+        user=prompts.render("calendar_emoji_user_bulk", titles=missing),
         schema=_EMOJI_SCHEMA,
         schema_name="return_emojis",
         schema_description="Map of calendar event titles to a single emoji.",
@@ -199,10 +189,8 @@ def _emoji_lookup_batch(missing: list[str]) -> dict[str, str]:
                     "messages": [
                         {
                             "role": "user",
-                            "content": (
-                                f"Calendar event title: {t}\n\n"
-                                "Call the return_emoji tool with one representative "
-                                "emoji for this title."
+                            "content": prompts.render(
+                                "calendar_emoji_user_one", title=t
                             ),
                         }
                     ],

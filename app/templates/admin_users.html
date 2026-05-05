@@ -16,16 +16,19 @@
   </form>
   <table style="width:100%; border-collapse:collapse;">
     <thead><tr>
+      <th align="left" style="width:50px;">ID</th>
       <th align="left" style="width:25%;">Name</th>
       <th align="left">Email</th>
       <th align="center" style="width:90px;">Signed in</th>
       <th align="center" style="width:120px;">Personalized</th>
       <th align="left" style="width:180px;">Last refreshed</th>
-      <th align="center" style="width:200px;">Actions</th>
+      <th align="left" style="width:240px;">PDF token</th>
+      <th align="center" style="width:260px;">Actions</th>
     </tr></thead>
     <tbody>
     {% for u in users %}
-      <tr style="border-top:1px solid var(--rule);" data-email="{{ u.email }}">
+      <tr style="border-top:1px solid var(--rule);" data-email="{{ u.email }}" data-id="{{ u.id }}">
+        <td><code>{{ u.id }}</code></td>
         <td>
           {% if u.signed_in %}
             <span title="User has signed in — they edit their name on /data.">{{ u.name or '—' }}</span>
@@ -44,10 +47,14 @@
                  {% if u.is_admin %}disabled title="Admin is always personalized."{% endif %} />
         </td>
         <td>{% if u.last_refreshed_at %}<span class="last-refreshed" data-iso="{{ u.last_refreshed_at }}">{{ u.last_refreshed_at }}</span>{% else %}<span style="color:var(--muted);">never</span>{% endif %}</td>
-        <td align="center" style="display:flex; gap:6px; justify-content:center;">
+        <td>
+          <code class="pdf-token" style="font-size:11px; word-break:break-all;">{{ u.pdf_token }}</code>
+        </td>
+        <td align="center" style="display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
           {% if u.signed_in and (u.personalized_enabled or u.is_admin) %}
             <button type="button" class="refresh-now">Refresh</button>
           {% endif %}
+          <button type="button" class="regen-token" title="Generate a new PDF token, invalidating the old one.">New token</button>
           {% if not u.is_admin %}
             <button type="button" class="delete-user" style="color:#a00;">Delete</button>
           {% endif %}
@@ -140,6 +147,23 @@
         location.reload();
       } else {
         alert('Refresh failed: ' + r.status);
+      }
+    });
+  });
+
+  $$('button.regen-token').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const email = rowEmail(btn);
+      if (!confirm(`Generate a new PDF token for ${email}? Any existing /pdf/* link using the old token will stop working.`)) return;
+      btn.disabled = true;
+      const r = await fetch(`/admin/users/${encodeURIComponent(email)}/regenerate-token`, {method: 'POST'});
+      btn.disabled = false;
+      if (r.ok) {
+        const data = await r.json();
+        const code = btn.closest('tr').querySelector('code.pdf-token');
+        if (code) code.textContent = data.pdf_token;
+      } else {
+        alert('Regenerate failed: ' + r.status);
       }
     });
   });

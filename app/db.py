@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+import secrets
 from datetime import date, datetime
 
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -61,6 +63,26 @@ class Edition(Base):
     # current ``app.pdf_renderer.PDF_RAIL_VERSION`` — this skips the
     # movie-backdrop downloads and the calendar/movies HTML build.
     pdf_rail_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class DebugEdition(Base):
+    """Debug-retention copy of ``content_json`` for runs whose PDF render
+    failed. Written immediately after the LLM returns a valid structured
+    response; deleted when the same run later upserts a real ``editions``
+    row. Anything left here is from a failed run and self-expires after
+    ``expires_at``."""
+
+    __tablename__ = "debug_editions"
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SubsectionImage(Base):
@@ -316,6 +338,12 @@ class UserSettings(Base):
 
     __tablename__ = "user_settings"
     email: Mapped[str] = mapped_column(String, primary_key=True)
+    # Stable, human-friendly numeric handle (1, 2, 3, …). Used in the
+    # admin Users table and in the /pdf/{day}/{name} & /d/{day}/{name}
+    # routes when display names collide.
+    user_id: Mapped[int] = mapped_column(
+        Integer, Identity(start=1), nullable=False, unique=True, autoincrement=True
+    )
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     address: Mapped[str | None] = mapped_column(String, nullable=True)
     # "lat,lon" — resolved from ``address`` on save via Nominatim.
@@ -330,6 +358,12 @@ class UserSettings(Base):
     personalized_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    # Secret bearer token granting unauthenticated access to this user's
+    # PDF editions via /pdf/{day}/{email}?token=…. Auto-minted on user
+    # creation; admin can rotate from the Users page.
+    pdf_token: Mapped[str] = mapped_column(
+        String, nullable=False, unique=True, default=lambda: secrets.token_urlsafe(36)
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -338,6 +372,42 @@ class SessionRow(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     email: Mapped[str] = mapped_column(String, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+from sqlalchemy import event as _sa_event
+from sqlalchemy import func as _sa_func
+
+
+@_sa_event.listens_for(UserSettings, "before_insert")
+def _assign_user_id(_mapper, connection, target: UserSettings) -> None:  # noqa: ARG001
+    """Backends without a true Identity column (SQLite in tests) need a
+    Python-side default. ORM bulk-inserts fire ``before_insert`` for every
+    row before issuing any INSERT, so a naive ``max(user_id)+1`` query
+    would hand the same id to every row in the batch. Cache the
+    high-water-mark on the connection and increment it in-Python."""
+    if target.user_id is not None:
+        return
+    if connection.dialect.name == "postgresql":
+        # Postgres GENERATED IDENTITY assigns the value on INSERT — leave NULL
+        # and let the DB fill it in.
+        return
+    next_id = connection.info.get("_user_settings_next_id")
+    if next_id is None:
+        current = connection.execute(
+            _sa_func.coalesce(_sa_func.max(UserSettings.user_id), 0).select()
+        ).scalar_one()
+        next_id = int(current) + 1
+    target.user_id = next_id
+    connection.info["_user_settings_next_id"] = next_id + 1
+
+
+@_sa_event.listens_for(Session, "after_flush")
+def _clear_user_id_counter(session: Session, _flush_context) -> None:  # noqa: ARG001
+    """Drop the cached id counter once the flush that allocated them ends,
+    so the next flush re-reads ``max(user_id)`` from the table (now
+    including the rows we just inserted)."""
+    conn = session.connection()
+    conn.info.pop("_user_settings_next_id", None)
 
 
 _engine: Engine | None = None

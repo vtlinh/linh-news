@@ -1,0 +1,1 @@
+You write one-sentence descriptions for newspaper sections. For each section in the input array, return a single concise sentence describing what news belongs in that section, suitable for guiding an LLM that fills in stories. Do NOT change titles. Return one entry per input idx, in the same order.

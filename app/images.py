@@ -110,10 +110,10 @@ def fetch_one(
     """Return one resized image for the subsection, or None if every
     candidate failed.
 
-    Strategy: shuffle the candidates so repeated runs vary; then iterate.
-    Prefer landscape — if the first successful decode is portrait, keep
-    trying the rest looking for a landscape one. Fall back to the portrait
-    candidate if no landscape candidate succeeds.
+    Strategy: shuffle the candidates so repeated runs vary; then iterate
+    looking for a landscape-or-square image. Portrait candidates are
+    skipped — they consume too much vertical space in the PDF flow and
+    have caused single-page overflow even after maximum news trimming.
 
     ``reject_hashes`` (sha256 of raw downloaded bytes) skips candidates
     whose bytes match any prior edition's image — used to suppress generic
@@ -124,23 +124,20 @@ def fetch_one(
     candidates = list(urls)
     random.shuffle(candidates)
 
-    portrait_fallback: tuple[Image.Image, str] | None = None
     chosen: tuple[Image.Image, str] | None = None
     for url in candidates:
         result = _try_one(url)
         if result is None:
             continue
         img, is_landscape, sha = result
+        if not is_landscape:
+            log.info("Image rejected — portrait orientation: %s", url)
+            continue
         if reject_hashes and sha in reject_hashes:
             log.info("Image rejected — hash seen on prior day (%s): %s", sha[:12], url)
             continue
-        if is_landscape:
-            chosen = (img, sha)
-            break
-        if portrait_fallback is None:
-            portrait_fallback = (img, sha)
-    if chosen is None:
-        chosen = portrait_fallback
+        chosen = (img, sha)
+        break
     if chosen is None:
         return None
 

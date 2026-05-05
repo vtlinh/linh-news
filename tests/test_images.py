@@ -60,15 +60,27 @@ def test_fetch_one_prefers_landscape_over_portrait():
     assert out.width >= out.height
 
 
-def test_fetch_one_falls_back_to_portrait_when_no_landscape():
+def test_fetch_one_rejects_portrait_only_candidates():
+    """Portrait images consume too much vertical space in the PDF flow —
+    the renderer drops them entirely rather than fall back."""
     portrait = _png_bytes(100, 400)
     with (
         patch.object(images.random, "shuffle", side_effect=lambda lst: lst),
         patch.object(images, "_download", return_value=portrait),
     ):
         out = images.fetch_one(["https://x/only.png"])
+    assert out is None
+
+
+def test_fetch_one_accepts_square_image():
+    square = _png_bytes(300, 300)
+    with (
+        patch.object(images.random, "shuffle", side_effect=lambda lst: lst),
+        patch.object(images, "_download", return_value=square),
+    ):
+        out = images.fetch_one(["https://x/sq.png"])
     assert out is not None
-    assert out.height > out.width
+    assert out.width == out.height
 
 
 def test_fetch_one_skips_failed_download_and_tries_next():

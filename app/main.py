@@ -51,8 +51,6 @@ def _upsert_google_oauth(s: Session, email: str, refresh_token: str | None) -> N
     Google only emits one when ``prompt=consent`` actually re-prompts; on
     silent re-auth the stored token must be kept.
 
-    New rows default to ``personalized_enabled=False``. The admin's row is
-    seeded by ``scripts/google_oauth_setup.py`` with the flag set to true.
     """
     from datetime import UTC, datetime
 
@@ -74,7 +72,6 @@ def _upsert_google_oauth(s: Session, email: str, refresh_token: str | None) -> N
                 refresh_token=refresh_token,
                 client_id=settings_obj.google_client_id,
                 client_secret=settings_obj.google_client_secret,
-                personalized_enabled=(s_email == settings_obj.admin_email.lower()),
                 created_at=datetime.now(UTC),
             )
         )
@@ -1099,32 +1096,42 @@ def admin_users_get(
     email: str = Depends(auth.require_admin),
     s: Session = Depends(get_session),
 ):
-    from app.db import GoogleOAuth, UserSettings
+    from sqlalchemy import func
+
+    from app.db import Edition, GoogleOAuth, UserSettings
 
     admin = _admin_email()
     settings_rows = (
         s.execute(select(UserSettings).order_by(UserSettings.email)).scalars().all()
     )
-    oauth_rows = s.execute(select(GoogleOAuth)).scalars().all()
-    oauth_by_email = {r.email.lower(): r for r in oauth_rows}
+    oauth_emails = {
+        r for r in s.execute(select(GoogleOAuth.email)).scalars().all()
+    }
+    # Most recent personalized edition per user — drives "Last refreshed".
+    last_refreshed_rows = s.execute(
+        select(Edition.email, func.max(Edition.generated_at)).group_by(Edition.email)
+    ).all()
+    last_refreshed_by_email = {em.lower(): ts for em, ts in last_refreshed_rows}
     users = []
     for r in settings_rows:
         em = r.email.lower()
-        gauth = oauth_by_email.get(em)
+        last_ts = last_refreshed_by_email.get(em)
         users.append(
             {
                 "email": em,
                 "name": r.display_name or "",
                 "is_admin": em == admin,
-                "signed_in": gauth is not None,
-                "personalized_enabled": bool(gauth.personalized_enabled) if gauth else False,
+                "signed_in": em in oauth_emails,
+                "personalized_enabled": bool(r.personalized_enabled),
                 "last_refreshed_at": (
-                    gauth.last_refreshed_at.isoformat(sep=" ", timespec="seconds")
-                    if gauth and gauth.last_refreshed_at
+                    last_ts.isoformat(sep=" ", timespec="seconds")
+                    if last_ts
                     else None
                 ),
             }
         )
+    # Admin first; everyone else alphabetical (already sorted by email).
+    users.sort(key=lambda u: (0 if u["is_admin"] else 1, u["email"]))
     return templates.TemplateResponse(
         request, "admin_users.html", {"users": users}
     )
@@ -1158,6 +1165,7 @@ async def admin_users_add(
             weather_coords=None,
             sections_json=[],
             children_json=[],
+            personalized_enabled=False,
             updated_at=datetime.now(UTC),
         )
     )
@@ -1234,20 +1242,23 @@ async def admin_users_personalized(
     s: Session = Depends(get_session),
 ):
     """Toggle personalization for one user. The admin's own row is locked
-    on (always personalized) — server-side reject any attempt to flip it."""
-    from app.db import GoogleOAuth
+    on (always personalized) — server-side reject any attempt to flip it.
+    Allowed before sign-in: the admin can pre-set the flag and the very
+    first cron run after the user signs in will respect it."""
+    from datetime import UTC, datetime
+
+    from app.db import UserSettings
 
     target = user_email.lower()
     if target == _admin_email():
         raise HTTPException(400, "Admin row is always personalized.")
     body = await request.json()
     enabled = bool(body.get("enabled"))
-    row = s.execute(
-        select(GoogleOAuth).where(GoogleOAuth.email == target)
-    ).scalar_one_or_none()
+    row = s.get(UserSettings, target)
     if row is None:
-        raise HTTPException(404, "User has not signed in yet.")
+        raise HTTPException(404, "Unknown user.")
     row.personalized_enabled = enabled
+    row.updated_at = datetime.now(UTC)
     s.commit()
     return {"ok": True, "email": target, "personalized_enabled": enabled}
 
@@ -1260,15 +1271,20 @@ def admin_users_refresh(
 ):
     """Manually run the per-user pipeline for a single user, in a detached
     subprocess so the admin's HTTP request returns immediately."""
-    from app.db import GoogleOAuth
+    from app.db import GoogleOAuth, UserSettings
 
     target = user_email.lower()
-    row = s.execute(
-        select(GoogleOAuth).where(GoogleOAuth.email == target)
-    ).scalar_one_or_none()
-    if row is None:
+    has_signed_in = (
+        s.execute(
+            select(GoogleOAuth.email).where(GoogleOAuth.email == target)
+        ).scalar_one_or_none()
+        is not None
+    )
+    if not has_signed_in:
         raise HTTPException(404, "User has not signed in yet.")
-    if not row.personalized_enabled and target != _admin_email():
+    settings_row = s.get(UserSettings, target)
+    is_personalized = bool(settings_row and settings_row.personalized_enabled)
+    if not is_personalized and target != _admin_email():
         raise HTTPException(400, "Personalization disabled for this user.")
     # Spawn the same generate subprocess used by /refresh, scoped to this user.
     cmd = [sys.executable, "-m", "app.generate", "refresh", "--email", target]

@@ -800,23 +800,29 @@ def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | No
     from datetime import UTC
     from datetime import datetime as _dt
 
-    from app.db import GoogleOAuth
+    from app.db import GoogleOAuth, UserSettings
 
     settings = get_settings()
     admin_email = settings.admin_email.lower()
     Maker = session_factory()
     with Maker() as s:
+        # Run for every user whose admin-set ``personalized_enabled`` is
+        # true AND who has signed in (we need an OAuth refresh_token to
+        # fetch their calendar). Admin always runs even before sign-in
+        # because their credentials are seeded by the OAuth setup script.
         rows = (
             s.execute(
-                select(GoogleOAuth).where(
-                    (GoogleOAuth.personalized_enabled.is_(True))
-                    | (GoogleOAuth.email == admin_email)
+                select(UserSettings.email)
+                .join(GoogleOAuth, GoogleOAuth.email == UserSettings.email)
+                .where(
+                    (UserSettings.personalized_enabled.is_(True))
+                    | (UserSettings.email == admin_email)
                 )
             )
             .scalars()
             .all()
         )
-        emails = [r.email for r in rows]
+        emails = list(rows)
     log.info("⏱  cron: %d enabled user(s) → %s", len(emails), emails)
     failed: list[tuple[str, str]] = []
     for email in emails:

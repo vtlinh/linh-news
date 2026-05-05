@@ -222,12 +222,6 @@ class GoogleOAuth(Base):
     refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
     client_id: Mapped[str] = mapped_column(Text, nullable=False)
     client_secret: Mapped[str] = mapped_column(Text, nullable=False)
-    # Admin-controlled toggle. When false, this user sees the admin's
-    # shared "Linh News" edition. When true, cron generates a personalized
-    # edition for them and / serves it.
-    personalized_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -329,6 +323,12 @@ class UserSettings(Base):
     # List of ``{"name": str, "birthday": "YYYY-MM-DD"}``. Drives kid-age /
     # grade computation that feeds the prompt's school grade-filter rule.
     children_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # Admin-controlled toggle. When false, this user sees the admin's shared
+    # "Linh News" edition. When true, cron generates a personalized edition
+    # for them and / serves it.
+    personalized_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

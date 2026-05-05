@@ -58,7 +58,6 @@ def main() -> None:
                 refresh_token=creds.refresh_token,
                 client_id=s.google_client_id,
                 client_secret=s.google_client_secret,
-                personalized_enabled=True,
                 created_at=datetime.now(UTC),
             )
         )

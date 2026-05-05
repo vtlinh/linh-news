@@ -271,10 +271,13 @@ def _seed_oauth(db_session, email: str, *, personalized: bool = False) -> None:
             refresh_token="rt",
             client_id="cid",
             client_secret="cs",
-            personalized_enabled=personalized,
             created_at=datetime.now(UTC),
         )
     )
+    if personalized:
+        row = db_session.get(UserSettings, email)
+        if row is not None:
+            row.personalized_enabled = True
     db_session.commit()
 
 
@@ -356,10 +359,22 @@ def test_admin_users_personalized_protects_admin(client, login_as):
     assert r.status_code == 400
 
 
-def test_admin_users_personalized_requires_signin(client, login_as):
+def test_admin_users_personalized_works_before_signin(client, login_as, db_session):
     login_as(ADMIN)
     r = client.post(
         "/admin/users/friend@example.com/personalized", json={"enabled": True}
+    )
+    assert r.status_code == 200
+    db_session.expire_all()
+    assert (
+        db_session.get(UserSettings, "friend@example.com").personalized_enabled is True
+    )
+
+
+def test_admin_users_personalized_unknown_user_404(client, login_as):
+    login_as(ADMIN)
+    r = client.post(
+        "/admin/users/nobody@example.com/personalized", json={"enabled": True}
     )
     assert r.status_code == 404
 
@@ -372,7 +387,9 @@ def test_admin_users_personalized_toggles(client, login_as, db_session):
     )
     assert r.status_code == 200
     db_session.expire_all()
-    assert db_session.get(GoogleOAuth, "friend@example.com").personalized_enabled is True
+    assert (
+        db_session.get(UserSettings, "friend@example.com").personalized_enabled is True
+    )
 
 
 def test_admin_users_refresh_requires_signin(client, login_as):

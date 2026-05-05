@@ -6,9 +6,10 @@
 </header>
 <main>
   <p style="color:var(--muted);">
-    A row in this table authorizes that email to sign in. Personalization
-    controls whether cron generates a per-user edition for them — when off
-    they see the admin's edition.
+    A row in this table authorizes that email to sign in. When
+    <strong>Personalized</strong> is on, cron generates a per-user edition
+    for them; when off they see the admin's edition. Changes save
+    automatically.
   </p>
   <form id="add-user-form" style="display:flex; gap:8px; align-items:center; margin:12px 0;">
     <input type="email" name="email" placeholder="user@example.com" required style="flex:1;" />
@@ -40,18 +41,13 @@
         </td>
         <td align="center">{% if u.signed_in %}✓{% else %}—{% endif %}</td>
         <td align="center">
-          {% if u.is_admin %}
-            <span style="color:var(--muted);">always on</span>
-          {% elif u.signed_in %}
-            <input type="checkbox" class="personalized-toggle"
-                   {% if u.personalized_enabled %}checked{% endif %} />
-          {% else %}
-            <span style="color:var(--muted);">—</span>
-          {% endif %}
+          <input type="checkbox" class="personalized-toggle"
+                 {% if u.personalized_enabled or u.is_admin %}checked{% endif %}
+                 {% if u.is_admin %}disabled title="Admin is always personalized."{% endif %} />
         </td>
         <td>{% if u.last_refreshed_at %}{{ u.last_refreshed_at }}{% else %}<span style="color:var(--muted);">never</span>{% endif %}</td>
         <td align="center" style="display:flex; gap:6px; justify-content:center;">
-          {% if u.personalized_enabled or u.is_admin %}
+          {% if u.signed_in and (u.personalized_enabled or u.is_admin) %}
             <button type="button" class="refresh-now">Refresh</button>
           {% endif %}
           {% if not u.is_admin %}
@@ -88,7 +84,9 @@
     }
   });
 
-  $$('input.personalized-toggle').forEach(cb => {
+  // Silent save on toggle — no toast, no reload. Revert the checkbox if
+  // the server rejects it so the UI never lies about persisted state.
+  $$('input.personalized-toggle:not([disabled])').forEach(cb => {
     cb.addEventListener('change', async () => {
       const email = rowEmail(cb);
       const enabled = cb.checked;
@@ -99,25 +97,19 @@
       });
       if (!r.ok) {
         cb.checked = !enabled;
-        alert('Toggle failed: ' + r.status);
-      } else {
-        location.reload();
       }
     });
   });
 
+  // Silent save on name change.
   $$('input.name-input').forEach(input => {
     input.addEventListener('change', async () => {
       const email = rowEmail(input);
-      const r = await fetch(`/admin/users/${encodeURIComponent(email)}/name`, {
+      await fetch(`/admin/users/${encodeURIComponent(email)}/name`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({name: input.value}),
       });
-      if (!r.ok) {
-        const msg = await r.text();
-        alert('Save failed: ' + r.status + ' ' + msg);
-      }
     });
   });
 

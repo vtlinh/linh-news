@@ -446,7 +446,7 @@
     })();
   </script>
 <body class="{% if is_admin %}admin{% else %}viewer{% endif %}">
-  {% block body %}{% endblock %}
+  <div id="spa-root">{% block body %}{% endblock %}</div>
   <div class="toast-host" id="toast-host" aria-live="polite"></div>
   <script>
     window.toast = function(msg, isError) {
@@ -461,10 +461,11 @@
     // Dynamic tooltip placement: default is below the trigger. Flip left when
     // the popup would overflow the right edge; flip upward when it would
     // overflow the bottom of the viewport.
-    // ── Dark mode toggle (present in shared nav on every page) ──────────
-    (function() {
+    // ── Dark mode toggle (re-bound after every SPA swap) ────────────────
+    window.bindThemeToggle = function() {
       const btn = document.getElementById('theme-toggle');
-      if (!btn) return;
+      if (!btn || btn.__themeBound) return;
+      btn.__themeBound = true;
       const sync = () => {
         const dark = document.documentElement.getAttribute('data-theme') === 'dark';
         btn.textContent = dark ? '☀️' : '🌙';
@@ -481,7 +482,63 @@
         }
         sync();
       });
-    })();
+    };
+    window.bindThemeToggle();
+
+    // ── SPA navigation: swap #spa-root + #spa-scripts on internal nav ───
+    // Keeps the masthead/nav DOM stable across clicks (no full reload flash)
+    // and re-runs page-specific scripts so admin pages still init.
+    function executeScripts(container) {
+      container.querySelectorAll('script').forEach(old => {
+        const s = document.createElement('script');
+        for (const a of old.attributes) s.setAttribute(a.name, a.value);
+        s.textContent = old.textContent;
+        old.replaceWith(s);
+      });
+    }
+    async function spaNavigate(url, push) {
+      let html;
+      try {
+        const r = await fetch(url, { headers: { 'Accept': 'text/html' } });
+        if (!r.ok) { window.location.href = url; return; }
+        // Followed a redirect (e.g. session expired -> /login). Do a full
+        // navigation so the URL bar matches what the user actually got.
+        const finalPath = new URL(r.url, location.origin).pathname;
+        if (finalPath !== new URL(url, location.origin).pathname) {
+          window.location.href = r.url; return;
+        }
+        html = await r.text();
+      } catch { window.location.href = url; return; }
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const newRoot = doc.getElementById('spa-root');
+      const newScripts = doc.getElementById('spa-scripts');
+      if (!newRoot) { window.location.href = url; return; }
+      document.getElementById('spa-root').replaceWith(newRoot);
+      document.title = doc.title;
+      executeScripts(newRoot);
+      if (newScripts) {
+        document.getElementById('spa-scripts').replaceWith(newScripts);
+        executeScripts(newScripts);
+      }
+      window.bindThemeToggle();
+      if (push) history.pushState({ spa: true }, '', url);
+      window.scrollTo(0, 0);
+    }
+    document.addEventListener('click', e => {
+      if (e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      const a = e.target.closest('a');
+      if (!a || a.target === '_blank') return;
+      const href = a.getAttribute('href');
+      if (!href || !href.startsWith('/')) return;
+      // Full-nav routes: logout, PDF download, image, OAuth.
+      if (/^\/(logout|pdf\/|edition-image\/|oauth\/|fonts\/|static\/)/.test(href)) return;
+      e.preventDefault();
+      spaNavigate(href, true);
+    });
+    window.addEventListener('popstate', () => {
+      spaNavigate(location.pathname + location.search, false);
+    });
 
     document.addEventListener('mouseenter', function(e) {
       const trigger = e.target.closest('.tooltip');
@@ -494,6 +551,6 @@
       if (r.bottom > window.innerHeight - 8) popup.classList.add('flip-up');
     }, true);
   </script>
-  {% block scripts %}{% endblock %}
+  <div id="spa-scripts">{% block scripts %}{% endblock %}</div>
 </body>
 </html>

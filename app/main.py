@@ -350,6 +350,7 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
             "edition_html": edition_html,
             "is_admin": is_admin,
             "is_personalized": is_personalized,
+            "active_nav": "home",
             # First-paint hint so the button renders in the right state with
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),
@@ -627,6 +628,7 @@ def data_get(
         {
             "user_email": email,
             "settings_json": settings_dict,
+            **_chrome_context(s, email, active="data"),
         },
     )
 
@@ -917,7 +919,11 @@ def admin_calendars_get(
     return templates.TemplateResponse(
         request,
         "admin_calendars.html",
-        {"calendars": calendars, "hidden_ids": hidden_ids},
+        {
+            "calendars": calendars,
+            "hidden_ids": hidden_ids,
+            **_chrome_context(s, email, active="calendars"),
+        },
     )
 
 
@@ -933,6 +939,7 @@ _UNRATED_CERTS = {"", "NR"}
 def admin_movies_get(
     request: Request,
     email: str = Depends(auth.require_personalized_or_admin),
+    s: Session = Depends(get_session),
 ):
     return templates.TemplateResponse(
         request,
@@ -940,6 +947,7 @@ def admin_movies_get(
         {
             "all_ratings": _ALL_MOVIE_RATINGS,
             "default_ratings": prefs.get_allowed_ratings(email=email),
+            **_chrome_context(s, email, active="movies"),
         },
     )
 
@@ -1061,7 +1069,10 @@ def admin_stocks_get(
     return templates.TemplateResponse(
         request,
         "admin_stocks.html",
-        {"symbols": overlays.watchlist_symbols(s, email)},
+        {
+            "symbols": overlays.watchlist_symbols(s, email),
+            **_chrome_context(s, email, active="stocks"),
+        },
     )
 
 
@@ -1183,7 +1194,9 @@ def admin_users_get(
     # Admin first; everyone else alphabetical (already sorted by email).
     users.sort(key=lambda u: (0 if u["is_admin"] else 1, u["email"]))
     return templates.TemplateResponse(
-        request, "admin_users.html", {"users": users}
+        request,
+        "admin_users.html",
+        {"users": users, **_chrome_context(s, email, active="users")},
     )
 
 

@@ -35,7 +35,6 @@
     html[data-theme="dark"] details.collapsible,
     html[data-theme="dark"] .sources-popup,
     html[data-theme="dark"] .tooltip-popup { background: var(--surface); }
-    html[data-theme="dark"] header.site .actions .primary { background: var(--fg); color: var(--bg); }
     html[data-theme="dark"] .movie-backdrop { background: #2a2e33; }
     html[data-theme="dark"] .sources-popup,
     html[data-theme="dark"] .tooltip-popup { box-shadow: 0 4px 14px var(--shadow); }
@@ -121,13 +120,12 @@
       border: 1px solid var(--fg); background: #fff; color: var(--fg);
       font: inherit; border-radius: 4px; cursor: pointer; text-decoration: none;
     }
-    header.site .actions .primary { background: var(--fg); color: #fff; }
     header.site .actions a.active {
-      background: var(--accent); color: #fff; border-color: var(--accent);
+      background: var(--fg); color: var(--bg); border-color: var(--fg);
       font-weight: 700;
     }
     html[data-theme="dark"] header.site .actions a.active {
-      background: var(--accent); color: #fff; border-color: var(--accent);
+      background: var(--fg); color: var(--bg); border-color: var(--fg);
     }
     /* Toolbar action row: wraps on wide screens, single scrollable row on mobile. */
     .toolbar-actions {

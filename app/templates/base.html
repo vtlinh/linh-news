@@ -16,6 +16,36 @@
       --muted: #555;
       --rule: #ddd;
       --accent: #a51c30;
+      --surface: #fff;
+      --shadow: rgba(0,0,0,0.15);
+    }
+    html[data-theme="dark"] {
+      --bg: #14171a;
+      --fg: #e8e6e0;
+      --muted: #9aa0a6;
+      --rule: #333;
+      --accent: #ff6b81;
+      --surface: #1e2227;
+      --shadow: rgba(0,0,0,0.6);
+      color-scheme: dark;
+    }
+    html[data-theme="dark"] header.site,
+    html[data-theme="dark"] header.site .actions button,
+    html[data-theme="dark"] header.site .actions a,
+    html[data-theme="dark"] details.collapsible,
+    html[data-theme="dark"] .sources-popup,
+    html[data-theme="dark"] .tooltip-popup { background: var(--surface); }
+    html[data-theme="dark"] header.site .actions .primary { background: var(--fg); color: var(--bg); }
+    html[data-theme="dark"] .movie-backdrop { background: #2a2e33; }
+    html[data-theme="dark"] .sources-popup,
+    html[data-theme="dark"] .tooltip-popup { box-shadow: 0 4px 14px var(--shadow); }
+    #theme-toggle {
+      min-height: 44px; padding: 8px 12px;
+      border: 1px solid var(--fg); background: var(--surface); color: var(--fg);
+      font: inherit; border-radius: 4px; cursor: pointer;
+    }
+    @media (max-width: 600px) {
+      #theme-toggle { min-height: 36px; padding: 5px 9px; font-size: 13px; }
     }
     * { box-sizing: border-box; }
     body {
@@ -396,6 +426,18 @@
     }
   </style>
 </head>
+<script>
+    // Apply theme before paint to avoid a flash. Read from localStorage; fall
+    // back to the OS preference.
+    (function() {
+      try {
+        const saved = localStorage.getItem('theme');
+        const dark = saved ? saved === 'dark'
+          : window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+      } catch {}
+    })();
+  </script>
 <body class="{% if is_admin %}admin{% else %}viewer{% endif %}">
   {% block body %}{% endblock %}
   <div class="toast-host" id="toast-host" aria-live="polite"></div>

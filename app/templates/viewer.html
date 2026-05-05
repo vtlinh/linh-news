@@ -22,8 +22,10 @@
         <a href="/admin/calendars">Calendars</a>
         <a href="/admin/movies">Movies</a>
         <a href="/admin/stocks">Stocks</a>
+        <a href="/admin/users">Users</a>
       {% endif %}
       <a href="/data">Data</a>
+      <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
       <a href="/logout">Logout</a>
     </div>
   </div>
@@ -130,6 +132,28 @@
     // (no flash), and we kick the polling loop.
     if (serverInProgress) pollUntilFresh();
   }
+
+  // ── Dark mode toggle ─────────────────────────────────────────────────
+  (function() {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    const sync = () => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      btn.textContent = dark ? '☀️' : '🌙';
+    };
+    sync();
+    btn.addEventListener('click', () => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (dark) {
+        document.documentElement.removeAttribute('data-theme');
+        try { localStorage.setItem('theme', 'light'); } catch {}
+      } else {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        try { localStorage.setItem('theme', 'dark'); } catch {}
+      }
+      sync();
+    });
+  })();
 
   // ── Collapsible sections (mobile only) ──────────────────────────────────
   // On viewports ≤ 768px every <section> with an <h2> gets a right-side

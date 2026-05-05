@@ -268,6 +268,13 @@ def build_pdf_html(
     matching entry, the renderer embeds the image inline as a data URI.
     """
     weather_inner = _format_weather_for_pdf(weather_strip_html, weather_prose_html)
+    # Scale the masthead title down for longer names so it can't overflow
+    # its flex slot and crash into the motto / weather corners. The page is
+    # ~14.4in wide between margins; Chomsky at 72pt eats roughly 0.55in per
+    # character, so "The Linh Times" (14 chars) ≈ 7.7in fits comfortably,
+    # but "The Alessandro Times" (20 chars) at the same size doesn't.
+    title_text = f"The {masthead_name} Times"
+    title_pt = max(36, min(72, 900 // max(len(title_text), 1)))
     flow_html = _render_flow(
         linhnews.get("sections") or [],
         image_bytes_by_id=image_bytes_by_id,
@@ -429,7 +436,7 @@ def build_pdf_html(
         "</head><body>",
         '<header class="masthead">',
         f'<div class="motto"><span>"All the News<br>That\'s Fit for {masthead_name}"</span></div>',
-        f'<h1 class="title">The {masthead_name} Times</h1>',
+        f'<h1 class="title" style="font-size:{title_pt}pt">{title_text}</h1>',
         '<div class="weather-corner">'
         + (
             f'<span class="weather-title">The Weather</span>{weather_inner}'

@@ -644,6 +644,55 @@ def html_to_pdf_ex(
     return _PLACEHOLDER_PDF, None, None
 
 
+# Target PNG resolution — portrait, matches the broadsheet page's 15.296×27.193
+# in aspect ratio (≈ 1:1.778, the same ratio as 1440:2560). Sized so the PNG is
+# screen-ready for a 2560-tall portrait display without a client-side resize.
+_PNG_TARGET_W = 1440
+_PNG_TARGET_H = 2560
+
+
+def pdf_to_png(pdf_bytes: bytes) -> bytes | None:
+    """Rasterize page 1 of ``pdf_bytes`` to a 1440×2560 portrait PNG.
+
+    Uses pypdfium2 (pure-pip wheel — no system deps). Returns the encoded
+    PNG bytes, or ``None`` when the input doesn't look like a PDF or the
+    renderer is unavailable. The render scale is chosen so the natural
+    output is already ~1440px wide; a final Pillow resize guarantees
+    exactly 1440×2560 even when the PDF page differs slightly from the
+    expected 15.296×27.193 in broadsheet aspect ratio.
+    """
+    if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+        return None
+    try:
+        import io
+
+        import pypdfium2 as pdfium
+        from PIL import Image
+    except ImportError as e:
+        log.warning("pypdfium2 unavailable; skipping PNG generation: %s", e)
+        return None
+    try:
+        doc = pdfium.PdfDocument(pdf_bytes)
+        if len(doc) == 0:
+            return None
+        page = doc[0]
+        # PDF page width in points (1pt = 1/72 in). pypdfium2's render
+        # ``scale`` multiplies the 72-DPI base, so scale = target_w / (w_pt).
+        w_pt, _ = page.get_size()
+        scale = _PNG_TARGET_W / max(w_pt, 1.0)
+        pil_image = page.render(scale=scale).to_pil()
+        if pil_image.size != (_PNG_TARGET_W, _PNG_TARGET_H):
+            pil_image = pil_image.resize(
+                (_PNG_TARGET_W, _PNG_TARGET_H), Image.LANCZOS
+            )
+        buf = io.BytesIO()
+        pil_image.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001 — PNG is best-effort; PDF is the source of truth
+        log.exception("PDF→PNG render failed")
+        return None
+
+
 def page_count(pdf_bytes: bytes) -> int:
     """Cheap page-count from the raw PDF bytes (used by tests)."""
     return pdf_bytes.count(b"/Type /Page") + pdf_bytes.count(b"/Type/Page")

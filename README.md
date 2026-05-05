@@ -24,7 +24,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 ## Tooling
 
 - Python 3.12, managed with **uv** (`uv sync`, `uv run …`). `uv.lock` is committed.
-- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (27 migrations).
+- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (29 migrations).
 - Anthropic SDK with prompt caching, streaming, structured-output tool schemas.
 - WeasyPrint for the PDF (custom User-Agent so Wikimedia thumbnails load).
 - Persistent cache layer (`app/cache.py`): Redis when `REDIS_URL` is set, SQLite `kv_cache` table otherwise.
@@ -51,6 +51,7 @@ Hosted on Fly.io. Two scheduled machines run `python -m app.generate morning` at
 Every user row carries a secret `pdf_token` (auto-minted on creation, rotatable from the Users page). It gates two unauthenticated routes that map a date and a user handle to that user's rendered edition:
 
 - `GET /pdf/{date}/{name}?token=…` — the user's PDF (also accepts `Authorization: Bearer …`). The admin can fetch it by signing in instead of presenting the token.
+- `GET /png/{date}/{name}?token=…` — the same edition rasterized to a 1440×2560 portrait PNG (page 1 of the PDF, rendered with pypdfium2 + Pillow). Same access rules as the PDF route.
 - `GET /d/{date}/{name}` — admin-only HTML preview of any user's home page.
 
 `{name}` is the user's `display_name` lower-cased. When two users share a name, use the numeric `ID` from the Users page (e.g. `/pdf/2026-05-05/3`) — the route detects a numeric segment and looks up `user_id` directly.
@@ -58,6 +59,8 @@ Every user row carries a secret `pdf_token` (auto-minted on creation, rotatable 
 ## Refresh button mechanics
 
 `/refresh` spawns a **detached subprocess** (`start_new_session=True` on POSIX, `DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP` on Windows) so the worker outlives uvicorn restarts, deploys, and crashes. Refresh state — lock, worker PID, last error, rolling 20-sample duration history — is persisted in the cache. The page polls `/editions/{date}/freshness` and reloads inline when the timestamp advances. PID-based liveness check clears the lock immediately after a VM restart instead of waiting out the 12-min stale timeout.
+
+Clicking Refresh in the UI is always scoped to the caller's own `(date, email)` edition — admin and personalized non-admin alike regenerate only their own HTML, PDF, and PNG. The cron-style "all enabled users" fan-out runs only via the scheduled `/cron/{slot}` job.
 
 ## Authorized users
 

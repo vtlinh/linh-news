@@ -4,7 +4,7 @@ The flag is a per-user preference the admin sets on the Users page; it has
 nothing to do with OAuth credentials. Putting it on user_settings lets the
 admin toggle it before the user has ever signed in.
 
-Revision ID: 0023_personalized_to_user_settings
+Revision ID: 0023_personalized_to_us
 Revises: 0022_db_allowlist
 Create Date: 2026-05-05
 """
@@ -16,7 +16,7 @@ from alembic import op
 
 from app.settings import get_settings
 
-revision = "0023_personalized_to_user_settings"
+revision = "0023_personalized_to_us"
 down_revision = "0022_db_allowlist"
 branch_labels = None
 depends_on = None

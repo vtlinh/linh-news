@@ -180,6 +180,33 @@ def _strip_news_flow(html: str) -> str:
     return str(soup)
 
 
+def _extract_rail_blocks(html: str) -> dict[str, str]:
+    """Pull the calendar and movies inner-HTML out of a (possibly Phase-1-
+    trimmed) PDF document. Used to persist the rail that *actually fit*,
+    not the original pre-trim rail HTML.
+
+    Returns ``{"calendar_html": str, "movies_html": str}`` — either may be
+    "" if that block isn't present. Identifies blocks by the presence of
+    ``cal-event``/``cal-date`` (calendar) vs ``movie-card`` (movies)
+    descendants, so the calendar-first / movies-second ordering in
+    pdf_renderer.build_pdf_html doesn't have to be assumed.
+    """
+    soup = _parse(html)
+    out = {"calendar_html": "", "movies_html": ""}
+    for block in soup.find_all("div", class_="rail-block"):
+        is_movies = block.find(class_="movie-card") is not None
+        is_calendar = (
+            block.find(class_="cal-event") is not None
+            or block.find(class_="cal-date") is not None
+        )
+        inner = "".join(str(c) for c in block.children)
+        if is_movies and not is_calendar:
+            out["movies_html"] = inner
+        elif is_calendar and not is_movies:
+            out["calendar_html"] = inner
+    return out
+
+
 def _drop_one_movie(html: str) -> str | None:
     """Strip the last movie card from the rail. Returns None if there are
     no movie cards left. Each card has ``class="movie-card"``; its title
@@ -297,7 +324,7 @@ def _drop_one_section(html: str) -> str | None:
 
 def html_to_pdf(html: str, *, skip_phase1: bool = False) -> bytes:
     """Back-compat wrapper that returns only the PDF bytes."""
-    pdf_bytes, _ = html_to_pdf_ex(html, skip_phase1=skip_phase1)
+    pdf_bytes, _, _ = html_to_pdf_ex(html, skip_phase1=skip_phase1)
     return pdf_bytes
 
 
@@ -305,13 +332,21 @@ def html_to_pdf_ex(
     html: str,
     *,
     skip_phase1: bool = False,
-) -> tuple[bytes, float | None]:
+) -> tuple[bytes, float | None, dict[str, str] | None]:
     """Render print-styled HTML to a single-page 12×22 in PDF using WeasyPrint.
 
-    Returns ``(pdf_bytes, phase1_font_pt)``. ``phase1_font_pt`` is the body
-    font that Phase 1 (rail-only fit) landed on — useful as proof-of-fit to
-    persist alongside a cached rail. ``None`` when Phase 1 was skipped or
-    the placeholder PDF is returned.
+    Returns ``(pdf_bytes, phase1_font_pt, trimmed_rail)``.
+      * ``phase1_font_pt`` — body font Phase 1 landed on (proof-of-fit for
+        the cached rail). ``None`` when Phase 1 was skipped or the
+        placeholder PDF is returned.
+      * ``trimmed_rail`` — ``{"calendar_html", "movies_html"}`` for the rail
+        that *actually fit* at MIN font, extracted from the working
+        document after Phase 1's drop loop. The caller should persist
+        this — NOT the original pre-trim rail strings — otherwise reusing
+        the cache with ``skip_phase1=True`` will re-introduce content that
+        previously had to be dropped, and Phase 2 (which only trims news,
+        never rail) cannot recover. ``None`` when Phase 1 was skipped or
+        the placeholder PDF is returned.
 
     ``skip_phase1`` (optional): when the caller already has a cached rail
     that previously passed Phase 1, pass ``True`` to skip the rail-fit
@@ -342,7 +377,7 @@ def html_to_pdf_ex(
         from weasyprint import CSS, HTML
     except (OSError, ImportError) as e:
         log.warning("WeasyPrint native libs unavailable, using placeholder PDF: %s", e)
-        return _PLACEHOLDER_PDF, None
+        return _PLACEHOLDER_PDF, None, None
 
     from weasyprint import default_url_fetcher
 
@@ -577,6 +612,14 @@ def html_to_pdf_ex(
                 break
             current = trimmed
 
+    # Snapshot the post-Phase-1 rail (calendar + movies inner HTML) so the
+    # caller can persist the rail that *actually fit*, not the original
+    # pre-trim rail. Phase 2 only trims news, not the rail, so this stays
+    # accurate through the rest of the pipeline. ``None`` when Phase 1 was
+    # skipped — the caller already has the cached rail and shouldn't
+    # overwrite it.
+    trimmed_rail = None if skip_phase1 else _extract_rail_blocks(current)
+
     # ── Phase 2: full content (rail-locked from Phase 1 + news flow) ──
     # Same MIN-then-grow strategy, but on overflow we drop news content:
     # balance subsection counts first, then last-resort whole-section drop.
@@ -590,15 +633,15 @@ def html_to_pdf_ex(
                 "PDF fit (phase 2): %.1fpt, blank=%.1f%% (after %d news trim(s)) in %.2fs",
                 font_pt, blank * 100, attempt, _time.monotonic() - phase2_t0,
             )
-            return pdf_bytes, phase1_font_pt
+            return pdf_bytes, phase1_font_pt, trimmed_rail
         trimmed = _drop_one_article(current) or _drop_one_section(current)
         if trimmed is None:
             log.warning("PDF: nothing left to drop — shipping placeholder")
-            return _PLACEHOLDER_PDF, None
+            return _PLACEHOLDER_PDF, None, None
         current = trimmed
 
     log.error("PDF: still overflowing after 20 news-trim attempts — placeholder")
-    return _PLACEHOLDER_PDF, None
+    return _PLACEHOLDER_PDF, None, None
 
 
 def page_count(pdf_bytes: bytes) -> int:

@@ -172,7 +172,7 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
 
     skip_phase1 = cached_rail is not None
     with _step("html_to_pdf"):
-        pdf_bytes, phase1_font_pt = pdf.html_to_pdf_ex(
+        pdf_bytes, phase1_font_pt, trimmed_rail = pdf.html_to_pdf_ex(
             pdf_html,
             skip_phase1=skip_phase1,
         )
@@ -206,10 +206,24 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
             "even after dropping every droppable section)"
         )
 
+    # Persist the rail that Phase 1 *actually fit*, not the original
+    # pre-trim rail strings. Phase 1 may have dropped movie cards or
+    # calendar events to make rail+chrome fit at MIN font; caching the
+    # untrimmed originals would re-introduce that content the next time
+    # this rail is reused with skip_phase1=True, and Phase 2 (which only
+    # trims news) wouldn't be able to recover. When Phase 1 was skipped,
+    # ``trimmed_rail`` is None and we keep the already-cached rail
+    # strings (cached_rail) — they previously passed Phase 1.
+    if trimmed_rail is not None:
+        rail_calendar_html = trimmed_rail.get("calendar_html") or ""
+        rail_movies_html = trimmed_rail.get("movies_html") or ""
+    else:
+        rail_calendar_html = pdf_calendar_html
+        rail_movies_html = pdf_movies_html
     rail_to_persist = {
         "version": pdf_renderer.PDF_RAIL_VERSION,
-        "calendar_html": pdf_calendar_html,
-        "movies_html": pdf_movies_html,
+        "calendar_html": rail_calendar_html,
+        "movies_html": rail_movies_html,
         # Body font (in pt) Phase 1 (rail-only fit) landed on. Stored as
         # proof that the cached rail fits at one of the supported fonts;
         # next same-day run will skip Phase 1. Phase 2 runs normally and

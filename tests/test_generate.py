@@ -27,7 +27,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         side_effect=lambda payload, *_a, **_k: payload,
     )
     fake_pdf = patch.object(
-        generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v1", None)
+        generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v1", None, None)
     )
     fake_list = patch.object(generate.calendar_oauth, "list_calendars", return_value=[])
     fake_fetch = patch.object(generate.calendar_oauth, "fetch_events", return_value=[])
@@ -60,7 +60,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
         return_value={"sections": [], "stocks": []},
     )
     fake_pdf2 = patch.object(
-        generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v2", None)
+        generate.pdf, "html_to_pdf_ex", return_value=(b"%PDF-v2", None, None)
     )
     with (
         fake_claude2,

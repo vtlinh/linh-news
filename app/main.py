@@ -269,10 +269,14 @@ def _inject_movies(html: str, s: Session, today: date, email: str) -> str:
     return html.replace("<!-- MOVIES_PLACEHOLDER -->", section, 1)
 
 
-def _masthead_name(s: Session, email: str) -> str:
-    """Display name for the home-page masthead. Falls back to a neutral
-    label when the user hasn't filled in their Data tab yet."""
-    settings_dict = user_settings.get(s, email)
+def _masthead_name(s: Session, email: str, *, is_personalized: bool) -> str:
+    """Display name for the home-page masthead.
+
+    Personalized viewers (and the admin) see ``The {display_name} News``.
+    Non-personalized viewers see the admin's masthead — the same label that
+    appears on the shared edition they're being shown."""
+    target = email if is_personalized else _admin_email()
+    settings_dict = user_settings.get(s, target)
     return (settings_dict.get("display_name") or "Daily").strip() or "Daily"
 
 
@@ -331,7 +335,9 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),
             "edition_generated_at": (edition.generated_at.isoformat() if edition else None),
-            "masthead_name": _masthead_name(s, viewer_email),
+            "masthead_name": _masthead_name(
+                s, viewer_email, is_personalized=is_personalized
+            ),
         },
     )
 

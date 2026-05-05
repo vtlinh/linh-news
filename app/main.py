@@ -298,6 +298,14 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
     today = local_today()
     next_date = day + timedelta(days=1)
     edition_html = edition.html if edition else None
+    # Non-admin viewers get the personalized-only nav (Refresh / Calendars /
+    # Movies / Stocks) when the admin has flipped their personalized flag on;
+    # otherwise they see only the read-only nav.
+    is_admin = auth.is_admin(viewer_email)
+    from app.db import UserSettings as _US
+
+    us_row = s.get(_US, viewer_email)
+    is_personalized = bool(us_row and us_row.personalized_enabled) or is_admin
     # Use the edition's owner-email when injecting overlays so the calendar
     # / hidden-movies honor that edition's user, not the viewer.
     overlay_email = edition.email if edition else viewer_email
@@ -317,7 +325,8 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
             "next_date_allowed": next_date <= today,
             "today_str": today.isoformat(),
             "edition_html": edition_html,
-            "is_admin": auth.is_admin(viewer_email),
+            "is_admin": is_admin,
+            "is_personalized": is_personalized,
             # First-paint hint so the button renders in the right state with
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),
@@ -457,7 +466,11 @@ def view_pdf(
     )
 
 
-def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int:
+def _spawn_generate_subprocess(
+    slot: str,
+    target_date: str | None = None,
+    target_email: str | None = None,
+) -> int:
     """Launch `python -m app.generate refresh [--date YYYY-MM-DD]` as a
     detached subprocess.
 
@@ -470,6 +483,8 @@ def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int
     cmd = [sys.executable, "-m", "app.generate", slot]
     if target_date:
         cmd += ["--date", target_date]
+    if target_email:
+        cmd += ["--email", target_email]
     env = os.environ.copy()
     # Make sure the worker inherits the same .env / repo root.
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
@@ -497,10 +512,16 @@ def _spawn_generate_subprocess(slot: str, target_date: str | None = None) -> int
 
 
 @app.post("/refresh", status_code=status.HTTP_202_ACCEPTED)
-async def refresh(request: Request, email: str = Depends(auth.require_admin)):
+async def refresh(
+    request: Request,
+    email: str = Depends(auth.require_personalized_or_admin),
+):
     """Kick a background regeneration in a *detached subprocess* so the
     refresh keeps running even if uvicorn restarts. Returns 202 immediately
     so the page can keep showing the old edition until the new one is ready.
+
+    Admin: refresh runs the cron-style "all enabled users" pipeline.
+    Personalized non-admin: refresh runs only for their own email.
 
     Accepts an optional JSON body ``{"date": "YYYY-MM-DD"}`` to regenerate a
     specific date instead of today."""
@@ -519,7 +540,10 @@ async def refresh(request: Request, email: str = Depends(auth.require_admin)):
             status.HTTP_409_CONFLICT,
             "A refresh is already in progress.",
         )
-    pid = _spawn_generate_subprocess("refresh", target_date=target_date)
+    target_email = None if auth.is_admin(email) else email
+    pid = _spawn_generate_subprocess(
+        "refresh", target_date=target_date, target_email=target_email
+    )
     cache.set_edition_refresh_pid(pid)
     return {"ok": True, "date": effective_date, "in_progress": True}
 
@@ -620,29 +644,32 @@ async def data_save(
 @app.post("/hide-movie")
 async def hide_movie(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     body = await request.json()
     title = (body.get("title") or "").strip()
     if not title:
         raise HTTPException(400, "title required")
-    overlays.hide_movie(s, _admin_email(), title)
+    overlays.hide_movie(s, email, title)
     return {"ok": True}
 
 
-def _calendar_events_for_year_cached(s: Session, _email: str) -> tuple[list[dict], list[dict]]:
+def _calendar_events_for_year_cached(s: Session, email: str) -> tuple[list[dict], list[dict]]:
     """Return cached events immediately. Kicks a background refresh if the
     cache is older than ``events_refresh_min_seconds``. On a cold start
     (cache empty OR previous fetch returned zero events) we synchronously
     fetch so the page never renders an empty list when calendars exist."""
-    events, _ = cache.get_events()
+    events, _ = cache.get_events(email=email)
     if not events:  # None OR empty list — both indicate "no usable cache"
-        events, _ = _calendar_events_for_year(s)
-        cache.store_events(events)
+        events, _ = _calendar_events_for_year(s, email)
+        cache.store_events(events, email=email)
     else:
         Maker = _session_factory_for_background()
-        cache.maybe_refresh_in_background(lambda: _refresh_events_cache_via(Maker))
+        cache.maybe_refresh_in_background(
+            lambda: _refresh_events_cache_via(Maker, email),
+            email=email,
+        )
     return events, []
 
 
@@ -652,21 +679,21 @@ def _session_factory_for_background():
     return session_factory()
 
 
-def _refresh_events_cache_via(maker) -> list[dict]:
+def _refresh_events_cache_via(maker, email: str) -> list[dict]:
     with maker() as bs:
-        events, _ = _calendar_events_for_year(bs)
+        events, _ = _calendar_events_for_year(bs, email)
     return events
 
 
-def _calendar_events_for_year(s: Session) -> tuple[list[dict], list[dict]]:
+def _calendar_events_for_year(s: Session, email: str) -> tuple[list[dict], list[dict]]:
     """Return (deduped_upcoming_events, all_calendars).
     Each event appears once: the nearest upcoming occurrence per iCalUID.
     Hidden calendars are skipped entirely (no API queries to them)."""
     today = local_today()
     horizon = today + timedelta(days=365)
-    all_cals = list_calendars(s)
+    all_cals = list_calendars(s, email)
     cal_name = {c["id"]: c["name"] for c in all_cals}
-    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, _admin_email())}
+    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, email)}
     active_ids = [c["id"] for c in all_cals if c["id"] not in hidden_ids]
     raw = calendar_oauth.fetch_events(
         s,
@@ -674,6 +701,7 @@ def _calendar_events_for_year(s: Session) -> tuple[list[dict], list[dict]]:
         today,
         horizon,
         calendar_names=cal_name,
+        email=email,
     )
     nearest: dict[str, dict] = {}
     seen_starts: dict[str, set] = {}
@@ -709,23 +737,25 @@ def _calendar_events_for_year(s: Session) -> tuple[list[dict], list[dict]]:
     return out, all_cals
 
 
-def _invalidate_events_cache() -> None:
+def _invalidate_events_cache(email: str | None = None) -> None:
     """Force the next admin/events fetch to refresh the cache from Google."""
-    cache.store_events([])  # placeholder so freshness pulse changes
+    cache.store_events([], email=email)  # placeholder so freshness pulse changes
     # We deliberately don't write 0 — clients reload on updated_at change.
 
 
 @app.get("/admin/events")
-def admin_events_get_redirect(email: str = Depends(auth.require_admin)):
+def admin_events_get_redirect(
+    email: str = Depends(auth.require_personalized_or_admin),
+):
     """Events have been merged into the Calendars admin page."""
     return RedirectResponse("/admin/calendars", status_code=302)
 
 
 @app.get("/admin/events/freshness")
 def admin_events_freshness(
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
 ):
-    _, updated_at = cache.get_events()
+    _, updated_at = cache.get_events(email=email)
     return {"updated_at": updated_at}
 
 
@@ -733,21 +763,20 @@ def admin_events_freshness(
 def admin_events_data(
     offset: int = 0,
     limit: int = 50,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     cal_events, _ = _calendar_events_for_year_cached(s, email)
     # Filter out events from currently-hidden calendars at READ time so toggles
     # take effect immediately without forcing a Google re-fetch.
-    admin = _admin_email()
-    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, admin)}
+    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, email)}
     cal_events = [e for e in cal_events if e.get("calendar_id") not in hidden_ids]
     page = cal_events[offset : offset + limit]
     rows = s.execute(
-        select(ImportantEvent.ical_uid).where(ImportantEvent.email == admin)
+        select(ImportantEvent.ical_uid).where(ImportantEvent.email == email)
     ).all()
     important_uids = {r[0] for r in rows if r[0]}
-    suppressed_uids = overlays.suppressed_event_uids(s, admin)
+    suppressed_uids = overlays.suppressed_event_uids(s, email)
     return {
         "events": [
             {
@@ -766,7 +795,7 @@ def admin_events_data(
 @app.post("/admin/events/suppress")
 async def admin_events_suppress(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     """Mark or unmark a calendar event (by iCalUID) as suppressed.
@@ -780,24 +809,23 @@ async def admin_events_suppress(
         cal_events, _ = _calendar_events_for_year_cached(s, email)
         match = next((e for e in cal_events if e["ical_uid"] == ical_uid), None)
         title = match["title"] if match else ical_uid
-        admin = _admin_email()
-        overlays.suppress_event(s, admin, ical_uid, title)
+        overlays.suppress_event(s, email, ical_uid, title)
         # Mutually exclusive: a suppressed event can't be important.
         s.execute(
             delete(ImportantEvent).where(
-                and_(ImportantEvent.ical_uid == ical_uid, ImportantEvent.email == admin)
+                and_(ImportantEvent.ical_uid == ical_uid, ImportantEvent.email == email)
             )
         )
         s.commit()
     else:
-        overlays.unsuppress_event(s, _admin_email(), ical_uid)
+        overlays.unsuppress_event(s, email, ical_uid)
     return {"ok": True, "suppressed": suppressed}
 
 
 @app.post("/admin/events/toggle")
 async def admin_events_toggle(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     """Mark or unmark a single calendar event (by iCalUID) as important.
@@ -808,10 +836,9 @@ async def admin_events_toggle(
     important = bool(body.get("important"))
     if not ical_uid:
         raise HTTPException(400, "ical_uid required")
-    admin = _admin_email()
     s.execute(
         delete(ImportantEvent).where(
-            and_(ImportantEvent.ical_uid == ical_uid, ImportantEvent.email == admin)
+            and_(ImportantEvent.ical_uid == ical_uid, ImportantEvent.email == email)
         )
     )
     if important:
@@ -821,7 +848,7 @@ async def admin_events_toggle(
             raise HTTPException(404, "event not found in calendar")
         s.add(
             ImportantEvent(
-                email=admin,
+                email=email,
                 ical_uid=ical_uid,
                 title=match["title"],
                 event_date=_parse_date(match["date"]),
@@ -836,13 +863,13 @@ async def admin_events_toggle(
 @app.post("/admin/events/{event_id}/delete")
 def admin_events_delete(
     event_id: int,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     s.execute(
         delete(ImportantEvent).where(
             ImportantEvent.id == event_id,
-            ImportantEvent.email == _admin_email(),
+            ImportantEvent.email == email,
         )
     )
     s.commit()
@@ -852,14 +879,14 @@ def admin_events_delete(
 @app.get("/admin/calendars", response_class=HTMLResponse)
 def admin_calendars_get(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     try:
-        calendars = list_calendars(s)
+        calendars = list_calendars(s, email)
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
-    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, _admin_email())}
+    hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, email)}
     # Sort: visible calendars first (primary first within that), hidden last.
     calendars.sort(key=lambda c: (c["id"] in hidden_ids, not c.get("primary"), c["name"].lower()))
     return templates.TemplateResponse(
@@ -880,14 +907,14 @@ _UNRATED_CERTS = {"", "NR"}
 @app.get("/admin/movies", response_class=HTMLResponse)
 def admin_movies_get(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
 ):
     return templates.TemplateResponse(
         request,
         "admin_movies.html",
         {
             "all_ratings": _ALL_MOVIE_RATINGS,
-            "default_ratings": prefs.get_allowed_ratings(),
+            "default_ratings": prefs.get_allowed_ratings(email=email),
         },
     )
 
@@ -896,15 +923,16 @@ def admin_movies_get(
 def admin_movies_data(
     request: Request,
     refresh: int = 0,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     requested = [r for r in request.query_params.getlist("ratings") if r in _ALL_MOVIE_RATINGS]
-    selected = set(requested) if requested else set(prefs.get_allowed_ratings())
+    selected = (
+        set(requested) if requested else set(prefs.get_allowed_ratings(email=email))
+    )
     include_unrated = "Unrated" in selected
     movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
-    admin = _admin_email()
-    favorites = overlays.favorite_movie_titles(s, admin)
+    favorites = overlays.favorite_movie_titles(s, email)
 
     def _matches(m: dict) -> bool:
         # Favorites bypass the rating filter — always visible regardless of
@@ -931,7 +959,7 @@ def admin_movies_data(
             return True
 
     movies = [m for m in movies if _still_fresh(m)]
-    hidden = {m["title"] for m in overlays.all_hidden_movies(s, admin)}
+    hidden = {m["title"] for m in overlays.all_hidden_movies(s, email)}
     return {
         "movies": [
             {
@@ -948,22 +976,22 @@ def admin_movies_data(
 @app.post("/admin/movies/ratings")
 async def admin_movies_ratings(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
 ):
-    """Persist the admin's MPAA-rating selection. Used by both the daily
+    """Persist the user's MPAA-rating selection. Used by both the daily
     HTML edition's Movies section and the printed Linh Times PDF."""
     body = await request.json()
     raw = body.get("ratings") or []
     if not isinstance(raw, list):
         raise HTTPException(400, "ratings must be a list")
-    saved = prefs.set_allowed_ratings([str(r) for r in raw])
+    saved = prefs.set_allowed_ratings([str(r) for r in raw], email=email)
     return {"ratings": saved}
 
 
 @app.post("/admin/movies/toggle")
 async def admin_movies_toggle(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     body = await request.json()
@@ -971,18 +999,17 @@ async def admin_movies_toggle(
     hide = bool(body.get("hidden"))
     if not title:
         raise HTTPException(400, "title required")
-    admin = _admin_email()
     if hide:
-        overlays.hide_movie(s, admin, title)
+        overlays.hide_movie(s, email, title)
     else:
-        overlays.unhide_movie(s, admin, title)
+        overlays.unhide_movie(s, email, title)
     return {"ok": True, "hidden": hide}
 
 
 @app.post("/admin/movies/favorite")
 async def admin_movies_favorite(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     """Toggle a movie's favorite flag. Favorites bypass the MPAA-rating
@@ -993,59 +1020,58 @@ async def admin_movies_favorite(
     favorite = bool(body.get("favorite"))
     if not title:
         raise HTTPException(400, "title required")
-    admin = _admin_email()
     if favorite:
-        overlays.favorite_movie(s, admin, title)
+        overlays.favorite_movie(s, email, title)
     else:
-        overlays.unfavorite_movie(s, admin, title)
+        overlays.unfavorite_movie(s, email, title)
     return {"ok": True, "favorite": favorite}
 
 
 @app.get("/admin/stocks", response_class=HTMLResponse)
 def admin_stocks_get(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     return templates.TemplateResponse(
         request,
         "admin_stocks.html",
-        {"symbols": overlays.watchlist_symbols(s, _admin_email())},
+        {"symbols": overlays.watchlist_symbols(s, email)},
     )
 
 
 @app.post("/admin/stocks/add")
 async def admin_stocks_add(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     body = await request.json()
     symbol = (body.get("symbol") or "").strip().upper()
     if not symbol or not symbol.isalnum() or len(symbol) > 8:
         raise HTTPException(400, "Invalid symbol — letters/digits, up to 8 chars.")
-    overlays.add_watchlist_symbol(s, _admin_email(), symbol)
+    overlays.add_watchlist_symbol(s, email, symbol)
     return {"ok": True, "symbol": symbol}
 
 
 @app.post("/admin/stocks/remove")
 async def admin_stocks_remove(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     body = await request.json()
     symbol = (body.get("symbol") or "").strip().upper()
     if not symbol:
         raise HTTPException(400, "symbol required")
-    overlays.remove_watchlist_symbol(s, _admin_email(), symbol)
+    overlays.remove_watchlist_symbol(s, email, symbol)
     return {"ok": True}
 
 
 @app.post("/admin/calendars/toggle")
 async def admin_calendars_toggle(
     request: Request,
-    email: str = Depends(auth.require_admin),
+    email: str = Depends(auth.require_personalized_or_admin),
     s: Session = Depends(get_session),
 ):
     """Hide or unhide a single calendar by id."""
@@ -1055,19 +1081,18 @@ async def admin_calendars_toggle(
     if not calendar_id:
         raise HTTPException(400, "calendar_id required")
     try:
-        all_cals = {c["id"]: c["name"] for c in list_calendars(s)}
+        all_cals = {c["id"]: c["name"] for c in list_calendars(s, email)}
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
     if calendar_id not in all_cals:
         raise HTTPException(404, "calendar not found")
-    admin = _admin_email()
     if hidden:
         # Hide is fast: events from this calendar are filtered out at read
         # time. No need to dump the cache.
-        if not s.get(HiddenCalendar, (admin, calendar_id)):
+        if not s.get(HiddenCalendar, (email, calendar_id)):
             s.add(
                 HiddenCalendar(
-                    email=admin,
+                    email=email,
                     calendar_id=calendar_id,
                     calendar_name=all_cals[calendar_id],
                 )
@@ -1078,12 +1103,12 @@ async def admin_calendars_toggle(
         # calendar — invalidate the cache so the next read triggers a fetch.
         s.execute(
             delete(HiddenCalendar).where(
-                HiddenCalendar.email == admin,
+                HiddenCalendar.email == email,
                 HiddenCalendar.calendar_id == calendar_id,
             )
         )
         s.commit()
-        _invalidate_events_cache()
+        _invalidate_events_cache(email)
     return {"ok": True, "hidden": hidden}
 
 
@@ -1123,10 +1148,10 @@ def admin_users_get(
                 "is_admin": em == admin,
                 "signed_in": em in oauth_emails,
                 "personalized_enabled": bool(r.personalized_enabled),
+                # Emit ISO-8601 with offset so the client renders it in the
+                # user's local timezone (the DB column is timezone-aware).
                 "last_refreshed_at": (
-                    last_ts.isoformat(sep=" ", timespec="seconds")
-                    if last_ts
-                    else None
+                    last_ts.isoformat() if last_ts else None
                 ),
             }
         )
@@ -1274,18 +1299,18 @@ def admin_users_refresh(
     from app.db import GoogleOAuth, UserSettings
 
     target = user_email.lower()
-    has_signed_in = (
-        s.execute(
-            select(GoogleOAuth.email).where(GoogleOAuth.email == target)
-        ).scalar_one_or_none()
-        is not None
-    )
-    if not has_signed_in:
+    oauth_row = s.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == target)
+    ).scalar_one_or_none()
+    if oauth_row is None or not oauth_row.refresh_token:
         raise HTTPException(404, "User has not signed in yet.")
     settings_row = s.get(UserSettings, target)
     is_personalized = bool(settings_row and settings_row.personalized_enabled)
-    if not is_personalized and target != _admin_email():
+    is_admin_target = target == _admin_email()
+    if not is_personalized and not is_admin_target:
         raise HTTPException(400, "Personalization disabled for this user.")
+    if not is_admin_target and not (settings_row and settings_row.sections_json):
+        raise HTTPException(400, "User has no sections configured.")
     # Spawn the same generate subprocess used by /refresh, scoped to this user.
     cmd = [sys.executable, "-m", "app.generate", "refresh", "--email", target]
     env = os.environ.copy()

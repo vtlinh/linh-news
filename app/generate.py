@@ -791,11 +791,14 @@ def _cli() -> int:
 
 
 def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | None:
-    """Cron entry: run the per-user pipeline for every google_oauth row whose
-    ``personalized_enabled`` flag is true, plus the admin (always). Errors
-    on individual users are logged and skipped so one bad token doesn't
-    abort the whole batch. Returns an aggregate error string when at least
-    one user failed, else None.
+    """Cron entry: run the per-user pipeline for every user whose admin-set
+    ``personalized_enabled`` flag is true and who has both signed in (so we
+    have a refresh_token to fetch their calendar) and configured at least
+    one section on the Data tab. Admin always runs even with an empty
+    config — their credentials are seeded by the OAuth setup script.
+    Errors on individual users are logged and skipped so one bad token
+    doesn't abort the whole batch. Returns an aggregate error string when
+    at least one user failed, else None.
     """
     from datetime import UTC
     from datetime import datetime as _dt
@@ -806,14 +809,11 @@ def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | No
     admin_email = settings.admin_email.lower()
     Maker = session_factory()
     with Maker() as s:
-        # Run for every user whose admin-set ``personalized_enabled`` is
-        # true AND who has signed in (we need an OAuth refresh_token to
-        # fetch their calendar). Admin always runs even before sign-in
-        # because their credentials are seeded by the OAuth setup script.
         rows = (
             s.execute(
-                select(UserSettings.email)
+                select(UserSettings)
                 .join(GoogleOAuth, GoogleOAuth.email == UserSettings.email)
+                .where(GoogleOAuth.refresh_token != "")
                 .where(
                     (UserSettings.personalized_enabled.is_(True))
                     | (UserSettings.email == admin_email)
@@ -822,7 +822,20 @@ def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | No
             .scalars()
             .all()
         )
-        emails = list(rows)
+        emails: list[str] = []
+        skipped: list[tuple[str, str]] = []
+        for r in rows:
+            em = r.email.lower()
+            if em == admin_email:
+                emails.append(em)
+                continue
+            if not (r.sections_json or []):
+                skipped.append((em, "no sections configured"))
+                continue
+            emails.append(em)
+    if skipped:
+        for em, reason in skipped:
+            log.info("⏱  cron: skipping %s — %s", em, reason)
     log.info("⏱  cron: %d enabled user(s) → %s", len(emails), emails)
     failed: list[tuple[str, str]] = []
     for email in emails:

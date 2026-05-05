@@ -45,7 +45,7 @@
                  {% if u.personalized_enabled or u.is_admin %}checked{% endif %}
                  {% if u.is_admin %}disabled title="Admin is always personalized."{% endif %} />
         </td>
-        <td>{% if u.last_refreshed_at %}{{ u.last_refreshed_at }}{% else %}<span style="color:var(--muted);">never</span>{% endif %}</td>
+        <td>{% if u.last_refreshed_at %}<span class="last-refreshed" data-iso="{{ u.last_refreshed_at }}">{{ u.last_refreshed_at }}</span>{% else %}<span style="color:var(--muted);">never</span>{% endif %}</td>
         <td align="center" style="display:flex; gap:6px; justify-content:center;">
           {% if u.signed_in and (u.personalized_enabled or u.is_admin) %}
             <button type="button" class="refresh-now">Refresh</button>
@@ -64,6 +64,18 @@
 <script>
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
   const rowEmail = (el) => el.closest('tr').dataset.email;
+
+  // Render last-refreshed timestamps in the viewer's local timezone.
+  const fmt = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
+  $$('.last-refreshed').forEach(el => {
+    const iso = el.dataset.iso;
+    if (!iso) return;
+    const d = new Date(iso);
+    if (!isNaN(d)) el.textContent = fmt.format(d);
+  });
 
   document.getElementById('add-user-form').addEventListener('submit', async (e) => {
     e.preventDefault();

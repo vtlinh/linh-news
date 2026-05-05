@@ -16,15 +16,19 @@
   <div class="toolbar">
     <div class="actions toolbar-actions">
       <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
-      {% if is_admin %}
+      {% if is_personalized %}
         <button id="refresh-btn" type="button"
                 {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
         <a href="/admin/calendars">Calendars</a>
         <a href="/admin/movies">Movies</a>
         <a href="/admin/stocks">Stocks</a>
+      {% endif %}
+      {% if is_personalized %}
+        <a href="/data">Data</a>
+      {% endif %}
+      {% if is_admin %}
         <a href="/admin/users">Users</a>
       {% endif %}
-      <a href="/data">Data</a>
       <a href="/logout">Logout</a>
       <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
     </div>

@@ -171,5 +171,29 @@ def require_admin(request: Request, session: Session = Depends(get_session)) -> 
     return email
 
 
+def require_personalized_or_admin(
+    request: Request, session: Session = Depends(get_session)
+) -> str:
+    """Auth gate for routes that operate on the caller's own per-user data.
+    Allowed: the admin (always), and any signed-in viewer whose
+    ``user_settings.personalized_enabled`` flag is true.
+
+    Routes using this dep must scope their reads/writes to the returned
+    email — never to the admin's email — so each personalized user sees
+    and edits only their own data.
+    """
+    from app.db import UserSettings
+
+    email = _current_email(request, session)
+    if not email or not is_allowed(email, session):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    if is_admin(email):
+        return email
+    row = session.get(UserSettings, email)
+    if not row or not row.personalized_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Personalization disabled")
+    return email
+
+
 def redirect_to_login() -> RedirectResponse:
     return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)

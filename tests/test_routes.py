@@ -405,8 +405,21 @@ def test_admin_users_refresh_requires_personalized(client, login_as, db_session)
     assert r.status_code == 400
 
 
+def test_admin_users_refresh_requires_sections(client, login_as, db_session):
+    """Personalized + signed-in but no sections configured → 400."""
+    _seed_oauth(db_session, "friend@example.com", personalized=True)
+    login_as(ADMIN)
+    r = client.post("/admin/users/friend@example.com/refresh")
+    assert r.status_code == 400
+
+
 def test_admin_users_refresh_spawns_subprocess(client, login_as, db_session):
     _seed_oauth(db_session, "friend@example.com", personalized=True)
+    # Configure at least one section so the refresh guard passes.
+    db_session.get(UserSettings, "friend@example.com").sections_json = [
+        {"key": "politics", "title": "Politics", "subsection_count": 2}
+    ]
+    db_session.commit()
     login_as(ADMIN)
     with patch("app.main.subprocess.Popen") as popen:
         popen.return_value.pid = 12345

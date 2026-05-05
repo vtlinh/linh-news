@@ -32,23 +32,32 @@ log = logging.getLogger(__name__)
 # so the checkbox state survives reloads. It never matches an actual movie's
 # rating field, so including it in the daily-edition filter set is a no-op.
 _VALID_RATINGS = {"G", "PG", "PG-13", "R", "NC-17", "Unrated"}
-_RATINGS_KEY = "linh_news:allowed_ratings"
+# Per-user kv_cache key. Older deploys used a single global key
+# ``linh_news:allowed_ratings`` — that lives on as the admin's key for
+# backward compatibility (no migration needed; admin's saved value is
+# untouched).
+_RATINGS_KEY_LEGACY = "linh_news:allowed_ratings"
+
+
+def _ratings_key(email: str | None) -> str:
+    if not email:
+        return _RATINGS_KEY_LEGACY
+    return f"linh_news:allowed_ratings:{email.lower()}"
 
 
 def get_allowed_ratings(
     today: date | None = None,
     *,
     session: Session | None = None,
+    email: str | None = None,
 ) -> list[str]:
     """The persisted MPAA-rating selection (set via the admin Movies page).
 
-    Falls back to :func:`app.calendar_oauth.allowed_movie_ratings` so a
-    fresh deploy or unset preference behaves the same as before. Pass
-    ``session`` to reuse an already-open SQLAlchemy session for the
-    underlying KV read — useful when opening a fresh DB connection is
-    expensive (e.g. the Fly Postgres tunnel pays a ~130s cold-establish
-    cost per new connection)."""
-    raw = cache._get_backend().get(_RATINGS_KEY, session=session)  # noqa: SLF001
+    Per-user when ``email`` is provided; falls back to
+    :func:`app.calendar_oauth.allowed_movie_ratings` so a fresh deploy or
+    unset preference behaves the same as before. Pass ``session`` to reuse
+    an already-open SQLAlchemy session for the underlying KV read."""
+    raw = cache._get_backend().get(_ratings_key(email), session=session)  # noqa: SLF001
     if raw:
         try:
             data = json.loads(raw)
@@ -64,9 +73,11 @@ def get_allowed_ratings(
     return allowed_movie_ratings(today)
 
 
-def set_allowed_ratings(ratings: list[str]) -> list[str]:
-    """Persist the admin's MPAA-rating selection. Returns the cleaned list
+def set_allowed_ratings(
+    ratings: list[str], *, email: str | None = None
+) -> list[str]:
+    """Persist the user's MPAA-rating selection. Returns the cleaned list
     actually stored (unknown values dropped)."""
     cleaned = [r for r in ratings if r in _VALID_RATINGS]
-    cache._get_backend().set(_RATINGS_KEY, json.dumps(cleaned))  # noqa: SLF001
+    cache._get_backend().set(_ratings_key(email), json.dumps(cleaned))  # noqa: SLF001
     return cleaned

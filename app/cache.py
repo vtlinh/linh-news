@@ -301,21 +301,32 @@ def expected_refresh_seconds() -> float | None:
     return sum(float(s) for s in samples) / len(samples)
 
 
-def get_events() -> tuple[list[dict] | None, float]:
+def _events_keys(email: str | None) -> tuple[str, str]:
+    """Per-user cache keys. The legacy unsuffixed pair stays as the admin's
+    keys so the existing cached data isn't invalidated on deploy."""
+    if not email:
+        return _KEY_DATA, _KEY_META
+    suffix = email.lower()
+    return f"{_KEY_DATA}:{suffix}", f"{_KEY_META}:{suffix}"
+
+
+def get_events(email: str | None = None) -> tuple[list[dict] | None, float]:
     """Return (events_or_None, updated_at_epoch). None means never cached."""
+    data_key, meta_key = _events_keys(email)
     b = _get_backend()
-    data_raw = b.get(_KEY_DATA)
-    meta_raw = b.get(_KEY_META)
+    data_raw = b.get(data_key)
+    meta_raw = b.get(meta_key)
     events = json.loads(data_raw) if data_raw else None
     meta = json.loads(meta_raw) if meta_raw else {}
     return events, float(meta.get("updated_at", 0))
 
 
-def store_events(events: list[dict]) -> float:
+def store_events(events: list[dict], *, email: str | None = None) -> float:
+    data_key, meta_key = _events_keys(email)
     b = _get_backend()
     now = time.time()
-    b.set(_KEY_DATA, json.dumps(events, default=str))
-    b.set(_KEY_META, json.dumps({"updated_at": now, "in_progress": False}))
+    b.set(data_key, json.dumps(events, default=str))
+    b.set(meta_key, json.dumps({"updated_at": now, "in_progress": False}))
     return now
 
 
@@ -323,11 +334,12 @@ def maybe_refresh_in_background(
     fetch: Callable[[], list[dict]],
     *,
     min_interval: int | None = None,
+    email: str | None = None,
 ) -> None:
     """If the last refresh is older than ``min_interval`` seconds, kick a
     background thread to refetch. Returns immediately."""
     interval = min_interval or get_settings().events_refresh_min_seconds
-    _, updated_at = get_events()
+    _, updated_at = get_events(email=email)
     if time.time() - updated_at < interval:
         return
     if not _refresh_lock.acquire(blocking=False):
@@ -337,7 +349,7 @@ def maybe_refresh_in_background(
         try:
             log.info("Refreshing events cache in background...")
             events = fetch()
-            store_events(events)
+            store_events(events, email=email)
             log.info("Cache refresh complete: %d events.", len(events))
         except Exception as e:  # noqa: BLE001
             log.exception("Background events refresh failed: %s", e)

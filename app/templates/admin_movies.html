@@ -45,7 +45,7 @@
   .movie-tile {
     position: relative;
     border: 1px solid var(--rule);
-    background: #fff;
+    background: var(--surface);
     border-radius: 6px;
     /* No overflow:hidden — the Trailers hover popup extends past the tile
        and absolutely-positioned descendants must remain visible. The poster
@@ -71,7 +71,7 @@
     top: 6px; right: 6px;
     width: 30px; height: 30px;
     padding: 0;
-    background: rgba(255,255,255,0.9);
+    background: var(--surface);
     border: 1px solid var(--rule);
     border-radius: 4px;
     display: flex; align-items: center; justify-content: center;
@@ -79,7 +79,7 @@
     color: var(--fg);
   }
   .movie-tile .hide-corner:hover {
-    background: #fff;
+    background: var(--surface);
     border-color: var(--fg);
   }
   .movie-tile .hide-corner svg { width: 18px; height: 18px; display: block; }
@@ -93,14 +93,14 @@
     top: 6px; right: 42px;
     width: 30px; height: 30px;
     padding: 0;
-    background: rgba(255,255,255,0.9);
+    background: var(--surface);
     border: 1px solid var(--rule);
     border-radius: 4px;
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
     color: #f5b400;
   }
-  .movie-tile .fav-corner:hover { background: #fff; border-color: #f5b400; }
+  .movie-tile .fav-corner:hover { background: var(--surface); border-color: #f5b400; }
   .movie-tile .fav-corner svg { width: 18px; height: 18px; display: block; }
   .movie-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .movie-title { font-weight: 700; font-size: 1.02em; line-height: 1.25; }
@@ -119,12 +119,12 @@
     display: inline-block;
     padding: 6px 10px;
     border: 1px solid var(--rule); border-radius: 4px;
-    background: #fff; color: var(--fg);
+    background: var(--surface); color: var(--fg);
     font: inherit; font-size: 0.85em;
     cursor: pointer; text-decoration: none;
   }
   .trailer-btn:hover {
-    background: #f4f0e8;
+    background: var(--bg);
     border-color: var(--fg);
     color: var(--fg);
   }

@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Admin · Stocks{% endblock %}
 {% block body %}
-<header class="site admin">
-  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Stocks Watchlist</h1>
-</header>
+{% include "_nav.html" %}
 <main>
   <form id="add-form" style="display:flex; gap:8px; margin-bottom:1.4em;">
     <input type="text" id="symbol-input" name="symbol" placeholder="Add ticker (e.g. AAPL)"

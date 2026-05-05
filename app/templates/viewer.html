@@ -1,39 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ masthead_name }} News — {{ edition_date }}{% endblock %}
 {% block body %}
-<header class="site">
-  <h1 class="masthead">The {{ masthead_name }} News</h1>
-  <form class="datepicker" method="get" action="/d/"
-        onsubmit="event.preventDefault(); window.location='/d/'+this.d.value;">
-    <a href="/d/{{ prev_date }}" class="actions" aria-label="Previous day">←</a>
-    <input type="date" name="d" value="{{ edition_date }}" max="{{ today_str }}" />
-    {% if next_date_allowed %}
-      <a href="/d/{{ next_date }}" class="actions" aria-label="Next day">→</a>
-    {% else %}
-      <span class="actions" aria-disabled="true" style="opacity:0.4; pointer-events:none;">→</span>
-    {% endif %}
-  </form>
-  <div class="toolbar">
-    <div class="actions toolbar-actions">
-      <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
-      {% if is_personalized %}
-        <button id="refresh-btn" type="button"
-                {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
-        <a href="/admin/calendars">Calendars</a>
-        <a href="/admin/movies">Movies</a>
-        <a href="/admin/stocks">Stocks</a>
-      {% endif %}
-      {% if is_personalized %}
-        <a href="/data">Data</a>
-      {% endif %}
-      {% if is_admin %}
-        <a href="/admin/users">Users</a>
-      {% endif %}
-      <a href="/logout">Logout</a>
-      <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
-    </div>
-  </div>
-</header>
+{% include "_nav.html" %}
 <main class="layout" id="content">
   {% if edition_html %}
     {{ edition_html | safe }}
@@ -136,28 +104,6 @@
     // (no flash), and we kick the polling loop.
     if (serverInProgress) pollUntilFresh();
   }
-
-  // ── Dark mode toggle ─────────────────────────────────────────────────
-  (function() {
-    const btn = document.getElementById('theme-toggle');
-    if (!btn) return;
-    const sync = () => {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      btn.textContent = dark ? '☀️' : '🌙';
-    };
-    sync();
-    btn.addEventListener('click', () => {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      if (dark) {
-        document.documentElement.removeAttribute('data-theme');
-        try { localStorage.setItem('theme', 'light'); } catch {}
-      } else {
-        document.documentElement.setAttribute('data-theme', 'dark');
-        try { localStorage.setItem('theme', 'dark'); } catch {}
-      }
-      sync();
-    });
-  })();
 
   // ── Collapsible sections (mobile only) ──────────────────────────────────
   // On viewports ≤ 768px every <section> with an <h2> gets a right-side

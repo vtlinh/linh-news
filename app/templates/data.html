@@ -1,12 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Data — Newspaper settings{% endblock %}
 {% block body %}
-<header class="site admin">
-  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Data</h1>
-  <div class="actions toolbar-actions" style="margin-left:auto;">
-    <a href="/logout">Logout</a>
-  </div>
-</header>
+{% include "_nav.html" %}
 <main class="data-page">
   <p class="hint">
     Configure your personalised newspaper. Sections are listed in priority
@@ -16,11 +11,11 @@
 
   <section class="user-fields">
     <label>Display name
-      <input type="text" id="display-name" placeholder="Linh">
+      <input type="text" id="display-name">
       <span class="sub">Powers <em>"The XXX News"</em> masthead and <em>"The XXX Times"</em> on the PDF.</span>
     </label>
     <label>Address
-      <input type="text" id="address" placeholder="15 Hunter Ridge, Woodcliff Lake, NJ 07677">
+      <input type="text" id="address">
       <span class="sub">Used to fetch local weather. Resolved on save.</span>
     </label>
   </section>
@@ -105,7 +100,7 @@
 
   .save-row { display: flex; gap: 12px; align-items: center; }
   .save-row button.primary {
-    padding: 10px 22px; background: var(--fg); color: #fff;
+    padding: 10px 22px; background: var(--fg); color: var(--bg);
     border: 1px solid var(--fg); border-radius: 4px; cursor: pointer; font: inherit;
     min-height: 44px;
   }
@@ -401,15 +396,29 @@
     $children.appendChild(renderChild({}));
   });
 
+  const DEFAULT_SECTION = {
+    key: '',
+    title: '\u{1F30D} Top Global Political News',
+    description:
+      'Major world and international developments from reputable outlets ' +
+      'such as Reuters, AP, and BBC.',
+    subsection_count: 5,
+    preferred_sources: [],
+    use_global_sources: true,
+  };
+
   function loadInto(settings) {
     $displayName.value = settings.display_name || '';
     $address.value = settings.address || '';
-    $sections.innerHTML = '';
-    (settings.sections || []).forEach((sec, i) => {
+    $sections.replaceChildren();
+    const sections = (settings.sections && settings.sections.length)
+      ? settings.sections
+      : [DEFAULT_SECTION];
+    sections.forEach((sec, i) => {
       $sections.appendChild(renderSection(sec, i));
     });
     reindex();
-    $children.innerHTML = '';
+    $children.replaceChildren();
     (settings.children || []).forEach((c) => $children.appendChild(renderChild(c)));
   }
 

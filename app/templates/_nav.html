@@ -1,0 +1,38 @@
+<header class="site">
+  <h1 class="masthead">The {{ masthead_name }} News</h1>
+  {% if active_nav == 'home' %}
+  <form class="datepicker" method="get" action="/d/"
+        onsubmit="event.preventDefault(); window.location='/d/'+this.d.value;">
+    <a href="/d/{{ prev_date }}" class="actions" aria-label="Previous day">←</a>
+    <input type="date" name="d" value="{{ edition_date }}" max="{{ today_str }}" />
+    {% if next_date_allowed %}
+      <a href="/d/{{ next_date }}" class="actions" aria-label="Next day">→</a>
+    {% else %}
+      <span class="actions" aria-disabled="true" style="opacity:0.4; pointer-events:none;">→</span>
+    {% endif %}
+  </form>
+  {% endif %}
+  <div class="toolbar">
+    <div class="actions toolbar-actions">
+      <a href="/" class="{% if active_nav == 'home' %}active{% endif %}">Home</a>
+      {% if active_nav == 'home' %}
+        <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
+        {% if is_personalized %}
+          <button id="refresh-btn" type="button"
+                  {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>
+        {% endif %}
+      {% endif %}
+      {% if is_personalized %}
+        <a href="/admin/calendars" class="{% if active_nav == 'calendars' %}active{% endif %}">Calendars</a>
+        <a href="/admin/movies" class="{% if active_nav == 'movies' %}active{% endif %}">Movies</a>
+        <a href="/admin/stocks" class="{% if active_nav == 'stocks' %}active{% endif %}">Stocks</a>
+        <a href="/data" class="{% if active_nav == 'data' %}active{% endif %}">Data</a>
+      {% endif %}
+      {% if is_admin %}
+        <a href="/admin/users" class="{% if active_nav == 'users' %}active{% endif %}">Users</a>
+      {% endif %}
+      <a href="/logout">Logout</a>
+      <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
+    </div>
+  </div>
+</header>

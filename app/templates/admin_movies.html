@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Admin · Movies{% endblock %}
 {% block body %}
-<header class="site admin">
-  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Movies</h1>
-</header>
+{% include "_nav.html" %}
 <main>
   <p>Tick the corner of a card to hide that movie from the daily edition.
      Untick to restore. The list covers everything in theaters now plus

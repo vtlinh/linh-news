@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Admin · Users{% endblock %}
 {% block body %}
-<header class="site admin">
-  <h1><a href="/" class="back-link" aria-label="Back to home">←</a> Users</h1>
-</header>
+{% include "_nav.html" %}
 <main>
   <p style="color:var(--muted);">
     A row in this table authorizes that email to sign in. When

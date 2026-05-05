@@ -122,6 +122,13 @@
       font: inherit; border-radius: 4px; cursor: pointer; text-decoration: none;
     }
     header.site .actions .primary { background: var(--fg); color: #fff; }
+    header.site .actions a.active {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+      font-weight: 700;
+    }
+    html[data-theme="dark"] header.site .actions a.active {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
     /* Toolbar action row: wraps on wide screens, single scrollable row on mobile. */
     .toolbar-actions {
       display: flex; gap: 8px; flex-wrap: wrap;
@@ -454,6 +461,28 @@
     // Dynamic tooltip placement: default is below the trigger. Flip left when
     // the popup would overflow the right edge; flip upward when it would
     // overflow the bottom of the viewport.
+    // ── Dark mode toggle (present in shared nav on every page) ──────────
+    (function() {
+      const btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      const sync = () => {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        btn.textContent = dark ? '☀️' : '🌙';
+      };
+      sync();
+      btn.addEventListener('click', () => {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (dark) {
+          document.documentElement.removeAttribute('data-theme');
+          try { localStorage.setItem('theme', 'light'); } catch {}
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          try { localStorage.setItem('theme', 'dark'); } catch {}
+        }
+        sync();
+      });
+    })();
+
     document.addEventListener('mouseenter', function(e) {
       const trigger = e.target.closest('.tooltip');
       if (!trigger) return;

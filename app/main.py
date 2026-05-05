@@ -269,6 +269,25 @@ def _inject_movies(html: str, s: Session, today: date, email: str) -> str:
     return html.replace("<!-- MOVIES_PLACEHOLDER -->", section, 1)
 
 
+def _chrome_context(s: Session, email: str, *, active: str) -> dict:
+    """Common header/nav context shared across viewer + admin + data pages.
+
+    The shared masthead and nav strip render the same on every page so the
+    user keeps the chrome between clicks; ``active`` highlights the
+    current section."""
+    is_admin_user = auth.is_admin(email)
+    from app.db import UserSettings as _US
+
+    us_row = s.get(_US, email)
+    is_personalized = bool(us_row and us_row.personalized_enabled) or is_admin_user
+    return {
+        "is_admin": is_admin_user,
+        "is_personalized": is_personalized,
+        "masthead_name": _masthead_name(s, email, is_personalized=is_personalized),
+        "active_nav": active,
+    }
+
+
 def _masthead_name(s: Session, email: str, *, is_personalized: bool) -> str:
     """Display name for the home-page masthead.
 

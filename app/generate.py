@@ -73,7 +73,12 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
     user_children = list(usettings.get("children") or [])
 
     overall_t0 = time.monotonic()
-    log.info("⏱  ── refresh pipeline begin (slot=%s, date=%s, email=%s) ──", slot, today, target_email)
+    log.info(
+        "⏱  ── refresh pipeline begin (slot=%s, date=%s, email=%s) ──",
+        slot,
+        today,
+        target_email,
+    )
 
     with Maker() as s:
         cached_rail = _load_cached_rail(s, today, target_email)

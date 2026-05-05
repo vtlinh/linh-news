@@ -133,7 +133,9 @@ def test_persist_events_for_days_writes_events_and_loads_inline(db_session):
     assert row is not None
     assert "Library visit" in row.events_json
 
-    section = calendar_summary.load_calendar_section(db_session, "vtlinh87@gmail.com", date(2026, 5, 2))
+    section = calendar_summary.load_calendar_section(
+        db_session, "vtlinh87@gmail.com", date(2026, 5, 2)
+    )
     assert "📚" in section
     assert "🎂" in section
     assert " • " in section
@@ -161,7 +163,9 @@ def test_load_calendar_section_re_renders_after_renderer_change(db_session):
     with patch.object(calendar_summary, "_emoji_lookup_single_call"):
         calendar_summary.persist_events_for_days(db_session, "vtlinh87@gmail.com", events_by_day)
 
-    section1 = calendar_summary.load_calendar_section(db_session, "vtlinh87@gmail.com", date(2026, 5, 2))
+    section1 = calendar_summary.load_calendar_section(
+        db_session, "vtlinh87@gmail.com", date(2026, 5, 2)
+    )
     assert "⚽" in section1
 
     # Update the emoji directly; no refresh, no cache bust — just reload.
@@ -169,7 +173,9 @@ def test_load_calendar_section_re_renders_after_renderer_change(db_session):
     row.emoji = "🥅"
     db_session.commit()
 
-    section2 = calendar_summary.load_calendar_section(db_session, "vtlinh87@gmail.com", date(2026, 5, 2))
+    section2 = calendar_summary.load_calendar_section(
+        db_session, "vtlinh87@gmail.com", date(2026, 5, 2)
+    )
     assert "🥅" in section2
     assert "⚽" not in section2
 

@@ -207,6 +207,7 @@ class GoogleCalendar(Base):
     picker without hitting the Google API on every request."""
 
     __tablename__ = "google_calendars"
+    email: Mapped[str] = mapped_column(Text, primary_key=True)
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

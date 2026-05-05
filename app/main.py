@@ -26,7 +26,6 @@ from app import (
     weather,
 )
 from app import movies as movies_mod
-from app.calendar_oauth import list_calendars
 from app.db import Edition, HiddenCalendar, ImportantEvent, SubsectionImage, get_session
 from app.settings import REPO_ROOT, get_settings, local_today
 
@@ -643,9 +642,9 @@ def api_calendars(
     ``?refresh=1`` to force a re-fetch from Google."""
     try:
         if refresh:
-            cals = calendar_oauth.refresh_cached_calendars(s)
+            cals = calendar_oauth.refresh_cached_calendars(s, email=email)
         else:
-            cals = calendar_oauth.cached_calendars(s)
+            cals = calendar_oauth.cached_calendars(s, email=email)
     except Exception as e:  # noqa: BLE001 — Google may be unreachable / no OAuth row
         return {"ok": False, "error": str(e), "calendars": []}
     return {"ok": True, "calendars": cals}
@@ -718,7 +717,10 @@ def _calendar_events_for_year(s: Session, email: str) -> tuple[list[dict], list[
     Hidden calendars are skipped entirely (no API queries to them)."""
     today = local_today()
     horizon = today + timedelta(days=365)
-    all_cals = list_calendars(s, email)
+    # Use the per-user DB cache (with bg refresh) instead of a live Google
+    # call on every events-page load.
+    all_cals = calendar_oauth.cached_calendars(s, email=email)
+    calendar_oauth.maybe_refresh_calendars_in_background(email)
     cal_name = {c["id"]: c["name"] for c in all_cals}
     hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, email)}
     active_ids = [c["id"] for c in all_cals if c["id"] not in hidden_ids]
@@ -910,9 +912,13 @@ def admin_calendars_get(
     s: Session = Depends(get_session),
 ):
     try:
-        calendars = list_calendars(s, email)
+        # Read from per-user DB cache; populates synchronously on the first
+        # visit (cold cache) and otherwise stays instant. Background refresh
+        # picks up newly-subscribed Google calendars within an hour.
+        calendars = calendar_oauth.cached_calendars(s, email=email)
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
+    calendar_oauth.maybe_refresh_calendars_in_background(email)
     hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, email)}
     # Sort: visible calendars first (primary first within that), hidden last.
     calendars.sort(key=lambda c: (c["id"] in hidden_ids, not c.get("primary"), c["name"].lower()))
@@ -1117,7 +1123,10 @@ async def admin_calendars_toggle(
     if not calendar_id:
         raise HTTPException(400, "calendar_id required")
     try:
-        all_cals = {c["id"]: c["name"] for c in list_calendars(s, email)}
+        all_cals = {
+            c["id"]: c["name"]
+            for c in calendar_oauth.cached_calendars(s, email=email)
+        }
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
     if calendar_id not in all_cals:

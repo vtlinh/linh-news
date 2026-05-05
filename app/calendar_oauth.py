@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import threading
 from datetime import UTC, date, datetime, time, timedelta
 
 from google.auth.transport.requests import Request as GoogleRequest
@@ -171,42 +173,66 @@ def _service(s: Session, email: str | None = None):
     )
 
 
+def _resolved_email(email: str | None) -> str:
+    from app.settings import get_settings
+
+    return (email or get_settings().admin_email).lower()
+
+
 def cached_calendars(
     s: Session, *, refresh_if_empty: bool = True, email: str | None = None
 ) -> list[dict]:
-    """Return the cached snapshot of the user's Google Calendar list. If
+    """Return the cached per-user snapshot of the Google Calendar list. If
     the cache is empty and ``refresh_if_empty`` is True, hits Google and
-    repopulates the cache before returning. Used by the Data tab's school
-    calendar picker — fast on warm cache, no live API call per page load.
-    """
+    repopulates the cache before returning. No live API call on a warm
+    cache."""
     from sqlalchemy import select as _select
 
     from app.db import GoogleCalendar
 
-    stmt = _select(GoogleCalendar).order_by(
-        GoogleCalendar.primary.desc(), GoogleCalendar.name
+    target = _resolved_email(email)
+    stmt = (
+        _select(GoogleCalendar)
+        .where(GoogleCalendar.email == target)
+        .order_by(GoogleCalendar.primary.desc(), GoogleCalendar.name)
     )
     rows = s.execute(stmt).scalars().all()
     if rows:
         return [{"id": r.id, "name": r.name, "primary": bool(r.primary)} for r in rows]
     if not refresh_if_empty:
         return []
-    return refresh_cached_calendars(s, email=email)
+    return refresh_cached_calendars(s, email=target)
+
+
+def cached_calendars_fetched_at(s: Session, *, email: str | None = None) -> datetime | None:
+    """Latest ``fetched_at`` for this user's cached calendars, or None when
+    the cache is empty. Drives "is the cache stale enough to refresh in the
+    background?" decisions."""
+    from sqlalchemy import select as _select
+
+    from app.db import GoogleCalendar
+
+    target = _resolved_email(email)
+    stmt = _select(GoogleCalendar.fetched_at).where(GoogleCalendar.email == target)
+    rows = s.execute(stmt).scalars().all()
+    return max(rows) if rows else None
 
 
 def refresh_cached_calendars(s: Session, *, email: str | None = None) -> list[dict]:
-    """Hit Google's calendarList API, replace the cached snapshot, return
-    the fresh list. Raises if the OAuth row is missing."""
+    """Hit Google's calendarList API, replace this user's cached snapshot,
+    return the fresh list. Raises if the OAuth row is missing."""
     from sqlalchemy import delete as _delete
 
     from app.db import GoogleCalendar
 
-    fresh = list_calendars(s, email)
-    s.execute(_delete(GoogleCalendar))
+    target = _resolved_email(email)
+    fresh = list_calendars(s, target)
+    s.execute(_delete(GoogleCalendar).where(GoogleCalendar.email == target))
     now = datetime.now(UTC)
     for cal in fresh:
         s.add(
             GoogleCalendar(
+                email=target,
                 id=cal["id"],
                 name=cal["name"],
                 primary=bool(cal.get("primary")),
@@ -215,6 +241,57 @@ def refresh_cached_calendars(s: Session, *, email: str | None = None) -> list[di
         )
     s.commit()
     return fresh
+
+
+_log = logging.getLogger(__name__)
+_calendar_refresh_locks: dict[str, threading.Lock] = {}
+_calendar_refresh_locks_master = threading.Lock()
+
+
+def _calendar_lock_for(email: str) -> threading.Lock:
+    with _calendar_refresh_locks_master:
+        lk = _calendar_refresh_locks.get(email)
+        if lk is None:
+            lk = threading.Lock()
+            _calendar_refresh_locks[email] = lk
+        return lk
+
+
+def maybe_refresh_calendars_in_background(
+    email: str, *, min_interval_seconds: int = 3600
+) -> None:
+    """If this user's cached calendar list is older than ``min_interval_seconds``,
+    spawn a daemon thread to re-fetch it from Google. Returns immediately.
+
+    Mirrors ``cache.maybe_refresh_in_background`` for events: page loads stay
+    fast, the cache catches up out-of-band."""
+    from app.db import session_factory
+
+    target = email.lower()
+    lock = _calendar_lock_for(target)
+    if not lock.acquire(blocking=False):
+        return  # another refresh already in flight for this user
+
+    def _run() -> None:
+        try:
+            Maker = session_factory()
+            with Maker() as bs:
+                fetched = cached_calendars_fetched_at(bs, email=target)
+                if fetched is not None:
+                    age = (datetime.now(UTC) - fetched).total_seconds()
+                    if age < min_interval_seconds:
+                        return
+                _log.info("Refreshing calendar list for %s in background...", target)
+                fresh = refresh_cached_calendars(bs, email=target)
+                _log.info("Calendar refresh complete: %d entries.", len(fresh))
+        except Exception as e:  # noqa: BLE001
+            _log.exception("Calendar background refresh failed: %s", e)
+        finally:
+            lock.release()
+
+    threading.Thread(
+        target=_run, daemon=True, name=f"calendar-refresh-{target}"
+    ).start()
 
 
 def list_calendars(s: Session, email: str | None = None) -> list[dict]:

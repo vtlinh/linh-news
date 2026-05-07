@@ -60,8 +60,22 @@ def _step(name: str):
         log.info("⏱  DONE    %s (%.2fs)", name, dt)
 
 
-def run(slot: Slot, today: date | None = None, email: str | None = None) -> date:
-    """Generate today's edition and upsert into editions. Returns the date row."""
+def run(
+    slot: Slot,
+    today: date | None = None,
+    email: str | None = None,
+    *,
+    linhnews_override: dict | None = None,
+    debug_generated_at_override: datetime | None = None,
+) -> date:
+    """Generate today's edition and upsert into editions. Returns the date row.
+
+    If ``linhnews_override`` is supplied, skip the LLM call and use that
+    structured response instead. Used by ``--from-debug`` to re-render an
+    edition whose post-LLM pipeline failed (e.g. OOM during image fetch),
+    without burning another LLM call. Build-context still runs so the rail,
+    weather, and image fetch use today's fresh data.
+    """
     today = today or local_today()
     settings = get_settings()
     Maker = session_factory()
@@ -111,8 +125,12 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
         dorchester_events=ctx.get("DORCHESTER_CALENDAR_EVENTS") or "",
     )
 
-    with _step("claude_generate_edition"):
-        linhnews = claude_client.generate_edition(rendered_prompt)
+    if linhnews_override is not None:
+        log.info("Re-render mode: reusing structured LLM response from debug_editions")
+        linhnews = linhnews_override
+    else:
+        with _step("claude_generate_edition"):
+            linhnews = claude_client.generate_edition(rendered_prompt)
     _validate_and_log(linhnews, expected_keys=[s.get("key") for s in user_sections])
 
     with _step("backfill_missing_sections"):
@@ -120,10 +138,16 @@ def run(slot: Slot, today: date | None = None, email: str | None = None) -> date
 
     # Persist a debug copy of the structured response *before* anything that
     # can fail downstream (image fetch, PDF render). Deleted after a successful
-    # upsert; otherwise self-expires via the 3-day TTL.
-    debug_generated_at = datetime.now(UTC)
-    with Maker() as s:
-        _save_debug_content(s, today, target_email, debug_generated_at, linhnews)
+    # upsert; otherwise self-expires via the 3-day TTL. Re-render mode skips
+    # this write and keeps the originally loaded row's timestamp so the
+    # cleanup at the end drops the right row.
+    if linhnews_override is None:
+        debug_generated_at = datetime.now(UTC)
+        with Maker() as s:
+            _save_debug_content(s, today, target_email, debug_generated_at, linhnews)
+    else:
+        assert debug_generated_at_override is not None
+        debug_generated_at = debug_generated_at_override
 
     with _step("fetch_subsection_images"), Maker() as s:
         image_bytes_by_id = _fetch_and_persist_images(s, today, target_email, linhnews)
@@ -282,6 +306,24 @@ def _save_debug_content(
         )
     )
     s.commit()
+
+
+def _load_latest_debug(day: date, email: str) -> tuple[dict, datetime]:
+    """Return ``(content_json, generated_at)`` for the newest debug row of
+    ``(day, email)``. Raises if none exists."""
+    Maker = session_factory()
+    with Maker() as s:
+        row = s.execute(
+            select(DebugEdition)
+            .where(DebugEdition.date == day, DebugEdition.email == email)
+            .order_by(DebugEdition.generated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    if row is None:
+        raise RuntimeError(
+            f"No debug_editions row found for ({day}, {email}); cannot re-render"
+        )
+    return dict(row.content_json), row.generated_at
 
 
 def _delete_debug_content(
@@ -810,6 +852,14 @@ def _cli() -> int:
         default=None,
         help="Generate the edition for this user's settings (default: admin)",
     )
+    p.add_argument(
+        "--from-debug",
+        action="store_true",
+        help=(
+            "Skip the LLM call and reuse the most recent structured response "
+            "from debug_editions for (date, email). Requires --email."
+        ),
+    )
     args = p.parse_args()
 
     log_dir = Path(__file__).resolve().parent.parent / "logs"
@@ -840,7 +890,22 @@ def _cli() -> int:
     error_msg: str | None = None
     started = time.monotonic()
     try:
-        if args.email:
+        if args.from_debug:
+            if not args.email:
+                log.error("--from-debug requires --email")
+                return 1
+            override_day = target_date or local_today()
+            override_linhnews, override_dt = _load_latest_debug(
+                override_day, args.email.lower()
+            )
+            run(
+                args.slot,
+                today=target_date,
+                email=args.email,
+                linhnews_override=override_linhnews,
+                debug_generated_at_override=override_dt,
+            )
+        elif args.email:
             run(args.slot, today=target_date, email=args.email)
         else:
             error_msg = _run_for_all_enabled_users(args.slot, target_date)

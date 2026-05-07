@@ -303,6 +303,11 @@ def emojis_for_titles(
             use_batch,
             len(missing),
         )
+        # The batch poll can run for 30+ minutes, long enough for the Postgres
+        # connection underneath `s` to die. If the next ORM call sees a dead
+        # connection it'll raise PendingRollbackError and poison the rest of
+        # the edition pipeline. Roll back so the session is reusable.
+        s.rollback()
 
     # 3. Persist ONLY successful lookups. Titles the LLM didn't answer are
     #    left uncached so they'll be re-attempted on the next refresh.

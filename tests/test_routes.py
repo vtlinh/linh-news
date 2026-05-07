@@ -136,7 +136,9 @@ def test_refresh_spawns_detached_subprocess(client, login_as):
     popen.assert_called_once()
     args, kwargs = popen.call_args
     cmd = args[0]
-    assert cmd[-2:] == ["app.generate", "refresh"]
+    assert "app.generate" in cmd
+    assert "refresh" in cmd
+    assert cmd[cmd.index("--email") + 1] == "vtlinh87@gmail.com"
 
 
 def test_refresh_returns_409_when_lock_held(client, login_as):

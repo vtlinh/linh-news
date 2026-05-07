@@ -118,9 +118,12 @@ def _render_image(subsection: dict) -> str:
         return ""
     images = subsection.get("images") or []
     alt = images[0].get("alt", "") if images else ""
+    src = f"/edition-image/{int(image_id)}"
     return (
-        f'<img class="story-image" src="/edition-image/{int(image_id)}" '
+        f'<a class="story-image-link" href="{src}" target="_blank" rel="noopener">'
+        f'<img class="story-image" src="{src}" '
         f'alt="{_esc(alt)}" loading="lazy" />'
+        f'</a>'
     )
 
 

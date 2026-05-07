@@ -33,10 +33,10 @@ def test_render_day_html_uses_emoji_map_and_bullet_separator():
 
     assert "<strong>Saturday, May 2:</strong>" in html
     assert " • " in html
-    # All-day event has no time; timed events render "H:MM AM/PM emoji title"
+    # All-day event has no time; timed events render "emoji title H:MM AM/PM"
     assert "🎂 Dad's birthday" in html
-    assert "9:00 AM 📚 Library visit" in html
-    assert "12:00 PM 🍕 Lunch with team" in html
+    assert "📚 Library visit 9:00 AM" in html
+    assert "🍕 Lunch with team 12:00 PM" in html
 
 
 def test_emojis_for_titles_uses_db_cache_and_skips_llm(db_session):

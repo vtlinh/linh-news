@@ -10,8 +10,8 @@ reflects it without requiring cache invalidation.
 
 The output is a single ``<div>`` per day::
 
-    <div><strong>Friday, May 2:</strong> 9:00 AM 📚 Library visit
-        • 12:00 PM 🍕 Lunch with team • 🎂 Dad's birthday</div>
+    <div><strong>Friday, May 2:</strong> 📚 Library visit 9:00 AM
+        • 🍕 Lunch with team 12:00 PM • 🎂 Dad's birthday</div>
 """
 
 from __future__ import annotations
@@ -365,7 +365,7 @@ def _format_time(start: str) -> str | None:
 def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) -> str:
     """Return the one-line ``<div>…</div>`` for a single calendar day.
 
-    Format: ``Day, Month D: time {emoji} title • {emoji} title``. If a
+    Format: ``Day, Month D: {emoji} title time • {emoji} title time``. If a
     title's emoji isn't in ``emoji_for`` (LLM lookup failed or hasn't
     happened yet) the renderer applies the keyword-based fallback so every
     event still gets a leading glyph. The fallback emoji is rendered but
@@ -380,8 +380,8 @@ def render_day_html(day: date, events: list[dict], emoji_for: dict[str, str]) ->
         title = (ev.get("summary") or "(untitled)").strip() or "(untitled)"
         emoji = (emoji_for.get(title) or "").strip() or _fallback_emoji(title)
         time_str = _format_time(ev.get("start", ""))
-        # Build the piece without double-spaces when emoji is missing.
-        parts = [p for p in (time_str, emoji, title) if p]
+        # Build the piece without double-spaces when emoji or time is missing.
+        parts = [p for p in (emoji, title, time_str) if p]
         pieces.append(" ".join(parts))
     return f"<div><strong>{day_label}:</strong> " + " • ".join(pieces) + "</div>"
 

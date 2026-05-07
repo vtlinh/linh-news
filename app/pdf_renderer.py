@@ -20,11 +20,10 @@ import base64
 import html as html_mod
 import logging
 import re
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from app.html_renderer import format_percent, percent_color, text_to_html
-from app.settings import LOCAL_TZ, local_now
 
 log = logging.getLogger(__name__)
 
@@ -256,7 +255,6 @@ def build_pdf_html(
     pdf_movies_html: str,
     weather_strip_html: str,
     today: date,
-    refreshed_at: datetime | None = None,
     image_bytes_by_id: dict[int, tuple[bytes, str]] | None = None,
     weather_prose_html: str = "",
     masthead_name: str = "Linh",
@@ -292,14 +290,6 @@ def build_pdf_html(
         sidebar_parts.append(f'<div class="rail-block">{pdf_movies_html}</div>')
     sidebar_inner = "".join(sidebar_parts)
 
-    if refreshed_at is None:
-        refreshed_at = local_now()
-    elif refreshed_at.tzinfo is None:
-        refreshed_at = refreshed_at.replace(tzinfo=LOCAL_TZ)
-    else:
-        refreshed_at = refreshed_at.astimezone(LOCAL_TZ)
-    tz_abbrev = refreshed_at.tzname() or "EST"
-    refreshed_label = f"Refreshed at {refreshed_at.hour:02d}:00 {tz_abbrev}"
     dateline = _format_date(today)
     vol_roman = _roman(_day_of_year(today))
     # Inline the masthead font as a data URI. Routing through file:// hits
@@ -448,7 +438,7 @@ def build_pdf_html(
         '<div class="dateline">'
         f'<span class="vol">VOL. {vol_roman}</span>'
         f'<span class="date">{dateline}</span>'
-        f'<span class="refreshed">{refreshed_label}</span>'
+        '<span class="refreshed"></span>'
         "</div>",
     ]
     if flow_html.strip() or sidebar_inner.strip():

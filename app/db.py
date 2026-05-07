@@ -20,6 +20,8 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
 )
+from sqlalchemy import event as _sa_event
+from sqlalchemy import func as _sa_func
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -79,9 +81,7 @@ class DebugEdition(Base):
     __tablename__ = "debug_editions"
     date: Mapped[date] = mapped_column(Date, primary_key=True)
     email: Mapped[str] = mapped_column(Text, primary_key=True)
-    generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
-    )
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
@@ -249,9 +249,7 @@ class GoogleOAuth(Base):
     refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
     client_id: Mapped[str] = mapped_column(Text, nullable=False)
     client_secret: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # Timestamp of the most recent successful per-user generation. NULL until
     # the first run. Surfaced on the admin Users page.
     last_refreshed_at: Mapped[datetime | None] = mapped_column(
@@ -267,9 +265,7 @@ class SharedEdition(Base):
     __tablename__ = "shared_editions"
     date: Mapped[date] = mapped_column(Date, primary_key=True)
     content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class CalendarDaySummary(Base):
@@ -359,9 +355,7 @@ class UserSettings(Base):
     # Admin-controlled toggle. When false, this user sees the admin's shared
     # "Linh News" edition. When true, cron generates a personalized edition
     # for them and / serves it.
-    personalized_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
+    personalized_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Secret bearer token granting unauthenticated access to this user's
     # PDF editions via /pdf/{day}/{email}?token=…. Auto-minted on user
     # creation; admin can rotate from the Users page.
@@ -376,10 +370,6 @@ class SessionRow(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     email: Mapped[str] = mapped_column(String, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-from sqlalchemy import event as _sa_event
-from sqlalchemy import func as _sa_func
 
 
 @_sa_event.listens_for(UserSettings, "before_insert")

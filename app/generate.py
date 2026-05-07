@@ -254,12 +254,6 @@ def run(
         # is unaffected by this value.
         "font_pt": persisted_font_pt,
     }
-    with _step("pdf_to_png"):
-        png_bytes = pdf.pdf_to_png(pdf_bytes)
-    if png_bytes:
-        log.info("Generated PNG: %d bytes", len(png_bytes))
-    else:
-        log.warning("PNG generation returned no bytes; storing NULL")
     with _step("upsert_edition"), Maker() as s:
         _upsert_edition(
             s,
@@ -272,7 +266,6 @@ def run(
             weather_forecast=weather_forecast,
             weather_alerts=weather_alerts,
             pdf_rail=rail_to_persist,
-            png_bytes=png_bytes,
         )
         _delete_debug_content(s, today, target_email, debug_generated_at)
     log.info("Generated edition for %s (slot=%s)", today, slot)
@@ -784,7 +777,6 @@ def _upsert_edition(
     weather_forecast: dict | None = None,
     weather_alerts: list | None = None,
     pdf_rail: dict | None = None,
-    png_bytes: bytes | None = None,
 ) -> None:
     now = datetime.now(UTC)
     if s.bind.dialect.name == "postgresql":
@@ -794,7 +786,6 @@ def _upsert_edition(
             html=html,
             pdf_html=pdf_html,
             pdf=pdf_bytes,
-            png=png_bytes,
             generated_at=now,
             content_json=content_json,
             weather_forecast_json=weather_forecast or None,
@@ -807,7 +798,6 @@ def _upsert_edition(
                 "html": stmt.excluded.html,
                 "pdf_html": stmt.excluded.pdf_html,
                 "pdf": stmt.excluded.pdf,
-                "png": stmt.excluded.png,
                 "generated_at": stmt.excluded.generated_at,
                 "content_json": stmt.excluded.content_json,
                 "weather_forecast_json": stmt.excluded.weather_forecast_json,
@@ -829,7 +819,6 @@ def _upsert_edition(
                 html=html,
                 pdf_html=pdf_html,
                 pdf=pdf_bytes,
-                png=png_bytes,
                 generated_at=now,
                 content_json=content_json,
                 weather_forecast_json=weather_forecast or None,

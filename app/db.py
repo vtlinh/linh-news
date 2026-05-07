@@ -45,10 +45,6 @@ class Edition(Base):
     # without re-running the expensive Claude pipeline.
     pdf_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    # PNG raster of the PDF, generated immediately after the PDF and served
-    # by the /png/{day} and /png/{day}/{name} endpoints. NULL for editions
-    # whose PNG render failed or which predate the PNG column.
-    png: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # Weather forecast + alerts captured at generation time so view-time
     # injection can render the weather strip without re-querying NWS for

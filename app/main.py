@@ -315,7 +315,7 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
     edition = s.execute(
         select(Edition)
         .where(Edition.date == day, Edition.email == owner_email)
-        .options(defer(Edition.pdf), defer(Edition.pdf_html), defer(Edition.png))
+        .options(defer(Edition.pdf), defer(Edition.pdf_html))
     ).scalar_one_or_none()
     today = local_today()
     next_date = day + timedelta(days=1)
@@ -440,12 +440,6 @@ def _pdf_filename(day: date | str, pdf_bytes: bytes) -> str:
     return f"linh-times-{day}-{digest}.pdf"
 
 
-def _png_filename(day: date | str, png_bytes: bytes) -> str:
-    """Like ``_pdf_filename`` but for the rasterized PNG."""
-    digest = hashlib.sha256(png_bytes).hexdigest()[:10]
-    return f"linh-times-{day}-{digest}.png"
-
-
 def _presented_token(request: Request, token: str | None) -> str:
     """Extract the bearer token from ``?token=…`` or
     ``Authorization: Bearer …``."""
@@ -526,7 +520,7 @@ def pdf_latest(
         select(Edition)
         .where(Edition.email == _admin_email())
         .order_by(Edition.date.desc())
-        .options(defer(Edition.html), defer(Edition.pdf_html), defer(Edition.png))
+        .options(defer(Edition.html), defer(Edition.pdf_html))
         .limit(1)
     ).scalar_one_or_none()
     if not edition:
@@ -566,7 +560,7 @@ def view_pdf(
     edition = s.execute(
         select(Edition)
         .where(Edition.date == _parse_date(day), Edition.email == owner_email)
-        .options(defer(Edition.html), defer(Edition.pdf_html), defer(Edition.png))
+        .options(defer(Edition.html), defer(Edition.pdf_html))
     ).scalar_one_or_none()
     if not edition:
         raise HTTPException(404, "No edition for that date")
@@ -605,7 +599,7 @@ def view_pdf_for_user(
     edition = s.execute(
         select(Edition)
         .where(Edition.date == _parse_date(day), Edition.email == target)
-        .options(defer(Edition.html), defer(Edition.pdf_html), defer(Edition.png))
+        .options(defer(Edition.html), defer(Edition.pdf_html))
     ).scalar_one_or_none()
     if not edition:
         raise HTTPException(404, "No edition for that date")
@@ -620,77 +614,6 @@ def view_pdf_for_user(
             "Expires": "0",
         },
     )
-
-
-def _png_response(day: str, edition: Edition) -> Response:
-    if not edition.png:
-        raise HTTPException(404, "PNG not available for this edition")
-    filename = _png_filename(day, edition.png)
-    return Response(
-        edition.png,
-        media_type="image/png",
-        headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
-
-
-@app.get("/png/{day}")
-def view_png(
-    day: str,
-    request: Request,
-    token: str | None = None,
-    s: Session = Depends(get_session),
-):
-    """PNG raster of the broadsheet PDF. Same access rules as
-    ``/pdf/{day}``: admin's ``pdf_token`` bypasses login; otherwise a
-    signed-in viewer sees their own personalized edition or the admin's
-    shared one."""
-    owner_email = _admin_email()
-    presented = _presented_token(request, token)
-    if not _pdf_token_matches(s, owner_email, presented):
-        viewer_email = auth.require_viewer(request, s)
-        from app.db import UserSettings as _US
-
-        us_row = s.get(_US, viewer_email)
-        if auth.is_admin(viewer_email) or (us_row and us_row.personalized_enabled):
-            owner_email = viewer_email
-    edition = s.execute(
-        select(Edition)
-        .where(Edition.date == _parse_date(day), Edition.email == owner_email)
-        .options(defer(Edition.html), defer(Edition.pdf_html), defer(Edition.pdf))
-    ).scalar_one_or_none()
-    if not edition:
-        raise HTTPException(404, "No edition for that date")
-    return _png_response(day, edition)
-
-
-@app.get("/png/{day}/{name}")
-def view_png_for_user(
-    day: str,
-    name: str,
-    request: Request,
-    token: str | None = None,
-    s: Session = Depends(get_session),
-):
-    """Per-user PNG. Same access rules as ``/pdf/{day}/{name}``."""
-    target = _resolve_user_handle(s, name)
-    presented = _presented_token(request, token)
-    if not _pdf_token_matches(s, target, presented):
-        viewer_email = auth.require_viewer(request, s)
-        if not auth.is_admin(viewer_email):
-            raise HTTPException(403, "Admin only")
-    edition = s.execute(
-        select(Edition)
-        .where(Edition.date == _parse_date(day), Edition.email == target)
-        .options(defer(Edition.html), defer(Edition.pdf_html), defer(Edition.pdf))
-    ).scalar_one_or_none()
-    if not edition:
-        raise HTTPException(404, "No edition for that date")
-    return _png_response(day, edition)
 
 
 def _spawn_generate_subprocess(

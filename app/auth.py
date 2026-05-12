@@ -141,14 +141,20 @@ def require_viewer(request: Request, session: Session = Depends(get_session)) ->
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     # Browser viewers whose session predates the calendar.readonly scope
     # have no google_oauth row — bounce them to /login so the consent
-    # dance captures a refresh token before they get back to /.
+    # dance captures a refresh token before they get back to /. Same
+    # treatment for rows marked ``revoked_at``: the stored refresh token
+    # was rejected by Google with invalid_grant and the user must
+    # re-consent before any calendar-dependent page works again.
     if request.headers.get("accept", "").startswith("text/html"):
         from app.db import GoogleOAuth
 
-        has_creds = session.execute(
-            select(GoogleOAuth.email).where(GoogleOAuth.email == email)
-        ).scalar_one_or_none()
-        if not has_creds:
+        row = session.execute(
+            select(GoogleOAuth.email, GoogleOAuth.revoked_at).where(
+                GoogleOAuth.email == email
+            )
+        ).first()
+        has_live_creds = row is not None and row[1] is None
+        if not has_live_creds:
             sid = request.cookies.get(SESSION_COOKIE)
             if sid:
                 row = session.get(SessionRow, sid)

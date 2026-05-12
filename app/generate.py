@@ -937,6 +937,7 @@ def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | No
                 select(UserSettings)
                 .join(GoogleOAuth, GoogleOAuth.email == UserSettings.email)
                 .where(GoogleOAuth.refresh_token != "")
+                .where(GoogleOAuth.revoked_at.is_(None))
                 .where(
                     (UserSettings.personalized_enabled.is_(True))
                     | (UserSettings.email == admin_email)

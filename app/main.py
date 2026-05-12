@@ -704,23 +704,6 @@ async def refresh(
     return {"ok": True, "date": effective_date, "in_progress": True}
 
 
-@app.post("/cron/{slot}", status_code=status.HTTP_202_ACCEPTED)
-def cron_trigger(slot: str, request: Request):
-    """Cron-pinged endpoint. GitHub Actions hits this twice a day with the
-    shared CRON_SECRET in the X-Cron-Token header. Spawns the same detached
-    subprocess that /refresh uses, so this returns immediately."""
-    if slot not in {"morning", "evening"}:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown slot")
-    expected = get_settings().cron_secret
-    if not expected:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "CRON_SECRET not configured")
-    sent = request.headers.get("x-cron-token", "")
-    if not secrets.compare_digest(sent, expected):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad cron token")
-    pid = _spawn_generate_subprocess(slot)
-    return {"ok": True, "slot": slot, "pid": pid}
-
-
 @app.get("/editions/{day}/freshness")
 def edition_freshness(
     day: str,

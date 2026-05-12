@@ -33,8 +33,7 @@ app = "uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
 # No persistent volume needed — Postgres holds all state.
 
-# Scheduled machines (cron) — run the same image with a different command.
-# Times are evaluated in TZ=America/New_York (set in [env] above).
-# Configure via `fly machine run --schedule ...` after first deploy:
-#   fly machine run --schedule "0 7 * * *"  -- python -m app.generate morning
-#   fly machine run --schedule "0 19 * * *" -- python -m app.generate evening
+# No server-side cron. Generation runs on Linh's local Windows machine
+# (Task Scheduler running scripts/trigger_cron.ps1, every 6 hours), writing
+# results to Fly Postgres through `fly proxy 15432:5432`. The server is
+# read-only with respect to generation.

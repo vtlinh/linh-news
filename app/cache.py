@@ -22,6 +22,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from datetime import date
 from typing import TYPE_CHECKING
 
 from app.settings import get_settings
@@ -272,6 +273,33 @@ def get_recent_edition_refresh_error() -> str | None:
 
 def clear_edition_refresh_error() -> None:
     _get_backend().set(_KEY_REFRESH_ERR, "")
+
+
+# ─────────── Per-(day, email) calendar OAuth failure flag ───────────
+# Set by the generation pipeline when calendar fetch raises with what looks
+# like an OAuth token problem (refresh token expired / revoked / missing).
+# The smart-cron path uses this to mark an otherwise-"successful" edition
+# as needing a retry of the post-LLM pipeline the next time cron fires --
+# once the user re-auths Google, the next 6-hourly run will pick the
+# calendar back up. Cleared on a successful calendar fetch.
+
+_KEY_CAL_OAUTH_FAILED_PREFIX = "linh_news:calendar_oauth_failed"
+
+
+def _cal_oauth_key(day: date, email: str) -> str:
+    return f"{_KEY_CAL_OAUTH_FAILED_PREFIX}:{day.isoformat()}:{email.lower()}"
+
+
+def mark_calendar_oauth_failed(day: date, email: str) -> None:
+    _get_backend().set(_cal_oauth_key(day, email), "1")
+
+
+def clear_calendar_oauth_failed(day: date, email: str) -> None:
+    _get_backend().set(_cal_oauth_key(day, email), "")
+
+
+def is_calendar_oauth_failed(day: date, email: str) -> bool:
+    return bool(_get_backend().get(_cal_oauth_key(day, email)))
 
 
 def record_refresh_duration(seconds: float) -> None:

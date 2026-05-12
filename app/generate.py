@@ -10,11 +10,12 @@ import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app import (
+    cache,
     calendar_oauth,
     calendar_summary,
     claude_client,
@@ -48,6 +49,19 @@ log = logging.getLogger(__name__)
 Slot = Literal["morning", "evening", "refresh"]
 
 
+def _is_calendar_oauth_error(e: BaseException) -> bool:
+    """True if ``e`` looks like a Google OAuth refresh-token problem (revoked,
+    expired, missing). Used to decide whether the smart-cron path should
+    flag this (day, email) for a post-LLM retry on the next 6-hourly run."""
+    blob = f"{type(e).__name__}: {e!r}".lower()
+    return (
+        "invalid_grant" in blob
+        or "refresherror" in blob
+        or "missingusercredentials" in blob
+        or "token has been expired or revoked" in blob
+    )
+
+
 @contextlib.contextmanager
 def _step(name: str):
     """Log how long a named step took. Logs even on exception."""
@@ -67,6 +81,7 @@ def run(
     *,
     linhnews_override: dict | None = None,
     debug_generated_at_override: datetime | None = None,
+    skip_rail_cache: bool = False,
 ) -> date:
     """Generate today's edition and upsert into editions. Returns the date row.
 
@@ -75,6 +90,11 @@ def run(
     edition whose post-LLM pipeline failed (e.g. OOM during image fetch),
     without burning another LLM call. Build-context still runs so the rail,
     weather, and image fetch use today's fresh data.
+
+    ``skip_rail_cache=True`` ignores any previously persisted PDF rail
+    (movies + calendar HTML) and forces a fresh rebuild. Use when the
+    cached rail is known stale -- e.g. a calendar OAuth retry that needs
+    to re-fetch the calendar Phase 1 already cached as empty.
     """
     today = today or local_today()
     settings = get_settings()
@@ -95,8 +115,12 @@ def run(
         target_email,
     )
 
-    with Maker() as s:
-        cached_rail = _load_cached_rail(s, today, target_email)
+    if skip_rail_cache:
+        cached_rail = None
+        log.info("Skipping cached PDF rail for %s (forced rebuild)", today)
+    else:
+        with Maker() as s:
+            cached_rail = _load_cached_rail(s, today, target_email)
     if cached_rail is not None:
         log.info(
             "Reusing cached PDF rail for %s (version=%d) — skipping movie/calendar rail rebuild",
@@ -106,7 +130,9 @@ def run(
 
     with _step("build_context"), Maker() as s:
         ctx = _build_context(
-            s, today, slot,
+            s,
+            today,
+            slot,
             email=target_email,
             cached_rail=cached_rail,
             weather_coords=weather_coords,
@@ -129,8 +155,16 @@ def run(
         log.info("Re-render mode: reusing structured LLM response from debug_editions")
         linhnews = linhnews_override
     else:
-        with _step("claude_generate_edition"):
-            linhnews = claude_client.generate_edition(rendered_prompt)
+        try:
+            with _step("claude_generate_edition"):
+                linhnews = claude_client.generate_edition(rendered_prompt)
+        except Exception:
+            # Stamp the day with an LLM-stage failure so the smart-cron path
+            # refuses to retry the LLM today. Use a sentinel empty content_json
+            # since the column is NOT NULL.
+            with Maker() as s:
+                _record_llm_failure(s, today, target_email)
+            raise
     _validate_and_log(linhnews, expected_keys=[s.get("key") for s in user_sections])
 
     with _step("backfill_missing_sections"):
@@ -149,6 +183,51 @@ def run(
         assert debug_generated_at_override is not None
         debug_generated_at = debug_generated_at_override
 
+    try:
+        _run_post_llm_pipeline(
+            today=today,
+            slot=slot,
+            target_email=target_email,
+            linhnews=linhnews,
+            cached_rail=cached_rail,
+            pdf_movies_html=pdf_movies_html,
+            pdf_calendar_html=pdf_calendar_html,
+            weather_forecast=weather_forecast,
+            weather_alerts=weather_alerts,
+            weather_coords=weather_coords,
+            masthead_name=masthead_name,
+            debug_generated_at=debug_generated_at,
+        )
+    except Exception:
+        # LLM already produced content_json on the debug row; stamp it as a
+        # post-LLM failure so the smart-cron path retries without re-calling
+        # the LLM.
+        with Maker() as s:
+            _mark_debug_post_llm_failure(s, today, target_email, debug_generated_at)
+        raise
+
+    log.info("⏱  ── refresh pipeline end (total %.2fs) ──", time.monotonic() - overall_t0)
+    return today
+
+
+def _run_post_llm_pipeline(
+    *,
+    today: date,
+    slot: Slot,
+    target_email: str,
+    linhnews: dict,
+    cached_rail: dict | None,
+    pdf_movies_html: str,
+    pdf_calendar_html: str,
+    weather_forecast: dict,
+    weather_alerts: list,
+    weather_coords: str,
+    masthead_name: str,
+    debug_generated_at: datetime,
+) -> None:
+    """Image fetch → HTML → PDF → upsert. Extracted from run() so callers can
+    wrap it in a single try/except that stamps post-LLM failures."""
+    Maker = session_factory()
     with _step("fetch_subsection_images"), Maker() as s:
         image_bytes_by_id = _fetch_and_persist_images(s, today, target_email, linhnews)
 
@@ -202,9 +281,7 @@ def run(
         )
     # When Phase 1 was skipped, keep the previously cached Phase-1 font as
     # the proof-of-fit; otherwise persist the freshly chosen one.
-    persisted_font_pt = (
-        (cached_rail or {}).get("font_pt") if skip_phase1 else phase1_font_pt
-    )
+    persisted_font_pt = (cached_rail or {}).get("font_pt") if skip_phase1 else phase1_font_pt
     try:
         from pathlib import Path
 
@@ -270,11 +347,104 @@ def run(
         _delete_debug_content(s, today, target_email, debug_generated_at)
     log.info("Generated edition for %s (slot=%s)", today, slot)
 
-    log.info("⏱  ── refresh pipeline end (total %.2fs) ──", time.monotonic() - overall_t0)
-    return today
-
 
 _DEBUG_TTL = timedelta(days=3)
+
+# Sentinel content_json for an LLM-stage failure. content_json is NOT NULL so
+# we store an empty object and rely on failure_reason='llm' to identify it.
+_LLM_FAIL_SENTINEL: dict = {}
+
+
+def _record_llm_failure(s: Session, day: date, email: str) -> None:
+    """Stamp the day with a failed-at-LLM marker so the smart-cron path
+    knows today's LLM attempt already failed and refuses to retry it.
+
+    Uses ``debug_editions`` with ``failure_reason='llm'`` and an empty
+    ``content_json`` sentinel (the column is NOT NULL)."""
+    now = datetime.now(UTC)
+    s.execute(delete(DebugEdition).where(DebugEdition.expires_at < now))
+    s.add(
+        DebugEdition(
+            date=day,
+            email=email,
+            generated_at=now,
+            content_json=_LLM_FAIL_SENTINEL,
+            expires_at=now + _DEBUG_TTL,
+            failure_reason="llm",
+        )
+    )
+    s.commit()
+
+
+def _mark_debug_post_llm_failure(s: Session, day: date, email: str, generated_at: datetime) -> None:
+    """Stamp ``failure_reason='post_llm'`` on the debug_editions row that
+    _save_debug_content wrote at the start of this run. The row's
+    ``content_json`` is the structured LLM response, which the smart-cron
+    path will pass back as ``linhnews_override`` to retry without the LLM."""
+    s.execute(
+        update(DebugEdition)
+        .where(
+            DebugEdition.date == day,
+            DebugEdition.email == email,
+            DebugEdition.generated_at == generated_at,
+        )
+        .values(failure_reason="post_llm")
+    )
+    s.commit()
+
+
+CronAction = Literal["skip-success", "skip-llm-failed", "retry-without-llm", "full"]
+
+
+def decide_cron_action(day: date, email: str) -> tuple[CronAction, dict | None, datetime | None]:
+    """Inspect today's state for ``(day, email)`` and decide what the
+    every-6-hours cron should do for this user.
+
+    Returns ``(action, content_json, generated_at)``:
+      * ``("skip-success", None, None)`` — an edition row already exists for
+        today with a non-empty html + a valid PDF, and no recoverable
+        sub-failure (e.g. calendar OAuth) is flagged.
+      * ``("skip-llm-failed", None, None)`` — today already failed at the LLM
+        stage; don't retry the LLM.
+      * ``("retry-without-llm", content_json, generated_at)`` — today's LLM
+        succeeded but a downstream step failed (or the calendar fetch fell
+        over with an OAuth error during an otherwise-successful run); rerun
+        the post-LLM pipeline with the cached LLM output.
+      * ``("full", None, None)`` — no relevant state for today; do a full run.
+    """
+    Maker = session_factory()
+    with Maker() as s:
+        ed = s.get(Edition, (day, email))
+        if ed is not None and ed.html and ed.pdf and ed.pdf.startswith(b"%PDF"):
+            # Even when the edition looks fine, a flagged calendar OAuth
+            # failure during the last run means it's missing calendar
+            # data — retry the post-LLM pipeline so once the user has
+            # re-auth'd Google, the next attempt picks up the calendar.
+            if cache.is_calendar_oauth_failed(day, email) and ed.content_json:
+                return (
+                    "retry-without-llm",
+                    dict(ed.content_json),
+                    ed.generated_at,
+                )
+            return ("skip-success", None, None)
+        row = s.execute(
+            select(DebugEdition)
+            .where(DebugEdition.date == day, DebugEdition.email == email)
+            .order_by(DebugEdition.generated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if row is None:
+            return ("full", None, None)
+        if row.failure_reason == "llm":
+            return ("skip-llm-failed", None, None)
+        if row.content_json:
+            return (
+                "retry-without-llm",
+                dict(row.content_json),
+                row.generated_at,
+            )
+        # Row exists but no content and not 'llm' — odd; do a full run.
+        return ("full", None, None)
 
 
 def _save_debug_content(
@@ -313,15 +483,11 @@ def _load_latest_debug(day: date, email: str) -> tuple[dict, datetime]:
             .limit(1)
         ).scalar_one_or_none()
     if row is None:
-        raise RuntimeError(
-            f"No debug_editions row found for ({day}, {email}); cannot re-render"
-        )
+        raise RuntimeError(f"No debug_editions row found for ({day}, {email}); cannot re-render")
     return dict(row.content_json), row.generated_at
 
 
-def _delete_debug_content(
-    s: Session, day: date, email: str, generated_at: datetime
-) -> None:
+def _delete_debug_content(s: Session, day: date, email: str, generated_at: datetime) -> None:
     """Drop the debug row written at the start of this run — the upsert
     succeeded so the structured response now lives on the real edition row."""
     s.execute(
@@ -420,8 +586,12 @@ def _build_context(
 
         with _step("google fetch_events (today..+30d)"):
             events = calendar_oauth.fetch_events(
-                s, active_ids, today, horizon,
-                calendar_names=cal_names, email=target_email,
+                s,
+                active_ids,
+                today,
+                horizon,
+                calendar_names=cal_names,
+                email=target_email,
             )
             events = [e for e in events if e.get("ical_uid") not in suppressed_uids]
             events = calendar_oauth.dedupe_events(events)
@@ -448,8 +618,23 @@ def _build_context(
                 use_batch=emoji_use_batch,
             )
 
+        # Calendar pipeline completed end-to-end: clear any prior OAuth-failed
+        # flag so the smart-cron path stops marking this edition as needing
+        # a retry.
+        cache.clear_calendar_oauth_failed(today, target_email)
     except Exception as e:  # noqa: BLE001 — never let calendar break generation
         log.warning("Calendar unavailable: %s", e)
+        if _is_calendar_oauth_error(e):
+            # Mark this (day, email) so decide_cron_action treats the
+            # otherwise-"successful" edition as needing a post-LLM retry
+            # the next time cron fires. Once the user re-auths Google, the
+            # next run will succeed, clear the flag, and revert to skip-success.
+            log.info(
+                "Calendar OAuth error -- flagging %s/%s for retry on next cron",
+                today,
+                target_email,
+            )
+            cache.mark_calendar_oauth_failed(today, target_email)
 
     if cached_rail is not None:
         pdf_calendar_html = cached_rail.get("calendar_html", "")
@@ -605,14 +790,71 @@ def _ensure_edition_stub(s: Session, day: date, email: str) -> None:
 
 _HEADLINE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9'-]+")
 _HEADLINE_STOPWORDS = {
-    "about", "after", "again", "against", "amid", "around", "before", "behind",
-    "below", "between", "could", "during", "every", "from", "have", "into",
-    "more", "much", "must", "near", "next", "off", "once", "only", "other",
-    "over", "same", "should", "since", "some", "still", "such", "than",
-    "that", "their", "them", "then", "there", "these", "they", "this",
-    "those", "through", "today", "tonight", "under", "until", "very", "what",
-    "when", "where", "which", "while", "with", "within", "without", "would",
-    "your", "says", "said", "just", "also", "been", "were", "will",
+    "about",
+    "after",
+    "again",
+    "against",
+    "amid",
+    "around",
+    "before",
+    "behind",
+    "below",
+    "between",
+    "could",
+    "during",
+    "every",
+    "from",
+    "have",
+    "into",
+    "more",
+    "much",
+    "must",
+    "near",
+    "next",
+    "off",
+    "once",
+    "only",
+    "other",
+    "over",
+    "same",
+    "should",
+    "since",
+    "some",
+    "still",
+    "such",
+    "than",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "today",
+    "tonight",
+    "under",
+    "until",
+    "very",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "with",
+    "within",
+    "without",
+    "would",
+    "your",
+    "says",
+    "said",
+    "just",
+    "also",
+    "been",
+    "were",
+    "will",
 }
 
 
@@ -709,10 +951,7 @@ def _fetch_and_persist_images(
         for h in s.execute(
             select(SubsectionImage.image_hash).where(
                 SubsectionImage.image_hash.is_not(None),
-                ~(
-                    (SubsectionImage.edition_date == day)
-                    & (SubsectionImage.edition_email == email)
-                ),
+                ~((SubsectionImage.edition_date == day) & (SubsectionImage.edition_email == email)),
             )
         ).scalars()
         if h
@@ -735,9 +974,7 @@ def _fetch_and_persist_images(
                 log.exception("Image fetch raised for %s/%d", key, idx)
                 continue
             if fetched is None:
-                log.info(
-                    "No usable image for %s/%d (%d candidates)", key, idx, len(urls)
-                )
+                log.info("No usable image for %s/%d (%d candidates)", key, idx, len(urls))
                 continue
             # Within this single run, also reject hashes we've already used —
             # two subsections in the same edition shouldn't share an image.
@@ -849,6 +1086,17 @@ def _cli() -> int:
             "from debug_editions for (date, email). Requires --email."
         ),
     )
+    p.add_argument(
+        "--smart",
+        action="store_true",
+        help=(
+            "Smart cron mode (every-6-hours local trigger): for each enabled "
+            "user, decide whether to skip (already succeeded today or LLM "
+            "failed earlier today), retry without the LLM (using today's "
+            "cached LLM output), or run a full pipeline. Mutually exclusive "
+            "with --email and --from-debug."
+        ),
+    )
     args = p.parse_args()
 
     log_dir = Path(__file__).resolve().parent.parent / "logs"
@@ -884,9 +1132,7 @@ def _cli() -> int:
                 log.error("--from-debug requires --email")
                 return 1
             override_day = target_date or local_today()
-            override_linhnews, override_dt = _load_latest_debug(
-                override_day, args.email.lower()
-            )
+            override_linhnews, override_dt = _load_latest_debug(override_day, args.email.lower())
             run(
                 args.slot,
                 today=target_date,
@@ -895,9 +1141,12 @@ def _cli() -> int:
                 debug_generated_at_override=override_dt,
             )
         elif args.email:
+            if args.smart:
+                log.error("--smart cannot be combined with --email")
+                return 1
             run(args.slot, today=target_date, email=args.email)
         else:
-            error_msg = _run_for_all_enabled_users(args.slot, target_date)
+            error_msg = _run_for_all_enabled_users(args.slot, target_date, smart=args.smart)
     except Exception as e:  # noqa: BLE001
         error_msg = _summarize_error(e)
         log.exception("generate.run failed")
@@ -913,7 +1162,9 @@ def _cli() -> int:
     return 0 if error_msg is None else 1
 
 
-def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | None:
+def _run_for_all_enabled_users(
+    slot: Slot, target_date: date | None, *, smart: bool = False
+) -> str | None:
     """Cron entry: run the per-user pipeline for every user whose admin-set
     ``personalized_enabled`` flag is true and who has both signed in (so we
     have a refresh_token to fetch their calendar) and configured at least
@@ -922,6 +1173,11 @@ def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | No
     Errors on individual users are logged and skipped so one bad token
     doesn't abort the whole batch. Returns an aggregate error string when
     at least one user failed, else None.
+
+    When ``smart=True`` (the every-6-hours local cron path), each user's
+    state for today is inspected via :func:`decide_cron_action` first:
+    successful runs are skipped, LLM-stage failures are not retried, and
+    post-LLM failures are retried by replaying the cached LLM output.
     """
     from datetime import UTC
     from datetime import datetime as _dt
@@ -961,10 +1217,44 @@ def _run_for_all_enabled_users(slot: Slot, target_date: date | None) -> str | No
         for em, reason in skipped:
             log.info("⏱  cron: skipping %s — %s", em, reason)
     log.info("⏱  cron: %d enabled user(s) → %s", len(emails), emails)
+    decision_day = target_date or local_today()
     failed: list[tuple[str, str]] = []
     for email in emails:
         try:
-            run(slot, today=target_date, email=email)
+            override: dict | None = None
+            override_dt: datetime | None = None
+            if smart:
+                action, override, override_dt = decide_cron_action(decision_day, email)
+                if action == "skip-success":
+                    log.info("⏱  cron(smart): %s already succeeded today — skip", email)
+                    continue
+                if action == "skip-llm-failed":
+                    log.info(
+                        "⏱  cron(smart): %s failed at LLM today — not retrying",
+                        email,
+                    )
+                    continue
+                if action == "retry-without-llm":
+                    log.info(
+                        "⏱  cron(smart): %s retrying post-LLM pipeline with cached "
+                        "LLM output from %s",
+                        email,
+                        override_dt,
+                    )
+                else:
+                    log.info("⏱  cron(smart): %s running full pipeline", email)
+            run(
+                slot,
+                today=target_date,
+                email=email,
+                linhnews_override=override,
+                debug_generated_at_override=override_dt,
+                # When retrying after a calendar OAuth failure (the most
+                # common retry-without-llm case), the previously cached
+                # rail has an empty calendar_html. Force a rebuild so the
+                # now-working calendar shows up.
+                skip_rail_cache=override is not None,
+            )
             with Maker() as s:
                 row = s.execute(
                     select(GoogleOAuth).where(GoogleOAuth.email == email)

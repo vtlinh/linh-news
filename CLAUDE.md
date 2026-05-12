@@ -17,7 +17,7 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 - LLM: Anthropic API with the `web_search_20250305` tool. Model name comes from `settings.anthropic_model`. Use prompt caching on the static `news.pr` block. The LLM returns a structured `LinhNews` object (see `app/llm_schema.py`); the server renders both the HTML page (`app/html_renderer.py`) and the PDF (`app/pdf_renderer.py`) from that data — the LLM never produces HTML.
 - PDF: WeasyPrint (system serif fonts, 15.296in × 27.193in broadsheet page, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
-- Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) once daily at 11:00 UTC (6 AM EST / 7 AM EDT).
+- Hosting: Fly.io app. Generation runs on Linh's local Windows machine (Task Scheduler fires `scripts/trigger_cron.ps1` every 6 hours), connecting to Fly Postgres through `fly proxy 15432:5432`. There is no server-side cron endpoint -- the server is read-only with respect to generation. WeasyPrint on Windows loads its native libs from the MSYS2 UCRT64 install at `C:\msys64\ucrt64\bin`; `app/pdf.py` registers that directory via `os.add_dll_directory()` at import time (override with `WEASYPRINT_DLL_DIR`).
 
 ## Common commands
 
@@ -45,7 +45,7 @@ fly deploy                               # deploy app + scheduled machines
 
 Two entry points share the same generation pipeline:
 
-1. **Cron** (`0 7` and `0 19` in `America/New_York`) → Fly scheduled machine runs `python -m app.generate <slot>`.
+1. **Cron** → Linh's local Windows Task Scheduler fires `scripts/trigger_cron.ps1` every 6 hours, which runs `uv run python -m app.generate <slot> --smart` locally. The `--smart` path consults `decide_cron_action(today, email)` per user: skip if already succeeded today; skip if LLM already failed today (rule against burning credits); retry without LLM (using cached `debug_editions.content_json` after a failed run, or `editions.content_json` when the run "succeeded" but calendar OAuth was broken) if a downstream stage failed earlier; otherwise run the full pipeline. Failures are stamped onto `debug_editions.failure_reason` (`'llm'` or `'post_llm'`); calendar OAuth failures during an otherwise-successful run are recorded in `kv_cache` under `linh_news:calendar_oauth_failed:<date>:<email>` and cleared on the next successful calendar fetch.
 2. **POST /refresh** (any authorized viewer) → server runs the same `app.generate` flow inline.
 
 Pipeline (`app/generate.py`):

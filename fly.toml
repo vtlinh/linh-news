@@ -23,7 +23,7 @@ path = "/healthz"
 
 [[vm]]
 size = "shared-cpu-1x"
-memory = "1gb"
+memory = "512mb"
 
 [deploy]
 release_command = "uv run alembic upgrade head"

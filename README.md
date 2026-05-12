@@ -44,7 +44,16 @@ fly deploy                               # deploy app + scheduled machines
 
 ## Deployment
 
-Hosted on Fly.io. Two scheduled machines run `python -m app.generate morning` at `0 7 * * *` and `python -m app.generate evening` at `0 19 * * *` in `America/New_York`. Each cron run also refreshes the year-out movies cache used by the admin Movies page.
+Hosted on Fly.io. The daily edition is triggered from Linh's local Windows machine via Task Scheduler running `scripts/trigger_cron.ps1`, which POSTs to `/cron/{slot}` on the Fly app with the shared `CRON_SECRET`. The server then runs the same generation pipeline (`python -m app.generate <slot>`). Each cron run also refreshes the year-out movies cache used by the admin Movies page.
+
+To (re)install the local schedule, set `CRON_SECRET` for your user and register a daily task:
+
+```powershell
+[System.Environment]::SetEnvironmentVariable('CRON_SECRET', '<secret>', 'User')
+$action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\Linh\Workspace\linh-news\scripts\trigger_cron.ps1'
+$trigger = New-ScheduledTaskTrigger -Daily -At 2:00am
+Register-ScheduledTask -TaskName 'LinhNewsMorning' -Action $action -Trigger $trigger
+```
 
 ## Per-user PDF & home-page links
 

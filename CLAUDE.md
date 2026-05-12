@@ -17,7 +17,7 @@ Architecture and decisions are captured in the approved plan at `~/.claude/plans
 - LLM: Anthropic API with the `web_search_20250305` tool. Model name comes from `settings.anthropic_model`. Use prompt caching on the static `news.pr` block. The LLM returns a structured `LinhNews` object (see `app/llm_schema.py`); the server renders both the HTML page (`app/html_renderer.py`) and the PDF (`app/pdf_renderer.py`) from that data — the LLM never produces HTML.
 - PDF: WeasyPrint (system serif fonts, 15.296in × 27.193in broadsheet page, must fit one page).
 - Web: FastAPI + Jinja2 templates. Sessions via signed httponly cookie (`itsdangerous`).
-- Hosting: Fly.io app. Cron via GitHub Actions (`.github/workflows/cron.yml`) once daily at 11:00 UTC (6 AM EST / 7 AM EDT).
+- Hosting: Fly.io app. Cron is triggered from Linh's local Windows machine (Task Scheduler running `scripts/trigger_cron.ps1`), which POSTs to `/cron/{slot}` with the shared `CRON_SECRET`. There is no server-side or GitHub-Actions scheduler.
 
 ## Common commands
 
@@ -45,7 +45,7 @@ fly deploy                               # deploy app + scheduled machines
 
 Two entry points share the same generation pipeline:
 
-1. **Cron** (`0 7` and `0 19` in `America/New_York`) → Fly scheduled machine runs `python -m app.generate <slot>`.
+1. **Cron** → Linh's local Windows Task Scheduler runs `scripts/trigger_cron.ps1`, which POSTs to `/cron/{slot}` on the Fly app; the server spawns the same `python -m app.generate <slot>` subprocess that `/refresh` uses.
 2. **POST /refresh** (any authorized viewer) → server runs the same `app.generate` flow inline.
 
 Pipeline (`app/generate.py`):

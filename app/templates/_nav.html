@@ -16,7 +16,7 @@
     <div class="actions toolbar-actions">
       <a href="/" class="{% if active_nav == 'home' %}active{% endif %}">Home</a>
       {% if active_nav == 'home' %}
-        <a href="/pdf/{{ edition_date }}" class="primary">PDF</a>
+        <a href="/pdf/{{ edition_date }}{% if edition_generated_at %}?v={{ edition_generated_at }}{% endif %}" class="primary">PDF</a>
         {% if is_personalized %}
           <button id="refresh-btn" type="button"
                   {% if refresh_in_progress %}disabled{% endif %}>{% if refresh_in_progress %}Refreshing...{% else %}Refresh{% endif %}</button>

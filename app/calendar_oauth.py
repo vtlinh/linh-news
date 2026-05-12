@@ -5,6 +5,7 @@ import re
 import threading
 from datetime import UTC, date, datetime, time, timedelta
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -155,6 +156,14 @@ def _credentials(s: Session, email: str | None = None) -> Credentials:
             f"No Google OAuth row for {target}. The user must sign in (and re-consent) "
             f"so a refresh token gets captured."
         )
+    if row.revoked_at is not None:
+        # Token was previously rejected with invalid_grant and is still
+        # marked revoked. Don't bother hitting Google again — surface the
+        # same MissingUserCredentials so require_viewer can re-consent.
+        raise MissingUserCredentials(
+            f"Refresh token for {target} is marked revoked since "
+            f"{row.revoked_at.isoformat()}; user must re-consent."
+        )
     creds = Credentials(
         token=None,
         refresh_token=row.refresh_token,
@@ -163,7 +172,28 @@ def _credentials(s: Session, email: str | None = None) -> Credentials:
         token_uri="https://oauth2.googleapis.com/token",
         scopes=[CALENDAR_SCOPE],
     )
-    creds.refresh(GoogleRequest())
+    try:
+        creds.refresh(GoogleRequest())
+    except RefreshError as e:
+        # Google returns invalid_grant when the user has revoked access or
+        # the refresh token has been invalidated (e.g. password change,
+        # 6-month inactivity). The stored token will never work again —
+        # mark the row revoked so require_viewer bounces the user to
+        # OAuth re-consent and the admin Users page shows the disconnect.
+        if "invalid_grant" in str(e):
+            from datetime import UTC, datetime
+
+            _log.warning(
+                "Refresh token for %s rejected (invalid_grant); marking "
+                "google_oauth row revoked so the user is asked to reconnect.",
+                target,
+            )
+            row.revoked_at = datetime.now(UTC)
+            s.commit()
+            raise MissingUserCredentials(
+                f"Refresh token for {target} was revoked; user must re-consent."
+            ) from e
+        raise
     return creds
 
 

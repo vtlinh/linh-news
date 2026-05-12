@@ -40,7 +40,16 @@
         <td>
           {{ u.email }}{% if u.is_admin %} <small>(admin)</small>{% endif %}
         </td>
-        <td align="center">{% if u.signed_in %}✓{% else %}—{% endif %}</td>
+        <td align="center">
+          {% if u.disconnected %}
+            <span style="color:#a00; font-weight:600;"
+                  title="Google rejected the stored refresh token (invalid_grant). The user must sign in again to reconnect.">Disconnected</span>
+          {% elif u.signed_in %}
+            ✓
+          {% else %}
+            —
+          {% endif %}
+        </td>
         <td align="center">
           <input type="checkbox" class="personalized-toggle"
                  {% if u.personalized_enabled or u.is_admin %}checked{% endif %}
@@ -51,7 +60,7 @@
           <code class="pdf-token" style="font-size:11px; word-break:break-all;">{{ u.pdf_token }}</code>
         </td>
         <td align="center" style="display:flex; gap:6px; justify-content:center; flex-wrap:wrap;">
-          {% if u.signed_in and (u.personalized_enabled or u.is_admin) %}
+          {% if u.signed_in and not u.disconnected and (u.personalized_enabled or u.is_admin) %}
             <button type="button" class="refresh-now">Refresh</button>
           {% endif %}
           <button type="button" class="regen-token" title="Generate a new PDF token, invalidating the old one.">New token</button>

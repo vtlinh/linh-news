@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
 
+import pytest
+from google.auth.exceptions import RefreshError
+from sqlalchemy import select
+
 from app import calendar_oauth
+from app.db import GoogleOAuth
 
 
 def _fake_service_with_events(events_by_cal: dict[str, list[dict]]):
@@ -96,6 +101,101 @@ def test_dorchester_filters_other_grades(monkeypatch):
     assert calendar_oauth.is_filtered(cn, "Spirit Week") is False
     # Other calendars are unaffected by the grade filter.
     assert calendar_oauth.is_filtered("Linh calendar", "3rd Grade Field Trip") is False
+
+
+def test_credentials_marks_revoked_on_invalid_grant(monkeypatch, db_session):
+    """A revoked refresh token (Google returns invalid_grant) stamps
+    ``revoked_at`` on the google_oauth row and surfaces
+    MissingUserCredentials so require_viewer can bounce the user through
+    re-consent on their next page load. The row itself is preserved so
+    the admin Users page can show a "Disconnected" badge."""
+    email = "ghost@example.com"
+    db_session.add(
+        GoogleOAuth(
+            email=email,
+            refresh_token="revoked",
+            client_id="cid",
+            client_secret="csec",
+            created_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    def boom(self, request):
+        raise RefreshError("invalid_grant: Token has been expired or revoked.")
+
+    monkeypatch.setattr(
+        "google.oauth2.credentials.Credentials.refresh", boom, raising=True
+    )
+
+    with pytest.raises(calendar_oauth.MissingUserCredentials):
+        calendar_oauth._credentials(db_session, email)
+
+    row = db_session.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == email)
+    ).scalar_one()
+    assert row.revoked_at is not None
+
+
+def test_credentials_short_circuits_already_revoked(monkeypatch, db_session):
+    """A row already flagged ``revoked_at`` skips the Google round-trip
+    and raises MissingUserCredentials directly. ``creds.refresh`` must
+    never be called for a known-dead token."""
+    email = "already-dead@example.com"
+    db_session.add(
+        GoogleOAuth(
+            email=email,
+            refresh_token="dead",
+            client_id="cid",
+            client_secret="csec",
+            created_at=datetime.now(UTC),
+            revoked_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    called = []
+
+    def boom(self, request):
+        called.append(1)
+
+    monkeypatch.setattr(
+        "google.oauth2.credentials.Credentials.refresh", boom, raising=True
+    )
+
+    with pytest.raises(calendar_oauth.MissingUserCredentials):
+        calendar_oauth._credentials(db_session, email)
+    assert called == []
+
+
+def test_credentials_keeps_row_on_other_refresh_errors(monkeypatch, db_session):
+    """Transient refresh errors (network, 5xx) must NOT delete the row —
+    only ``invalid_grant`` means the token is permanently dead."""
+    email = "transient@example.com"
+    db_session.add(
+        GoogleOAuth(
+            email=email,
+            refresh_token="still-good",
+            client_id="cid",
+            client_secret="csec",
+            created_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    def boom(self, request):
+        raise RefreshError("internal_failure: temporary server error")
+
+    monkeypatch.setattr(
+        "google.oauth2.credentials.Credentials.refresh", boom, raising=True
+    )
+
+    with pytest.raises(RefreshError):
+        calendar_oauth._credentials(db_session, email)
+    row = db_session.execute(
+        select(GoogleOAuth).where(GoogleOAuth.email == email)
+    ).scalar_one_or_none()
+    assert row is not None
 
 
 def test_list_calendars_returns_normalized(monkeypatch, db_session):

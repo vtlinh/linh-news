@@ -78,6 +78,10 @@ def _upsert_google_oauth(s: Session, email: str, refresh_token: str | None) -> N
         row.refresh_token = refresh_token
         row.client_id = settings_obj.google_client_id
         row.client_secret = settings_obj.google_client_secret
+        # A new refresh token means the user just completed re-consent —
+        # the row is healthy again and should no longer be flagged as
+        # disconnected on the admin Users page.
+        row.revoked_at = None
     s.commit()
 
 
@@ -1306,9 +1310,11 @@ def admin_users_get(
     settings_rows = (
         s.execute(select(UserSettings).order_by(UserSettings.email)).scalars().all()
     )
-    oauth_emails = {
-        r for r in s.execute(select(GoogleOAuth.email)).scalars().all()
-    }
+    oauth_rows = s.execute(
+        select(GoogleOAuth.email, GoogleOAuth.revoked_at)
+    ).all()
+    oauth_emails = {em for em, _ in oauth_rows}
+    revoked_emails = {em for em, rev in oauth_rows if rev is not None}
     # Most recent personalized edition per user — drives "Last refreshed".
     last_refreshed_rows = s.execute(
         select(Edition.email, func.max(Edition.generated_at)).group_by(Edition.email)
@@ -1325,6 +1331,7 @@ def admin_users_get(
                 "name": r.display_name or "",
                 "is_admin": em == admin,
                 "signed_in": em in oauth_emails,
+                "disconnected": em in revoked_emails,
                 "personalized_enabled": bool(r.personalized_enabled),
                 "pdf_token": r.pdf_token or "",
                 # Emit ISO-8601 with offset so the client renders it in the
@@ -1508,6 +1515,10 @@ def admin_users_refresh(
     ).scalar_one_or_none()
     if oauth_row is None or not oauth_row.refresh_token:
         raise HTTPException(404, "User has not signed in yet.")
+    if oauth_row.revoked_at is not None:
+        raise HTTPException(
+            409, "User's Google connection was revoked — they need to sign in again."
+        )
     settings_row = s.get(UserSettings, target)
     is_personalized = bool(settings_row and settings_row.personalized_enabled)
     is_admin_target = target == _admin_email()

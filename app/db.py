@@ -251,6 +251,14 @@ class GoogleOAuth(Base):
     last_refreshed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set when Google rejects this refresh_token with invalid_grant (user
+    # revoked access, password change, 6-month inactivity, …). While set,
+    # the row is treated as if it were absent: require_viewer bounces the
+    # user to re-consent and the cron skips them. Cleared on the next
+    # successful sign-in that captures a fresh refresh token.
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class SharedEdition(Base):

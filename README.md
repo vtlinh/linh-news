@@ -44,15 +44,29 @@ fly deploy                               # deploy app + scheduled machines
 
 ## Deployment
 
-Hosted on Fly.io. The daily edition is triggered from Linh's local Windows machine via Task Scheduler running `scripts/trigger_cron.ps1`, which POSTs to `/cron/{slot}` on the Fly app with the shared `CRON_SECRET`. The server then runs the same generation pipeline (`python -m app.generate <slot>`). Each cron run also refreshes the year-out movies cache used by the admin Movies page.
+Hosted on Fly.io. The daily edition is generated on Linh's local Windows machine — not on the server — to avoid OOMing the small Fly VM during WeasyPrint. A Windows scheduled task fires `scripts/trigger_cron.ps1` every 6 hours; the script ensures the `fly proxy` to Postgres is up, then runs `uv run python -m app.generate <slot> --smart`. WeasyPrint loads its GTK/Pango/Cairo DLLs from the local MSYS2 UCRT64 install (`C:\msys64\ucrt64\bin`); `app.pdf` registers the directory via `os.add_dll_directory` at import time. The "smart" path inspects each enabled user's state for today and decides per-user whether to:
 
-To (re)install the local schedule, set `CRON_SECRET` for your user and register a daily task:
+- **skip** — today's edition already succeeded, or today already failed at the LLM stage (we don't burn another LLM call);
+- **retry without LLM** — today succeeded the LLM stage but failed downstream (image fetch / PDF render); the cached LLM output is replayed;
+- **full run** — no attempt yet today.
+
+Local prerequisites:
+
+1. **MSYS2 UCRT64** with the GTK/Pango/Cairo packages installed (default location `C:\msys64\ucrt64\bin`). Install via the MSYS2 shell: `pacman -S mingw-w64-ucrt-x86_64-pango mingw-w64-ucrt-x86_64-cairo mingw-w64-ucrt-x86_64-harfbuzz mingw-w64-ucrt-x86_64-glib2`. Override the lookup with `WEASYPRINT_DLL_DIR=<path>` if your install lives elsewhere.
+2. **fly CLI** on `PATH` (the script auto-starts `fly proxy 15432:5432 -a linh-news-db` if no process is listening on 15432).
+3. **`.env`** in the repo root with `DATABASE_URL`, `ANTHROPIC_API_KEY`, Google OAuth creds, etc.
+
+Register the scheduled task:
 
 ```powershell
-[System.Environment]::SetEnvironmentVariable('CRON_SECRET', '<secret>', 'User')
-$action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\Linh\Workspace\linh-news\scripts\trigger_cron.ps1'
-$trigger = New-ScheduledTaskTrigger -Daily -At 2:00am
-Register-ScheduledTask -TaskName 'LinhNewsMorning' -Action $action -Trigger $trigger
+$action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Users\Linh\Workspace\linh-news\scripts\trigger_cron.ps1'
+$trigger = New-ScheduledTaskTrigger -Once -At 2:00am `
+            -RepetitionInterval (New-TimeSpan -Hours 6) `
+            -RepetitionDuration (New-TimeSpan -Hours 24)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+Register-ScheduledTask -TaskName 'LinhNewsCron' -Action $action -Trigger $trigger -Settings $settings
 ```
 
 ## Per-user PDF & home-page links
@@ -68,7 +82,7 @@ Every user row carries a secret `pdf_token` (auto-minted on creation, rotatable 
 
 `/refresh` spawns a **detached subprocess** (`start_new_session=True` on POSIX, `DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP` on Windows) so the worker outlives uvicorn restarts, deploys, and crashes. Refresh state — lock, worker PID, last error, rolling 20-sample duration history — is persisted in the cache. The page polls `/editions/{date}/freshness` and reloads inline when the timestamp advances. PID-based liveness check clears the lock immediately after a VM restart instead of waiting out the 12-min stale timeout.
 
-Clicking Refresh in the UI is always scoped to the caller's own `(date, email)` edition — admin and personalized non-admin alike regenerate only their own HTML and PDF. The cron-style "all enabled users" fan-out runs only via the scheduled `/cron/{slot}` job.
+Clicking Refresh in the UI is always scoped to the caller's own `(date, email)` edition — admin and personalized non-admin alike regenerate only their own HTML and PDF. The "all enabled users" fan-out runs only via the local scheduled task (`scripts/trigger_cron.ps1` → `app.generate --smart`).
 
 ## Authorized users
 

@@ -10,6 +10,26 @@ import sys
 
 log = logging.getLogger(__name__)
 
+
+# On Windows, WeasyPrint dlopens libgobject / libpango / libcairo / libharfbuzz
+# at import time. Python 3.8+ uses safe DLL search, which means PATH alone
+# does NOT make transitive DLL deps discoverable -- we have to register the
+# directory explicitly via ``os.add_dll_directory``. The repo's local install
+# uses MSYS2's UCRT64 packages; override via ``WEASYPRINT_DLL_DIR`` env var
+# if the libs live elsewhere.
+if sys.platform == "win32":
+    _candidate = os.environ.get("WEASYPRINT_DLL_DIR") or r"C:\msys64\ucrt64\bin"
+    if os.path.isdir(_candidate):
+        try:
+            os.add_dll_directory(_candidate)
+            log.info("Registered WeasyPrint DLL directory: %s", _candidate)
+        except (OSError, AttributeError) as e:
+            log.warning(
+                "Could not register WeasyPrint DLL directory %s: %s",
+                _candidate,
+                e,
+            )
+
 # ── Word-count → fitting-font cache ─────────────────────────────────────
 # A small list of (word_count, font_pt) samples persisted in kv_cache. We
 # linearly interpolate between the two nearest samples to predict the font

@@ -1,3 +1,31 @@
+"""Print-styled HTML → single-page broadsheet PDF.
+
+The PDF is composed in five fixed regions (see ``app.pdf_renderer`` for the
+diagram). Per-region behavior:
+
+* **Top** (masthead + dateline) — rendered at a fixed body font (11pt).
+  Height is *measured* once per refresh by laying it out in a very tall
+  page and reading its natural content height.
+* **Stocks footer** — same: fixed 10pt font, natural height measured once.
+* **Side rail** — own font binary-searched in ``[FONT_MIN, FONT_MAX]`` at
+  0.1pt; when even the floor doesn't fit, drop a movie card, then a
+  calendar event, retry. If the caller passed a ``cached_rail`` (same-day
+  refresh) we skip this entirely and use the cached inner HTML + font.
+* **Upper news band** — 70% of the body height, 4 cols, own font binary
+  search. Drops one article (then one whole section) on unfittable MIN.
+* **Lower news band** — 30% of the body height, otherwise identical.
+
+Each band/region is fitted *independently* in its own minimal WeasyPrint
+render where the page size equals the region's allocated box. After all
+five regions have settled, ``app.pdf_renderer.assemble_final_html`` puts
+them back together with absolute heights + per-region font sizes and we
+render once more to produce the actual PDF.
+
+The 1-section case is special: the 70/30 split is meaningless with one
+section, so we raise ``PdfSkipped`` rather than producing a degenerate
+document. The caller stores the HTML edition but skips the PDF.
+"""
+
 from __future__ import annotations
 
 import contextlib
@@ -7,6 +35,19 @@ import math
 import os
 import re
 import sys
+import time
+from dataclasses import dataclass
+
+from app.pdf_renderer import (
+    AssemblyLayout,
+    PdfParts,
+    assemble_final_html,
+    build_single_region_html,
+    news_region_css,
+    rail_region_css,
+    stocks_region_css,
+    top_region_css,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,91 +71,145 @@ if sys.platform == "win32":
                 e,
             )
 
-# ── Word-count → fitting-font cache ─────────────────────────────────────
-# A small list of (word_count, font_pt) samples persisted in kv_cache. We
-# linearly interpolate between the two nearest samples to predict the font
-# size that should fit a new render. The cache is bounded so we don't grow
-# without limit.
-_FONT_CACHE_KEY = "linh_news:pdf_font_cache"
-_FONT_CACHE_MAX_SAMPLES = 30
-# Body font window: 10pt floor up to 20pt ceiling. The fit loop
-# binary-searches inside this window and tries to grow the body font as
-# much as 1-page layout allows. _BLANK_TARGET=0 makes the grow-to-fill
-# step always run when the page isn't completely full, so we use the
-# available 20pt ceiling whenever content permits.
+
+# ── Page geometry (broadsheet) ────────────────────────────────────────────
+# 2560 × 1440 px portrait at 94.14 PPI.
+_PAGE_W_IN = 15.296
+_PAGE_H_IN = 27.193
+_PAGE_MARGIN_IN = 0.4
+_RAIL_W_IN = 2.4
+_CONTENT_GAP_IN = 14 / 72  # 14pt → ≈ 0.194in
+_UPPER_BAND_RATIO = 0.70
+# Fixed body fonts for the masthead/dateline and stocks ribbon. These
+# don't participate in the binary search — their *heights* are measured
+# at these fonts so the news/rail regions know how much vertical space
+# they get.
+_TOP_FONT_PT = 11.0
+_STOCKS_FONT_PT = 10.0
+_PX_PER_IN = 96.0  # CSS pixels — used to convert WeasyPrint's box-tree
+# coordinates (CSS px) back to inches.
+
+
+# ── Font window ──────────────────────────────────────────────────────────
 _FONT_MIN = 10.0
 _FONT_MAX = 20.0
 _FONT_STEP = 0.1
 _DEFAULT_FONT_GUESS = 14.0
-_BLANK_TARGET = 0.01  # grow-to-fill until fill_ratio >= 0.99
 
 
-def _round_half(x: float) -> float:
-    """Round to nearest 0.5pt (used for the bumped/fallback attempts)."""
+# ── Cache (namespaced per region, JSON in kv_cache) ──────────────────────
+# Old single-key schema (v1) is read once, replicated into v2 under each
+# region name, then deleted. Subsequent runs read v2 directly.
+_FONT_CACHE_V1_KEY = "linh_news:pdf_font_cache"
+_FONT_CACHE_V2_KEY = "linh_news:pdf_font_cache_v2"
+_FONT_CACHE_REGIONS = ("upper-news", "lower-news", "rail")
+_FONT_CACHE_MAX_SAMPLES = 30
+
+
+def _round_step(x: float) -> float:
     return round(x / _FONT_STEP) * _FONT_STEP
 
 
-def _floor_half(x: float) -> float:
-    """Round DOWN to nearest 0.5pt — used for the first attempt so the
-    'predicted - 0.2pt' conservative margin isn't lost to rounding."""
+def _floor_step(x: float) -> float:
     return math.floor(x / _FONT_STEP) * _FONT_STEP
 
 
 def _count_words(html: str) -> int:
-    """Word count of the body text only (strip HTML tags first)."""
     text = re.sub(r"<[^>]+>", " ", html)
     return len(text.split())
 
 
-def _load_font_samples() -> list[tuple[int, float]]:
+def _migrate_cache_v1_if_needed(backend) -> None:
+    """If a v1 cache exists (flat ``[[w, pt], …]`` under the old key)
+    and v2 does not, seed v2 with the v1 samples for every region and
+    delete v1. No-op on subsequent runs.
+    """
     try:
-        from app import cache
-
-        raw = cache._get_backend().get(_FONT_CACHE_KEY)  # noqa: SLF001
-        if not raw:
-            return []
-        items = json.loads(raw)
-        out: list[tuple[int, float]] = []
+        raw_v2 = backend.get(_FONT_CACHE_V2_KEY)
+        if raw_v2:
+            return
+        raw_v1 = backend.get(_FONT_CACHE_V1_KEY)
+        if not raw_v1:
+            return
+        items = json.loads(raw_v1)
+        legacy: list[tuple[int, float]] = []
         for it in items:
             try:
                 w, f = int(it[0]), float(it[1])
-                # Skip stale samples below the current floor — they would
-                # otherwise pin the predicted seed to a too-small font.
+                if w > 0 and _FONT_MIN <= f <= _FONT_MAX:
+                    legacy.append([w, f])  # type: ignore[arg-type]
+            except (TypeError, ValueError, IndexError):
+                continue
+        if not legacy:
+            backend.set(_FONT_CACHE_V2_KEY, json.dumps({}))
+            backend.set(_FONT_CACHE_V1_KEY, "")
+            return
+        v2 = {region: list(legacy) for region in _FONT_CACHE_REGIONS}
+        backend.set(_FONT_CACHE_V2_KEY, json.dumps(v2))
+        backend.set(_FONT_CACHE_V1_KEY, "")  # tombstone
+        log.info(
+            "PDF font cache: migrated %d v1 samples into v2 under %d regions",
+            len(legacy),
+            len(_FONT_CACHE_REGIONS),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("PDF font cache migration v1→v2 failed; starting fresh")
+
+
+def _load_font_samples(region: str) -> list[tuple[int, float]]:
+    try:
+        from app import cache
+
+        backend = cache._get_backend()  # noqa: SLF001
+        _migrate_cache_v1_if_needed(backend)
+        raw = backend.get(_FONT_CACHE_V2_KEY)
+        if not raw:
+            return []
+        store = json.loads(raw)
+        if not isinstance(store, dict):
+            return []
+        out: list[tuple[int, float]] = []
+        for it in store.get(region, []) or []:
+            try:
+                w, f = int(it[0]), float(it[1])
                 if w > 0 and _FONT_MIN <= f <= _FONT_MAX:
                     out.append((w, f))
             except (TypeError, ValueError, IndexError):
                 continue
         return out
-    except Exception:  # noqa: BLE001 — cache read should never block PDF gen
-        log.exception("Could not load PDF font cache; starting from empty")
+    except Exception:  # noqa: BLE001
+        log.exception("Could not load PDF font cache region=%s", region)
         return []
 
 
-def _save_font_sample(word_count: int, font_pt: float) -> None:
+def _save_font_sample(region: str, word_count: int, font_pt: float) -> None:
     try:
         from app import cache
 
-        samples = _load_font_samples()
-        # Bucket by 100 words: latest sample in each bucket wins. Keeps
-        # entries diverse without unbounded growth.
+        backend = cache._get_backend()  # noqa: SLF001
+        _migrate_cache_v1_if_needed(backend)
+        raw = backend.get(_FONT_CACHE_V2_KEY)
+        store = json.loads(raw) if raw else {}
+        if not isinstance(store, dict):
+            store = {}
+        samples = store.get(region) or []
         bucket = (word_count // 100) * 100
-        samples = [s for s in samples if (s[0] // 100) * 100 != bucket]
-        samples.append((word_count, font_pt))
-        samples.sort(key=lambda s: s[0])
+        samples = [s for s in samples if (int(s[0]) // 100) * 100 != bucket]
+        samples.append([word_count, font_pt])
+        samples.sort(key=lambda s: int(s[0]))
         if len(samples) > _FONT_CACHE_MAX_SAMPLES:
             samples = samples[-_FONT_CACHE_MAX_SAMPLES:]
-        cache._get_backend().set(  # noqa: SLF001
-            _FONT_CACHE_KEY, json.dumps(samples)
-        )
+        store[region] = samples
+        backend.set(_FONT_CACHE_V2_KEY, json.dumps(store))
     except Exception:  # noqa: BLE001
-        log.exception("Could not save PDF font cache sample")
+        log.exception("Could not save PDF font cache region=%s", region)
 
 
-def _predict_font(word_count: int, samples: list[tuple[int, float]]) -> float:
-    """Linear-interpolate font size from cached samples."""
-    if not samples:
+def _predict_font(region: str, word_count: int) -> float:
+    s = _load_font_samples(region)
+    if not s:
         return _DEFAULT_FONT_GUESS
-    s = sorted(samples, key=lambda x: x[0])
+    s = sorted(s, key=lambda x: x[0])
     if word_count <= s[0][0]:
         return s[0][1]
     if word_count >= s[-1][0]:
@@ -128,10 +223,10 @@ def _predict_font(word_count: int, samples: list[tuple[int, float]]) -> float:
     return s[-1][1]
 
 
+# ── Placeholder + native lib loader ──────────────────────────────────────
+
+
 def _ensure_dll_path() -> None:
-    """On Windows, Python 3.8+ does not load DLLs from PATH. WeasyPrint needs
-    Pango/Cairo/etc. — explicitly add common GTK runtime locations so cffi
-    can resolve them. No-op on non-Windows."""
     if sys.platform != "win32":
         return
     candidates = [
@@ -145,9 +240,6 @@ def _ensure_dll_path() -> None:
                 os.add_dll_directory(d)
 
 
-# Minimal valid one-page PDF used as a placeholder when the real renderer is
-# unavailable (e.g. local dev on Windows without GTK/Pango). Production
-# always has WeasyPrint's native deps installed via the Dockerfile.
 _PLACEHOLDER_PDF = (
     b"%PDF-1.4\n"
     b"1 0 obj <<>> endobj\n"
@@ -157,8 +249,19 @@ _PLACEHOLDER_PDF = (
     b"trailer << /Root 2 0 R >>\n%%EOF\n"
 )
 
+
+class PdfSkipped(Exception):
+    """Raised when the structured response is shaped such that producing
+    a meaningful PDF isn't possible (currently: exactly 1 news section,
+    which has no defensible 70/30 split). The caller catches this and
+    stores the HTML edition without a PDF column."""
+
+
+# ── Drop logic (per-band news + per-rail) ────────────────────────────────
+
+
 # Per news.pr spec: sections to drop first when content is too dense.
-# Each entry is a regex matched against the <h2> text of the section.
+# Each entry is a regex matched against the <h2> text of a section.
 # Lowest priority first.
 _DROP_PRIORITY = [
     re.compile(r"movie|film", re.IGNORECASE),
@@ -172,14 +275,12 @@ _DROP_PRIORITY = [
 
 
 def _parse(html: str):
-    """Parse with BeautifulSoup using the stdlib parser (no extra deps)."""
     from bs4 import BeautifulSoup
+
     return BeautifulSoup(html, "html.parser")
 
 
 def _drop_rank(title: str) -> int:
-    """Lower rank = drop first. Sections not in _DROP_PRIORITY get the
-    highest rank (drop last)."""
     title_l = title.lower()
     for i, p in enumerate(_DROP_PRIORITY):
         if p.search(title_l):
@@ -189,89 +290,17 @@ def _drop_rank(title: str) -> int:
     return len(_DROP_PRIORITY)
 
 
-def _strip_news_flow(html: str) -> str:
-    """Empty the contents of ``<div class="flow">…</div>``. Phase 1 fits
-    rail + chrome alone; the flow is restored before Phase 2."""
-    soup = _parse(html)
-    flow = soup.find("div", class_="flow")
-    if flow is None:
-        return html
-    flow.clear()
-    return str(soup)
-
-
-def _extract_rail_blocks(html: str) -> dict[str, str]:
-    """Pull the calendar and movies inner-HTML out of a (possibly Phase-1-
-    trimmed) PDF document. Used to persist the rail that *actually fit*,
-    not the original pre-trim rail HTML.
-
-    Returns ``{"calendar_html": str, "movies_html": str}`` — either may be
-    "" if that block isn't present. Identifies blocks by the presence of
-    ``cal-event``/``cal-date`` (calendar) vs ``movie-card`` (movies)
-    descendants, so the calendar-first / movies-second ordering in
-    pdf_renderer.build_pdf_html doesn't have to be assumed.
-    """
-    soup = _parse(html)
-    out = {"calendar_html": "", "movies_html": ""}
-    for block in soup.find_all("div", class_="rail-block"):
-        is_movies = block.find(class_="movie-card") is not None
-        is_calendar = (
-            block.find(class_="cal-event") is not None
-            or block.find(class_="cal-date") is not None
-        )
-        inner = "".join(str(c) for c in block.children)
-        if is_movies and not is_calendar:
-            out["movies_html"] = inner
-        elif is_calendar and not is_movies:
-            out["calendar_html"] = inner
-    return out
-
-
-def _drop_one_movie(html: str) -> str | None:
-    """Strip the last movie card from the rail. Returns None if there are
-    no movie cards left. Each card has ``class="movie-card"``; its title
-    sits in a child with ``class="movie-title"``."""
-    soup = _parse(html)
-    cards = soup.find_all("div", class_="movie-card")
-    if not cards:
-        return None
-    last = cards[-1]
-    title_el = last.find(class_="movie-title")
-    title = (title_el.get_text(strip=True) if title_el else "?")[:60]
-    log.info("PDF: dropping movie %r (%d → %d cards)", title, len(cards), len(cards) - 1)
-    last.decompose()
-    return str(soup)
-
-
-def _drop_one_calendar_event(html: str) -> str | None:
-    """Strip the last calendar event row (``class="cal-event"``) from the
-    rail. Returns None if there are none left."""
-    soup = _parse(html)
-    events = soup.find_all("div", class_="cal-event")
-    if not events:
-        return None
-    last = events[-1]
-    text = last.get_text(strip=True)[:60]
-    log.info("PDF: dropping calendar event %r (%d → %d events)",
-             text, len(events), len(events) - 1)
-    last.decompose()
-    return str(soup)
-
-
-def _section_groups(soup) -> list[tuple[object, list[object], str]]:
-    """Bucket the news flow's flat ``<section>`` siblings into groups —
-    each ``news-header`` collects the following ``news-story`` siblings.
-
-    Returns ``[(header_section, [story_sections], title), …]``.
-    """
-    flow = soup.find("div", class_="flow")
-    if flow is None:
-        return []
+def _band_section_groups(soup):
+    """Group a band's flat ``<section>`` siblings into header + stories
+    buckets. The band root has no wrapper div (it's the inner HTML of the
+    band) — siblings are the direct children of the parsed fragment."""
     groups: list[tuple[object, list[object], str]] = []
     current_header = None
     current_stories: list[object] = []
     current_title = ""
-    for sec in flow.find_all("section", recursive=False):
+    for sec in soup.find_all("section", recursive=True):
+        # Only top-level news-header / news-story (subsections aren't
+        # nested as <section>, so this works.)
         classes = sec.get("class") or []
         if "news-header" in classes:
             if current_header is not None:
@@ -287,24 +316,25 @@ def _section_groups(soup) -> list[tuple[object, list[object], str]]:
     return groups
 
 
-def _drop_one_article(html: str) -> str | None:
-    """Drop one news story from the section with the most stories
-    (tiebreak by ``_DROP_PRIORITY``, lowest priority first). The chosen
-    section's *last* story is the one removed. Always keeps at least 1
-    story per section so headers don't end up orphaned."""
-    soup = _parse(html)
-    groups = _section_groups(soup)
+def _drop_one_article(band_html: str) -> str | None:
+    """Drop the last story from the section with the most stories (tiebreak
+    by ``_DROP_PRIORITY``, lowest priority first). Keeps at least 1 story
+    per section so headers don't end up orphaned. Returns None if no
+    section has ≥ 2 stories."""
+    soup = _parse(band_html)
+    groups = _band_section_groups(soup)
     candidates = [g for g in groups if len(g[1]) >= 2]
     if not candidates:
         return None
     candidates.sort(key=lambda g: (-len(g[1]), _drop_rank(g[2])))
     _header, stories, title = candidates[0]
     last = stories[-1]
-    log.info("PDF: dropping last story of %r (%d → %d stories)",
-             title[:60], len(stories), len(stories) - 1)
-    # Also drop the sep-story rule immediately before this story so we
-    # don't leave an orphan 1/3 separator floating above whatever comes
-    # next (next section's header, etc.).
+    log.info(
+        "PDF: dropping last story of %r (%d → %d stories)",
+        title[:60],
+        len(stories),
+        len(stories) - 1,
+    )
     prev = last.find_previous_sibling()
     if prev is not None and "sep-story" in (prev.get("class") or []):
         prev.decompose()
@@ -312,24 +342,23 @@ def _drop_one_article(html: str) -> str | None:
     return str(soup)
 
 
-def _drop_one_section(html: str) -> str | None:
-    """Last-resort: drop an entire news category (header + all stories)
-    by ``_DROP_PRIORITY``. Also removes the preceding ``sep-group`` rule
-    so the flow doesn't end with a doubled separator."""
-    soup = _parse(html)
-    groups = _section_groups(soup)
+def _drop_one_section(band_html: str) -> str | None:
+    """Last-resort: drop an entire section (header + all stories) by
+    ``_DROP_PRIORITY``. Also removes the preceding ``sep-group`` rule so
+    the band doesn't start with a doubled separator."""
+    soup = _parse(band_html)
+    groups = _band_section_groups(soup)
     if not groups:
         return None
 
     def _kill(group_idx: int, reason: str) -> str:
         header, stories, title = groups[group_idx]
-        # Drop the preceding sep-group div so we don't end up with two
-        # separators in a row.
         prev = header.find_previous_sibling()
         if prev is not None and "sep-group" in (prev.get("class") or []):
             prev.decompose()
-        log.info("PDF: dropping category %r (header + %d stories) — %s",
-                 title[:60], len(stories), reason)
+        log.info(
+            "PDF: dropping category %r (header + %d stories) — %s", title[:60], len(stories), reason
+        )
         for s in stories:
             s.decompose()
         header.decompose()
@@ -342,76 +371,71 @@ def _drop_one_section(html: str) -> str | None:
     return _kill(len(groups) - 1, "last-resort: no priority match")
 
 
-def html_to_pdf(html: str, *, skip_phase1: bool = False) -> bytes:
-    """Back-compat wrapper that returns only the PDF bytes."""
-    pdf_bytes, _, _ = html_to_pdf_ex(html, skip_phase1=skip_phase1)
-    return pdf_bytes
+def _drop_one_movie(rail_html: str) -> str | None:
+    soup = _parse(rail_html)
+    cards = soup.find_all("div", class_="movie-card")
+    if not cards:
+        return None
+    last = cards[-1]
+    title_el = last.find(class_="movie-title")
+    title = (title_el.get_text(strip=True) if title_el else "?")[:60]
+    log.info("PDF: dropping movie %r (%d → %d cards)", title, len(cards), len(cards) - 1)
+    last.decompose()
+    return str(soup)
 
 
-def html_to_pdf_ex(
-    html: str,
-    *,
-    skip_phase1: bool = False,
-) -> tuple[bytes, float | None, dict[str, str] | None]:
-    """Render print-styled HTML to a single-page 12×22 in PDF using WeasyPrint.
+def _drop_one_calendar_event(rail_html: str) -> str | None:
+    soup = _parse(rail_html)
+    events = soup.find_all("div", class_="cal-event")
+    if not events:
+        return None
+    last = events[-1]
+    text = last.get_text(strip=True)[:60]
+    log.info("PDF: dropping calendar event %r (%d → %d events)", text, len(events), len(events) - 1)
+    last.decompose()
+    return str(soup)
 
-    Returns ``(pdf_bytes, phase1_font_pt, trimmed_rail)``.
-      * ``phase1_font_pt`` — body font Phase 1 landed on (proof-of-fit for
-        the cached rail). ``None`` when Phase 1 was skipped or the
-        placeholder PDF is returned.
-      * ``trimmed_rail`` — ``{"calendar_html", "movies_html"}`` for the rail
-        that *actually fit* at MIN font, extracted from the working
-        document after Phase 1's drop loop. The caller should persist
-        this — NOT the original pre-trim rail strings — otherwise reusing
-        the cache with ``skip_phase1=True`` will re-introduce content that
-        previously had to be dropped, and Phase 2 (which only trims news,
-        never rail) cannot recover. ``None`` when Phase 1 was skipped or
-        the placeholder PDF is returned.
 
-    ``skip_phase1`` (optional): when the caller already has a cached rail
-    that previously passed Phase 1, pass ``True`` to skip the rail-fit
-    verification + trim step entirely. Phase 2 (full-doc font search) is
-    unaffected and always runs normally.
+def _extract_rail_blocks(rail_inner_html: str) -> dict[str, str]:
+    """Pull calendar/movies inner HTML out of a (possibly trimmed) rail
+    fragment. Used to persist the rail that *actually fit* so a same-day
+    refresh can skip the rail fit entirely."""
+    soup = _parse(rail_inner_html)
+    out = {"calendar_html": "", "movies_html": ""}
+    for block in soup.find_all("div", class_="rail-block"):
+        is_movies = block.find(class_="movie-card") is not None
+        is_calendar = (
+            block.find(class_="cal-event") is not None or block.find(class_="cal-date") is not None
+        )
+        inner = "".join(str(c) for c in block.children)
+        if is_movies and not is_calendar:
+            out["movies_html"] = inner
+        elif is_calendar and not is_movies:
+            out["calendar_html"] = inner
+    return out
 
-    Smart cache-driven algorithm (typical: 1 render, sometimes 2):
-    1. Count words; look up the (words → font-size) cache and linearly
-       interpolate a predicted font that should fit on one page.
-    2. Render at ``predicted - 0.2pt`` (slightly conservative).
-       - If the result spills to >1 page, fall back to the legacy binary
-         search to find any fitting font.
-    3. Measure how much of the first page is blank.
-       - If blank ≤ 20%, accept this render. Save the sample.
-       - If blank > 20%, estimate how much bigger the font should be
-         (fill ratio scales ≈ font², so new = old / sqrt(1 - blank)),
-         render once more.
-    4. If the second (bigger) render still fits AND has lower blank than
-       the first, use it. Otherwise fall back to the first render.
-    5. If the predicted font overflows AND no smaller font fits either,
-       drop the lowest-priority section (news.pr spec) and retry.
 
-    Falls back to a tiny placeholder PDF if WeasyPrint's native libs aren't
-    installed (typical on a Windows dev box).
+# ── Region fit primitive ─────────────────────────────────────────────────
+
+
+@dataclass
+class _FitResult:
+    inner_html: str
+    font_pt: float
+    blank_ratio: float
+
+
+def _make_url_fetcher(fetch_cache: dict[str, dict]):
+    """Build a WeasyPrint url_fetcher that caches successful fetches for the
+    duration of one PDF render call. Each region's fit binary-search
+    re-renders the same content many times — caching avoids re-downloading
+    masthead font + movie backdrops on every render.
     """
-    try:
-        _ensure_dll_path()
-        from weasyprint import CSS, HTML
-    except (OSError, ImportError) as e:
-        log.warning("WeasyPrint native libs unavailable, using placeholder PDF: %s", e)
-        return _PLACEHOLDER_PDF, None, None
-
     from weasyprint import default_url_fetcher
 
     ua = "Linh-News/1.0 (https://github.com/vtlinh/linh-news; vtlinh87+linhnews@gmail.com)"
 
-    # Per-call URL cache. The fit loop renders the same document many times
-    # at different font sizes, and re-runs after every drop. Without this
-    # cache, each render re-downloads the masthead font + every movie
-    # backdrop, adding ~9 HTTPS round-trips per render — minutes of
-    # latency over a typical 20-render fit. Cache only successful fetches
-    # so transient failures still get retried.
-    fetch_cache: dict[str, dict] = {}
-
-    def _url_fetcher(url, *args, **kwargs):
+    def _fetch(url, *args, **kwargs):
         is_data = url.startswith("data:")
         if not is_data and url in fetch_cache:
             return fetch_cache[url]
@@ -445,225 +469,568 @@ def html_to_pdf_ex(
                 log.warning("WeasyPrint fetch FAILED: %s — %s", url[:200], e)
             raise
 
-    def _make_css(base_pt: float) -> CSS:
-        # Masthead size: 12x base, cap 115.2pt (-20% from the previous 15x/144pt).
-        h1_pt = min(base_pt * 12.0, 115.2)
-        # 2560 × 1440 px portrait at 94.14 PPI ⇒ 15.296in × 27.193in.
-        # Stays in portrait orientation (taller than wide).
-        # Append "Noto Color Emoji" (COLRv1) as the last fallback on every
-        # body/heading rule so emoji codepoints render in color via the
-        # Debian fonts-noto-color-emoji package installed in the image,
-        # rather than falling back to a monochrome glyph from DejaVu.
-        return CSS(
-            string=f"""
-        @page {{ size: 15.296in 27.193in; margin: 0.4in; }}
-        /* The pdf_renderer's embedded style block declares a "LinhEmoji"
-           @font-face with unicode-range covering emoji blocks — that's
-           what handles colour glyphs. Putting "Noto Color Emoji" or any
-           emoji family directly in this body stack causes WeasyPrint to
-           use the emoji font for ALL text (Times New Roman never gets
-           applied, bold collapses), so we keep it serif-only here. */
-        html, body {{ font-family: "Times New Roman", Georgia, serif; }}
-        body {{ font-size: {base_pt:.2f}pt !important; line-height: 1.15 !important; }}
-        /* No emoji families here — WeasyPrint drops @font-face Chomsky
-           when emoji families share the stack. Masthead text has no
-           emoji glyphs. */
-        h1 {{ font-size: {h1_pt:.2f}pt !important; margin: 0 0 2pt !important;
-              text-align: center; font-weight: normal;
-              font-family: "Linh Times Masthead", "Times New Roman",
-                           Georgia, serif; }}
-        h2 {{ font-size: {base_pt * 1.375:.2f}pt !important; margin: 4pt 0 2pt !important;
-              font-weight: bold; }}
-        h3, h4, h5, h6 {{ font-size: {base_pt * 1.125:.2f}pt !important;
-              margin: 3pt 0 1pt !important; font-weight: bold; }}
-        p, li {{ margin: 0 0 3pt !important; font-size: {base_pt:.2f}pt !important;
-                 line-height: 1.15 !important; }}
-        small {{ font-size: {base_pt * 0.875:.2f}pt !important; }}
-        /* Rail font sizes scale with the fit-chosen base_pt so the rail
-           matches the news flow's density. Date/title get a +10% boost
-           over event/description body text. */
-        .cal-event, .movie-desc {{ font-size: {base_pt:.2f}pt !important; }}
-        .cal-date, .movie-title {{ font-size: {base_pt * 1.1:.2f}pt !important; }}
-        hr {{ display: none !important; }}
-        br + br {{ display: none !important; }}
-        img {{ max-width: 100% !important; }}
-        /* Crush spacing in the news flow only — applying this globally
-           also slammed every div in the rail (every calendar row, every
-           movie card sub-div) and bloated the rail by 1-2in of phantom
-           margin, which made Phase 1 over-trim. */
-        .flow section, .flow article, .flow header, .flow footer, .flow div {{
-            margin: 0 0 3pt !important;
-        }}
-        """
-        )
+    return _fetch
 
-    # ── render-and-measure helpers ──────────────────────────────────────
-    def _render_and_measure(content: str, font_pt: float) -> tuple[bytes, int, float]:
-        """Render at ``font_pt`` and return (pdf_bytes, page_count, fill_ratio).
 
-        ``fill_ratio`` is the fraction of the first page covered by content
-        (0..1). 1.0 means full page; 0.5 means half empty. For >1 page outputs
-        the ratio is reported as 1.0 (overflow == "full and then some").
-        """
-        css = _make_css(font_pt)
-        doc = HTML(string=content, url_fetcher=_url_fetcher).render(stylesheets=[css])
-        pdf_bytes = doc.write_pdf()
-        n_pages = len(doc.pages)
-        if n_pages == 0:
-            return pdf_bytes, 0, 0.0
-        if n_pages > 1:
-            return pdf_bytes, n_pages, 1.0
-        page = doc.pages[0]
-        page_h = float(getattr(page, "height", 0) or 0)
-        if page_h <= 0:
-            return pdf_bytes, n_pages, 0.0
-        # WeasyPrint's `_page_box` is the root box of the page; walking its
-        # children gives every laid-out box's position+height. The deepest
-        # bottom edge is our content extent.
-        root = getattr(page, "_page_box", None)
-        if root is None:
-            return pdf_bytes, n_pages, 0.0
+def _find_box_by_tag(root, tag: str):
+    """Depth-first search for the first laid-out box whose element_tag
+    matches ``tag`` (e.g. 'body', 'html'). WeasyPrint annotates content
+    boxes with ``element_tag``; structural boxes (PageBox, MarginBox) do
+    not have a matching tag, so this skips them naturally."""
+    if getattr(root, "element_tag", None) == tag:
+        return root
+    for child in getattr(root, "children", ()) or ():
+        found = _find_box_by_tag(child, tag)
+        if found is not None:
+            return found
+    return None
 
-        deepest = 0.0
 
-        def _walk(box: object) -> None:
-            nonlocal deepest
-            try:
-                y = float(getattr(box, "position_y", 0) or 0)
-                h = float(getattr(box, "height", 0) or 0)
+def _deepest_descendant_bottom(box) -> float:
+    """Return the deepest ``position_y + height`` reached by any descendant
+    of ``box`` (in WeasyPrint CSS-px units). Used for both fit checks
+    (compare to page height) and natural-height measurement (subtract the
+    container's own position_y to get content height)."""
+    deepest = 0.0
+    try:
+        y = float(getattr(box, "position_y", 0) or 0)
+        h = float(getattr(box, "height", 0) or 0)
+        deepest = y + h
+    except (TypeError, ValueError):
+        pass
+
+    def _walk(b):
+        nonlocal deepest
+        try:
+            y = float(getattr(b, "position_y", 0) or 0)
+            h = float(getattr(b, "height", 0) or 0)
+            if h > 0 or y > 0:
                 bottom = y + h
                 if bottom > deepest:
                     deepest = bottom
-            except (TypeError, ValueError):
-                pass
-            for child in getattr(box, "children", ()) or ():
-                _walk(child)
+        except (TypeError, ValueError):
+            pass
+        for child in getattr(b, "children", ()) or ():
+            _walk(child)
 
-        _walk(root)
-        return pdf_bytes, n_pages, max(0.0, min(1.0, deepest / page_h))
+    for child in getattr(box, "children", ()) or ():
+        _walk(child)
+    return deepest
 
-    def _fit_at_min_then_grow(content: str) -> tuple[bytes, float, float] | None:
-        """Per the user's spec:
 
-        1. Render at the MIN font. If it still overflows → return ``None``
-           so the caller can trim content and retry.
-        2. If MIN fits → binary-search ``[MIN, MAX]`` for the LARGEST font
-           that still fits one page (grow-to-fill).
+def _render_doc(html_str: str, url_fetcher):
+    """Render a single-region HTML string and return (doc, pdf_bytes,
+    n_pages, deepest_px, page_h_px).
 
-        Returns ``(pdf_bytes, font_pt, blank_ratio)`` of the chosen render.
-        Logs every font size tried and whether it fit.
-        """
-        tried: list[str] = []
-        try:
-            min_bytes, min_pages, min_fill = _render_and_measure(content, _FONT_MIN)
-        except Exception:
-            log.exception("MIN-font render failed")
-            return None
-        tried.append(f"{_FONT_MIN:.1f}{'✓' if min_pages <= 1 else '✗'}")
-        if min_pages > 1:
-            log.info("Font search: %s — MIN doesn't fit, trim needed", " ".join(tried))
-            return None
+    ``deepest_px`` is the deepest content position reached *inside the
+    body element*. We deliberately exclude the PageBox / margin boxes /
+    HtmlBox from this measurement so a tall measurement page (e.g. 30in
+    used for natural-height pre-pass) doesn't make ``deepest`` equal the
+    whole page height. The legacy single-doc-fit code relied on
+    ``deepest`` strictly for blank-ratio reporting, but the new pipeline
+    branches on ``deepest > page_h_px`` to detect region overflow — so
+    accuracy matters now.
+    """
+    from weasyprint import HTML
 
-        # MIN font fits. Binary-search upward for the biggest font that
-        # still fits — gives us the densest one-page layout.
-        best_bytes, best_pt, best_fill = min_bytes, _FONT_MIN, min_fill
-        lo, hi = _FONT_MIN, _FONT_MAX
-        while hi - lo > _FONT_STEP:
-            mid = _round_half((lo + hi) / 2)
-            if mid <= lo or mid >= hi:
-                break
-            try:
-                b, p, f = _render_and_measure(content, mid)
-            except Exception:
-                log.exception("Grow render failed at %.1fpt", mid)
-                break
-            tried.append(f"{mid:.1f}{'✓' if p <= 1 else '✗'}")
-            if p <= 1:
-                best_bytes, best_pt, best_fill = b, mid, f
-                lo = mid
-            else:
-                hi = mid
+    doc = HTML(string=html_str, url_fetcher=url_fetcher).render()
+    pdf_bytes = doc.write_pdf()
+    n_pages = len(doc.pages)
+    if n_pages == 0:
+        return doc, pdf_bytes, 0, 0.0, 0.0
+    page = doc.pages[0]
+    page_h_px = float(getattr(page, "height", 0) or 0)
+    root = getattr(page, "_page_box", None)
+    deepest = 0.0
+    if root is not None:
+        body = _find_box_by_tag(root, "body")
+        if body is None:
+            # Fall back to walking the whole page if no body box was found
+            # (shouldn't happen for our HTML, but be defensive).
+            body = root
+        deepest = _deepest_descendant_bottom(body)
+        # Convert "deepest absolute position" to a height-from-body-top by
+        # subtracting body's own top. (Body sits at y≈0 in our wrappers,
+        # but be precise.)
+        body_top = float(getattr(body, "position_y", 0) or 0)
+        deepest = max(0.0, deepest - body_top)
+    return doc, pdf_bytes, n_pages, deepest, page_h_px
 
-        _save_font_sample(_count_words(content), best_pt)
-        log.info(
-            "Font search: %s → chose %.1fpt (blank=%.1f%%)",
-            " ".join(tried), best_pt, (1.0 - best_fill) * 100,
+
+def _fit_region(
+    name: str,
+    inner_html: str,
+    *,
+    width_in: float,
+    height_in: float,
+    region_css: str,
+    font_face_css: str,
+    drop_fns: list,
+    url_fetcher,
+) -> _FitResult | None:
+    """Binary-search ``[FONT_MIN, FONT_MAX]`` at 0.1pt for the largest font
+    where ``inner_html`` fits in a ``width_in × height_in`` box. On
+    overflow at MIN, call ``drop_fns`` in order until one yields a smaller
+    fragment, then retry (up to 20 attempts).
+
+    Returns the chosen font, the (possibly trimmed) inner HTML, and the
+    blank ratio of the final layout. Returns ``None`` if nothing can be
+    dropped to make MIN fit.
+    """
+    current = inner_html
+    t0 = time.monotonic()
+    for attempt in range(20):
+        result = _try_fit(
+            name,
+            current,
+            width_in=width_in,
+            height_in=height_in,
+            region_css=region_css,
+            font_face_css=font_face_css,
+            url_fetcher=url_fetcher,
         )
-        return best_bytes, best_pt, 1.0 - best_fill
+        if result is not None:
+            _save_font_sample(name, _count_words(current), result.font_pt)
+            log.info(
+                "PDF region %s fit in %.2fs (font=%.1fpt, blank=%.1f%%, %d drops)",
+                name,
+                time.monotonic() - t0,
+                result.font_pt,
+                result.blank_ratio * 100,
+                attempt,
+            )
+            return _FitResult(
+                inner_html=current,
+                font_pt=result.font_pt,
+                blank_ratio=result.blank_ratio,
+            )
+        trimmed = None
+        for fn in drop_fns:
+            trimmed = fn(current)
+            if trimmed is not None:
+                break
+        if trimmed is None:
+            log.warning("PDF region %s: nothing left to drop; giving up", name)
+            return None
+        current = trimmed
+    log.error("PDF region %s: still overflowing after 20 drops", name)
+    return None
 
-    phase1_font_pt: float | None = None
 
-    import time as _time
-    current = html
-    if skip_phase1:
+def _try_fit(
+    name: str,
+    inner_html: str,
+    *,
+    width_in: float,
+    height_in: float,
+    region_css: str,
+    font_face_css: str,
+    url_fetcher,
+) -> _FitResult | None:
+    """One pass of the MIN-then-grow binary search. ``None`` means MIN
+    doesn't fit (caller should drop)."""
+    page_h_target_in = height_in
+    min_html = build_single_region_html(
+        inner_html,
+        width_in=width_in,
+        height_in=height_in,
+        font_pt=_FONT_MIN,
+        region_css=region_css,
+        font_face_css=font_face_css,
+    )
+    _doc, _pdf, n_pages, deepest, page_h_px = _render_doc(min_html, url_fetcher)
+    tried: list[str] = []
+    fits_at_min = n_pages <= 1 and (page_h_px <= 0 or deepest <= page_h_px)
+    tried.append(f"{_FONT_MIN:.1f}{'✓' if fits_at_min else '✗'}")
+    if not fits_at_min:
+        log.info("PDF region %s: MIN font doesn't fit (%s)", name, " ".join(tried))
+        return None
+
+    best_pt = _FONT_MIN
+    best_blank = 1.0 if page_h_px <= 0 else max(0.0, 1.0 - deepest / page_h_px)
+
+    # Seed binary search with the cache-predicted font (clipped to window)
+    # — gives us a much better starting point than blind midpoints.
+    seed = _floor_step(_predict_font(name, _count_words(inner_html)))
+    seed = max(_FONT_MIN, min(_FONT_MAX, seed))
+    if seed > _FONT_MIN:
+        seed_html = build_single_region_html(
+            inner_html,
+            width_in=width_in,
+            height_in=height_in,
+            font_pt=seed,
+            region_css=region_css,
+            font_face_css=font_face_css,
+        )
+        _doc, _pdf, n_pages, deepest, page_h_px = _render_doc(seed_html, url_fetcher)
+        fits = n_pages <= 1 and (page_h_px <= 0 or deepest <= page_h_px)
+        tried.append(f"{seed:.1f}{'✓' if fits else '✗'}")
+        if fits:
+            best_pt = seed
+            best_blank = max(0.0, 1.0 - deepest / page_h_px)
+            lo, hi = seed, _FONT_MAX
+        else:
+            lo, hi = _FONT_MIN, seed
+    else:
+        lo, hi = _FONT_MIN, _FONT_MAX
+
+    # Binary-search upward for the biggest font that fits.
+    while hi - lo > _FONT_STEP:
+        mid = _round_step((lo + hi) / 2)
+        if mid <= lo or mid >= hi:
+            break
+        mid_html = build_single_region_html(
+            inner_html,
+            width_in=width_in,
+            height_in=height_in,
+            font_pt=mid,
+            region_css=region_css,
+            font_face_css=font_face_css,
+        )
+        _doc, _pdf, n_pages, deepest, page_h_px = _render_doc(mid_html, url_fetcher)
+        fits = n_pages <= 1 and (page_h_px <= 0 or deepest <= page_h_px)
+        tried.append(f"{mid:.1f}{'✓' if fits else '✗'}")
+        if fits:
+            best_pt = mid
+            best_blank = max(0.0, 1.0 - deepest / page_h_px) if page_h_px > 0 else 0.0
+            lo = mid
+        else:
+            hi = mid
+
+    log.info(
+        "PDF region %s fit (W=%.2fin H=%.2fin): %s → %.1fpt blank=%.1f%%",
+        name,
+        width_in,
+        page_h_target_in,
+        " ".join(tried),
+        best_pt,
+        best_blank * 100,
+    )
+    return _FitResult(inner_html=inner_html, font_pt=best_pt, blank_ratio=best_blank)
+
+
+def _measure_natural_height_in(
+    inner_html: str,
+    *,
+    width_in: float,
+    font_pt: float,
+    region_css: str,
+    font_face_css: str,
+    url_fetcher,
+) -> float:
+    """Render ``inner_html`` into a tall page sized exactly to ``width_in``
+    and report the natural content height (deepest box's bottom) in
+    inches. Used to size the top and stocks regions before the news/rail
+    regions are fit. Adds a tiny 0.05in pad so close-fitting content
+    doesn't get pinched."""
+    from app.pdf_renderer import build_measure_only_html
+
+    html_str = build_measure_only_html(
+        inner_html,
+        width_in=width_in,
+        font_pt=font_pt,
+        region_css=region_css,
+        font_face_css=font_face_css,
+    )
+    _doc, _pdf, _n, deepest_px, _page_h = _render_doc(html_str, url_fetcher)
+    return deepest_px / _PX_PER_IN + 0.05
+
+
+# ── Top-level entry point ────────────────────────────────────────────────
+
+
+def html_to_pdf(parts: PdfParts, *, cached_rail: dict | None = None) -> bytes:
+    """Convenience wrapper that returns only the PDF bytes."""
+    pdf_bytes, _, _ = html_to_pdf_ex(parts, cached_rail=cached_rail)
+    return pdf_bytes
+
+
+def html_to_pdf_ex(
+    parts: PdfParts,
+    *,
+    cached_rail: dict | None = None,
+) -> tuple[bytes, float | None, dict[str, str] | None]:
+    """Render ``parts`` to a single-page broadsheet PDF.
+
+    Returns ``(pdf_bytes, rail_font_pt, trimmed_rail)``:
+
+    * ``rail_font_pt`` — the font the rail was fit at. ``None`` when the
+      rail came from ``cached_rail`` (no fresh fit), or when the
+      placeholder PDF is returned.
+    * ``trimmed_rail`` — ``{"calendar_html", "movies_html"}`` for the rail
+      that actually fit. ``None`` when ``cached_rail`` was supplied (the
+      caller keeps its existing cache).
+
+    ``cached_rail`` (optional): when a previous run on the same day
+    already produced a fitted rail, pass ``{"calendar_html", "movies_html",
+    "font_pt"}`` here. We skip the rail fit entirely, lock the rail to the
+    cached HTML/font, and only fit the upper + lower news bands.
+
+    Raises ``PdfSkipped`` when the structured response contains exactly
+    one section — a 70/30 split has no meaning there. The caller should
+    catch this and store the HTML edition without a PDF.
+    """
+    if parts.section_count == 1:
+        raise PdfSkipped("Exactly one news section: 70/30 split is undefined, skipping PDF")
+
+    try:
+        _ensure_dll_path()
+        from weasyprint import HTML  # noqa: F401  (probe only)
+    except (OSError, ImportError) as e:
+        log.warning("WeasyPrint native libs unavailable, using placeholder PDF: %s", e)
+        return _PLACEHOLDER_PDF, None, None
+
+    fetch_cache: dict[str, dict] = {}
+    url_fetcher = _make_url_fetcher(fetch_cache)
+
+    overall_t0 = time.monotonic()
+    log.info("PDF: ── pipeline begin (5-region fit) ──")
+
+    inner_w_in = _PAGE_W_IN - 2 * _PAGE_MARGIN_IN
+    inner_h_in = _PAGE_H_IN - 2 * _PAGE_MARGIN_IN
+
+    # ── Pre-pass: measure top + stocks at their fixed body fonts ────────
+    # Sanity caps: if the measurement comes back pathologically large
+    # (broken layout, font load failure, etc.) we fall back to fixed
+    # defaults so the news/rail regions still get a reasonable share of
+    # vertical space. These caps are intentionally generous — anything
+    # within them is trusted as real.
+    _TOP_MAX_IN = 3.0
+    _TOP_DEFAULT_IN = 1.6
+    _STOCKS_MAX_IN = 1.0
+    _STOCKS_DEFAULT_IN = 0.5
+
+    top_h_in_raw = _measure_natural_height_in(
+        parts.top_inner_html,
+        width_in=inner_w_in,
+        font_pt=_TOP_FONT_PT,
+        region_css=top_region_css(),
+        font_face_css=parts.font_face_css,
+        url_fetcher=url_fetcher,
+    )
+    if top_h_in_raw <= 0 or top_h_in_raw > _TOP_MAX_IN:
+        log.warning(
+            "PDF: top region measured %.3fin (out of [0, %.2f]in) — "
+            "falling back to default %.2fin",
+            top_h_in_raw, _TOP_MAX_IN, _TOP_DEFAULT_IN,
+        )
+        top_h_in = _TOP_DEFAULT_IN
+    else:
+        top_h_in = top_h_in_raw
+    log.info("PDF: top region height = %.3fin (raw=%.3fin)", top_h_in, top_h_in_raw)
+
+    if parts.stocks_inner_html.strip():
+        stocks_h_in_raw = _measure_natural_height_in(
+            parts.stocks_inner_html,
+            width_in=inner_w_in,
+            font_pt=_STOCKS_FONT_PT,
+            region_css=stocks_region_css(),
+            font_face_css=parts.font_face_css,
+            url_fetcher=url_fetcher,
+        )
+        if stocks_h_in_raw <= 0 or stocks_h_in_raw > _STOCKS_MAX_IN:
+            log.warning(
+                "PDF: stocks region measured %.3fin (out of [0, %.2f]in) — "
+                "falling back to default %.2fin",
+                stocks_h_in_raw, _STOCKS_MAX_IN, _STOCKS_DEFAULT_IN,
+            )
+            stocks_h_in = _STOCKS_DEFAULT_IN
+        else:
+            stocks_h_in = stocks_h_in_raw
         log.info(
-            "PDF: ── phase 1 skipped (caller supplied a cached rail that "
-            "previously passed Phase 1) ──"
+            "PDF: stocks region height = %.3fin (raw=%.3fin)",
+            stocks_h_in, stocks_h_in_raw,
         )
     else:
-        # ── Phase 1: rail-only fit (no news flow yet) ──
-        # Render the document with the news flow content stripped — only the
-        # masthead/dateline/rail/stocks-footer compete for vertical space. If
-        # this rail+chrome layout doesn't fit at MIN font, drop a movie (last
-        # first); if no movies left, drop a calendar event. Repeat until MIN
-        # fits OR the rail is empty. Phase 1 never returns the rail-only PDF
-        # — the trimmed `current` (which still has news) is what feeds Phase
-        # 2.
-        phase1_t0 = _time.monotonic()
-        log.info("PDF: ── phase 1 begin (rail-only fit; news flow stripped) ──")
-        for _ in range(40):
-            rail_only = _strip_news_flow(current)
-            result = _fit_at_min_then_grow(rail_only)
-            if result is not None:
-                phase1_font_pt = result[1]
-                log.info(
-                    "PDF: ── phase 1 end in %.2fs (rail+chrome fits at MIN, "
-                    "font=%.1fpt) ──",
-                    _time.monotonic() - phase1_t0, phase1_font_pt,
-                )
-                break
-            trimmed = _drop_one_movie(current) or _drop_one_calendar_event(current)
-            if trimmed is None:
-                log.info(
-                    "PDF: ── phase 1 end in %.2fs (rail emptied; rail+chrome "
-                    "still overflows — Phase 2 will drop news on the full doc) ──",
-                    _time.monotonic() - phase1_t0,
-                )
-                break
-            current = trimmed
+        stocks_h_in = 0.0
 
-    # Snapshot the post-Phase-1 rail (calendar + movies inner HTML) so the
-    # caller can persist the rail that *actually fit*, not the original
-    # pre-trim rail. Phase 2 only trims news, not the rail, so this stays
-    # accurate through the rest of the pipeline. ``None`` when Phase 1 was
-    # skipped — the caller already has the cached rail and shouldn't
-    # overwrite it.
-    trimmed_rail = None if skip_phase1 else _extract_rail_blocks(current)
+    body_h_in = inner_h_in - top_h_in - stocks_h_in
+    if body_h_in <= 1.0:
+        log.error("PDF: body height collapsed to %.2fin; aborting", body_h_in)
+        return _PLACEHOLDER_PDF, None, None
 
-    # ── Phase 2: full content (rail-locked from Phase 1 + news flow) ──
-    # Same MIN-then-grow strategy, but on overflow we drop news content:
-    # balance subsection counts first, then last-resort whole-section drop.
-    phase2_t0 = _time.monotonic()
-    log.info("PDF: ── phase 2 begin (news trim + font fit on full doc) ──")
-    for attempt in range(20):
-        result = _fit_at_min_then_grow(current)
-        if result is not None:
-            pdf_bytes, font_pt, blank = result
-            log.info(
-                "PDF fit (phase 2): %.1fpt, blank=%.1f%% (after %d news trim(s)) in %.2fs",
-                font_pt, blank * 100, attempt, _time.monotonic() - phase2_t0,
-            )
-            return pdf_bytes, phase1_font_pt, trimmed_rail
-        trimmed = _drop_one_article(current) or _drop_one_section(current)
-        if trimmed is None:
-            log.warning("PDF: nothing left to drop — shipping placeholder")
+    news_w_in = inner_w_in - _RAIL_W_IN - _CONTENT_GAP_IN
+    # Two heights per band:
+    #   * ``*_h_total``: the band's box height in the final assembly
+    #     (border-box, includes any internal chrome).
+    #   * ``*_h_fit``  : the height passed to the fit binary search —
+    #     equals the band's *content* area (i.e. ``total - chrome``) plus
+    #     a tiny safety buffer subtracted so a borderline-fitting last line
+    #     doesn't get its descender clipped in the final paginated render.
+    # The lower band carries a border-top (0.75pt) and padding-top (4pt)
+    # that eat from its content area. The upper band has no chrome.
+    # The safety buffer is ~3pt (≈0.04in); chosen to be smaller than any
+    # body-text line height so we don't waste a full line of vertical
+    # space, but large enough to absorb sub-pt rounding between the
+    # fit-pass page render and the multi-region assembly render.
+    # The band-divider element between upper and lower contributes
+    # ``_BAND_DIVIDER_IN`` of stacked height: 1.5pt top border + 1.5pt
+    # padding + 0.75pt bottom border + 4pt margin-bottom = 7.75pt total.
+    _BAND_SAFETY_IN = 3 / 72
+    _BAND_DIVIDER_IN = (1.5 + 1.5 + 0.75 + 4) / 72
+    upper_h_total = (body_h_in - _BAND_DIVIDER_IN) * _UPPER_BAND_RATIO
+    lower_h_total = body_h_in - _BAND_DIVIDER_IN - upper_h_total
+    upper_h_fit = max(0.5, upper_h_total - _BAND_SAFETY_IN)
+    lower_h_fit = max(0.5, lower_h_total - _BAND_SAFETY_IN)
+
+    log.info(
+        "PDF: body=%.2fin, news_w=%.2fin, upper_total=%.2fin (fit=%.2fin), "
+        "divider=%.2fin, lower_total=%.2fin (fit=%.2fin)",
+        body_h_in, news_w_in,
+        upper_h_total, upper_h_fit,
+        _BAND_DIVIDER_IN,
+        lower_h_total, lower_h_fit,
+    )
+
+    # ── Fit upper + lower news bands ────────────────────────────────────
+    if len(parts.news_bands) == 2:
+        upper_inner, _ = parts.news_bands[0]
+        lower_inner, _ = parts.news_bands[1]
+    elif len(parts.news_bands) == 1:
+        # 0 sections payload: single empty band; only chrome-only PDF.
+        upper_inner, _ = parts.news_bands[0]
+        lower_inner = ""
+    else:
+        upper_inner = ""
+        lower_inner = ""
+
+    upper_pt = _FONT_MIN
+    lower_pt = _FONT_MIN
+    fitted_upper = upper_inner
+    fitted_lower = lower_inner
+
+    if upper_inner.strip():
+        up = _fit_region(
+            "upper-news",
+            upper_inner,
+            width_in=news_w_in,
+            height_in=upper_h_fit,
+            region_css=news_region_css(),
+            font_face_css=parts.font_face_css,
+            drop_fns=[_drop_one_article, _drop_one_section],
+            url_fetcher=url_fetcher,
+        )
+        if up is None:
+            log.error("PDF: upper band unfittable; placeholder")
             return _PLACEHOLDER_PDF, None, None
-        current = trimmed
+        upper_pt = up.font_pt
+        fitted_upper = up.inner_html
 
-    log.error("PDF: still overflowing after 20 news-trim attempts — placeholder")
-    return _PLACEHOLDER_PDF, None, None
+    if lower_inner.strip():
+        lo = _fit_region(
+            "lower-news",
+            lower_inner,
+            width_in=news_w_in,
+            height_in=lower_h_fit,
+            region_css=news_region_css(),
+            font_face_css=parts.font_face_css,
+            drop_fns=[_drop_one_article, _drop_one_section],
+            url_fetcher=url_fetcher,
+        )
+        if lo is None:
+            log.error("PDF: lower band unfittable; placeholder")
+            return _PLACEHOLDER_PDF, None, None
+        lower_pt = lo.font_pt
+        fitted_lower = lo.inner_html
+
+    # ── Fit (or reuse) the rail ─────────────────────────────────────────
+    rail_pt: float | None = None
+    trimmed_rail: dict[str, str] | None = None
+    if cached_rail is not None:
+        # Caller has already fit the rail today. Trust it.
+        rail_inner = parts.rail_inner_html  # already the cached HTML
+        rail_pt_cached = cached_rail.get("font_pt")
+        rail_pt = (
+            float(rail_pt_cached)
+            if isinstance(rail_pt_cached, (int, float))
+            else _DEFAULT_FONT_GUESS
+        )
+        log.info("PDF: rail reused from cache (font=%.1fpt)", rail_pt)
+    else:
+        rail_inner_init = parts.rail_inner_html
+        if rail_inner_init.strip():
+            ra = _fit_region(
+                "rail",
+                rail_inner_init,
+                width_in=_RAIL_W_IN,
+                height_in=body_h_in,
+                region_css=rail_region_css(),
+                font_face_css=parts.font_face_css,
+                drop_fns=[_drop_one_movie, _drop_one_calendar_event],
+                url_fetcher=url_fetcher,
+            )
+            if ra is None:
+                log.warning("PDF: rail unfittable even after drops; using minimal rail")
+                rail_inner_init = ""
+                rail_pt = _FONT_MIN
+            else:
+                rail_pt = ra.font_pt
+                rail_inner_init = ra.inner_html
+        else:
+            rail_pt = _FONT_MIN
+        rail_inner = rail_inner_init
+        trimmed_rail = _extract_rail_blocks(rail_inner)
+
+    # ── Assemble + render once more (the real PDF) ──────────────────────
+    fitted_parts = PdfParts(
+        top_inner_html=parts.top_inner_html,
+        news_bands=[(fitted_upper, _count_words(fitted_upper))]
+        + ([(fitted_lower, _count_words(fitted_lower))] if len(parts.news_bands) == 2 else []),
+        rail_inner_html=rail_inner,
+        stocks_inner_html=parts.stocks_inner_html,
+        font_face_css=parts.font_face_css,
+        masthead_title_pt=parts.masthead_title_pt,
+        section_count=parts.section_count,
+    )
+    layout = AssemblyLayout(
+        page_w_in=_PAGE_W_IN,
+        page_h_in=_PAGE_H_IN,
+        margin_in=_PAGE_MARGIN_IN,
+        top_h_in=top_h_in,
+        stocks_h_in=stocks_h_in,
+        rail_w_in=_RAIL_W_IN,
+        content_gap_in=_CONTENT_GAP_IN,
+        upper_h_in=upper_h_total,
+        lower_h_in=lower_h_total if len(parts.news_bands) == 2 else None,
+        upper_font_pt=upper_pt,
+        lower_font_pt=lower_pt if len(parts.news_bands) == 2 else None,
+        rail_font_pt=rail_pt or _DEFAULT_FONT_GUESS,
+        top_font_pt=_TOP_FONT_PT,
+        stocks_font_pt=_STOCKS_FONT_PT,
+        masthead_title_pt=parts.masthead_title_pt,
+    )
+    final_html = assemble_final_html(fitted_parts, layout)
+
+    # Snapshot the assembled HTML for forensic debugging when overflow,
+    # missing-image, or layout issues show up in the final PDF.
+    try:
+        from pathlib import Path
+
+        snap_path = Path(__file__).resolve().parent.parent / "logs" / "pdf-assembled-latest.html"
+        snap_path.parent.mkdir(exist_ok=True)
+        snap_path.write_text(final_html, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        log.exception("Could not snapshot assembled HTML")
+
+    from weasyprint import HTML as _HTML
+
+    doc = _HTML(string=final_html, url_fetcher=url_fetcher).render()
+    pdf_bytes = doc.write_pdf()
+    n_pages = len(doc.pages)
+    log.info(
+        "PDF: ── pipeline end in %.2fs (n_pages=%d, %d bytes) ──",
+        time.monotonic() - overall_t0,
+        n_pages,
+        len(pdf_bytes),
+    )
+    if n_pages != 1:
+        log.warning(
+            "PDF: final assembly produced %d pages (expected 1) — fit overrun, shipping anyway",
+            n_pages,
+        )
+    return pdf_bytes, rail_pt, trimmed_rail
 
 
 def page_count(pdf_bytes: bytes) -> int:
-    """Cheap page-count from the raw PDF bytes (used by tests)."""
+    """Cheap page-count from raw PDF bytes (used by tests)."""
     return pdf_bytes.count(b"/Type /Page") + pdf_bytes.count(b"/Type/Page")

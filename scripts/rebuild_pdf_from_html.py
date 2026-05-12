@@ -33,11 +33,15 @@ log = logging.getLogger("rebuild_pdf")
 
 
 def main(target: date) -> int:
+    email = get_settings().admin_email
     Maker = session_factory()
     with Maker() as s:
-        e = s.get(Edition, target)
+        e = s.get(Edition, (target, email))
         if not e or not e.content_json:
-            log.error("No structured content_json for %s — re-run /refresh first", target)
+            log.error(
+                "No structured content_json for (%s, %s) — re-run /refresh first",
+                target, email,
+            )
             return 1
         log.info("Loaded structured content for %s", target)
 
@@ -98,7 +102,7 @@ def main(target: date) -> int:
         image_bytes_by_id = {r.id: (r.bytes_, r.mime_type) for r in rows}
         log.info("Subsection images: %d", len(image_bytes_by_id))
 
-        pdf_html = pdf_renderer.build_pdf_html(
+        parts = pdf_renderer.build_pdf_parts(
             e.content_json,
             pdf_calendar_html=pdf_cal,
             pdf_movies_html=pdf_mov,
@@ -106,13 +110,18 @@ def main(target: date) -> int:
             today=target,
             image_bytes_by_id=image_bytes_by_id,
         )
-        log.info("Print HTML: %d bytes", len(pdf_html))
+        log.info(
+            "Built %d news band(s), section_count=%d", len(parts.news_bands), parts.section_count
+        )
 
-        pdf_bytes = pdf.html_to_pdf(pdf_html)
+        try:
+            pdf_bytes = pdf.html_to_pdf(parts)
+        except pdf.PdfSkipped as exc:
+            log.warning("PDF skipped: %s — not updating Edition.pdf", exc)
+            return 0
         log.info("PDF rendered: %d bytes (header=%r)", len(pdf_bytes), pdf_bytes[:8])
 
         e.pdf = pdf_bytes
-        e.pdf_html = pdf_html
         s.commit()
         log.info("Upserted edition %s", target)
     return 0

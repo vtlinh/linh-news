@@ -244,8 +244,8 @@ def _run_post_llm_pipeline(
         weather_forecast,
         weather_alerts,
     )
-    with _step("pdf_renderer.build_pdf_html"):
-        pdf_html = pdf_renderer.build_pdf_html(
+    with _step("pdf_renderer.build_pdf_parts"):
+        pdf_parts = pdf_renderer.build_pdf_parts(
             linhnews,
             pdf_calendar_html=pdf_calendar_html,
             pdf_movies_html=pdf_movies_html,
@@ -255,57 +255,58 @@ def _run_post_llm_pipeline(
             image_bytes_by_id=image_bytes_by_id,
             masthead_name=masthead_name,
         )
-    # Snapshot the print HTML *exactly* as it goes into WeasyPrint, so we
-    # can inspect missing-image and overflow problems after the fact.
-    try:
-        from pathlib import Path
 
-        snap_dir = Path(__file__).resolve().parent.parent / "logs"
-        snap_dir.mkdir(exist_ok=True)
-        snap = snap_dir / f"pdf-html-{slot}-{int(datetime.now(UTC).timestamp())}.html"
-        snap.write_text(pdf_html, encoding="utf-8")
-        log.info(
-            "Saved pre-WeasyPrint pdf_html: %s (%d bytes, %d <img> tags)",
-            snap,
-            len(pdf_html),
-            pdf_html.lower().count("<img"),
-        )
-    except Exception:
-        log.exception("Could not snapshot pdf_html")
+    # No pre-WeasyPrint HTML snapshot in the 5-region pipeline: the input is
+    # a structured PdfParts dict; the assembled HTML only exists transiently
+    # inside ``pdf.html_to_pdf_ex`` after the per-region fit has settled.
+    pdf_html = ""
 
-    skip_phase1 = cached_rail is not None
     with _step("html_to_pdf"):
-        pdf_bytes, phase1_font_pt, trimmed_rail = pdf.html_to_pdf_ex(
-            pdf_html,
-            skip_phase1=skip_phase1,
-        )
-    # When Phase 1 was skipped, keep the previously cached Phase-1 font as
-    # the proof-of-fit; otherwise persist the freshly chosen one.
-    persisted_font_pt = (cached_rail or {}).get("font_pt") if skip_phase1 else phase1_font_pt
-    try:
-        from pathlib import Path
+        try:
+            pdf_bytes, rail_font_pt, trimmed_rail = pdf.html_to_pdf_ex(
+                pdf_parts,
+                cached_rail=cached_rail,
+            )
+        except pdf.PdfSkipped as e:
+            log.warning(
+                "PDF skipped for %s (slot=%s): %s — storing HTML edition only",
+                today,
+                slot,
+                e,
+            )
+            pdf_bytes = b""
+            rail_font_pt = None
+            trimmed_rail = None
+    # When the rail was reused from cache, keep the previously cached font;
+    # otherwise persist the freshly fit rail font.
+    persisted_font_pt = (
+        (cached_rail or {}).get("font_pt") if cached_rail is not None else rail_font_pt
+    )
+    if pdf_bytes:
+        try:
+            from pathlib import Path
 
-        snap_dir = Path(__file__).resolve().parent.parent / "logs"
-        snap_dir.mkdir(exist_ok=True)
-        ts = int(datetime.now(UTC).timestamp())
-        digest = hashlib.sha256(pdf_bytes).hexdigest()[:10]
-        pdf_snap = snap_dir / f"pdf-{slot}-{ts}-{digest}.pdf"
-        pdf_snap.write_bytes(pdf_bytes)
-        log.info("Saved generated PDF: %s (%d bytes)", pdf_snap, len(pdf_bytes))
-    except Exception:
-        log.exception("Could not snapshot pdf bytes")
+            snap_dir = Path(__file__).resolve().parent.parent / "logs"
+            snap_dir.mkdir(exist_ok=True)
+            ts = int(datetime.now(UTC).timestamp())
+            digest = hashlib.sha256(pdf_bytes).hexdigest()[:10]
+            pdf_snap = snap_dir / f"pdf-{slot}-{ts}-{digest}.pdf"
+            pdf_snap.write_bytes(pdf_bytes)
+            log.info("Saved generated PDF: %s (%d bytes)", pdf_snap, len(pdf_bytes))
+        except Exception:
+            log.exception("Could not snapshot pdf bytes")
 
-    if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
-        raise RuntimeError(
-            f"Refusing to upsert edition for {today}: PDF render produced "
-            f"{len(pdf_bytes)} bytes, not a valid PDF"
-        )
-    if pdf_bytes == _PLACEHOLDER_PDF:
-        raise RuntimeError(
-            f"Refusing to upsert edition for {today}: PDF render returned the "
-            "placeholder (WeasyPrint native libs missing or content overflowed "
-            "even after dropping every droppable section)"
-        )
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise RuntimeError(
+                f"Refusing to upsert edition for {today}: PDF render produced "
+                f"{len(pdf_bytes)} bytes, not a valid PDF"
+            )
+        if pdf_bytes == _PLACEHOLDER_PDF:
+            raise RuntimeError(
+                f"Refusing to upsert edition for {today}: PDF render returned the "
+                "placeholder (WeasyPrint native libs missing or content overflowed "
+                "even after dropping every droppable section)"
+            )
 
     # Persist the rail that Phase 1 *actually fit*, not the original
     # pre-trim rail strings. Phase 1 may have dropped movie cards or

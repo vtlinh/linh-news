@@ -112,10 +112,16 @@ def main() -> int:
 
     from app import pdf as pdf_mod
 
-    log.info("Calling pdf.html_to_pdf — every WeasyPrint fetch will be logged below")
+    log.info("Rendering stored pdf_html directly via WeasyPrint (no fit pass)")
     t0 = time.monotonic()
-    pdf_bytes = pdf_mod.html_to_pdf(pdf_html)
-    log.info("html_to_pdf done in %.2fs (%d bytes)", time.monotonic() - t0, len(pdf_bytes))
+    pdf_mod._ensure_dll_path()  # noqa: SLF001
+    from weasyprint import HTML as _HTML
+
+    fetch_cache: dict[str, dict] = {}
+    url_fetcher = pdf_mod._make_url_fetcher(fetch_cache)  # noqa: SLF001
+    doc = _HTML(string=pdf_html, url_fetcher=url_fetcher).render()
+    pdf_bytes = doc.write_pdf()
+    log.info("render done in %.2fs (%d bytes)", time.monotonic() - t0, len(pdf_bytes))
 
     out = REPO_ROOT / "logs" / f"repro-{label}-{int(time.time())}.pdf"
     out.write_bytes(pdf_bytes)

@@ -30,6 +30,7 @@ _EMPTY_SECTION = {
     "subsection_count": DEFAULT_SUBSECTION_COUNT,
     "preferred_sources": [],
     "use_global_sources": True,
+    "can_be_headline": False,
 }
 
 
@@ -265,6 +266,7 @@ def save(s: Session, email: str, payload: dict) -> dict:
             str(u).strip() for u in (sec.get("preferred_sources") or []) if str(u).strip()
         ]
         sec["use_global_sources"] = bool(sec.get("use_global_sources", True))
+        sec["can_be_headline"] = bool(sec.get("can_be_headline", False))
 
     sections_clean = normalize_with_llm(sections_in)
 

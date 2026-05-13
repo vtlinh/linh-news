@@ -15,6 +15,9 @@ once with a JSON object matching this schema:
 
 ```
 NewsEdition
+  headline:  Subsection?  # OPTIONAL — present only when a "Headline" section
+                          # appears below. Same shape as a Subsection (title,
+                          # text, sources). See the Headline block for rules.
   sections:  Section[]   # one per section listed below, in the same order
     key:           the stable key from the section list below
     title:         display title (use the title verbatim from the section list)
@@ -64,6 +67,10 @@ text — never silently drop a section.
 
 ${sections_table}
 
+% if headline_block:
+${headline_block}
+
+% endif
 Authoritative upcoming school events — use these dates verbatim:
 ```
 ${dorchester_events}

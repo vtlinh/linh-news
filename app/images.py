@@ -24,6 +24,10 @@ from PIL import Image, UnidentifiedImageError
 log = logging.getLogger(__name__)
 
 MAX_WIDTH = 400
+# Larger cap for the front-page headline image: the PDF can place it at up
+# to half the news-area width (≈5.95in at 96 PPI ≈ 572px), so we need
+# enough source pixels to scale down crisply without artifacts.
+HEADLINE_MAX_WIDTH = 1200
 TIMEOUT_SECONDS = 8
 _USER_AGENT = "Linh-News/1.0 (vtlinh87+linhnews@gmail.com)"
 
@@ -56,11 +60,11 @@ def _download(url: str) -> bytes:
         return r.read()
 
 
-def _resize(img: Image.Image) -> Image.Image:
-    if img.width <= MAX_WIDTH:
+def _resize(img: Image.Image, max_width: int = MAX_WIDTH) -> Image.Image:
+    if img.width <= max_width:
         return img
-    ratio = MAX_WIDTH / img.width
-    new_size = (MAX_WIDTH, max(1, round(img.height * ratio)))
+    ratio = max_width / img.width
+    new_size = (max_width, max(1, round(img.height * ratio)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
 
@@ -106,6 +110,8 @@ def _try_one(url: str) -> tuple[Image.Image, bool, str] | None:
 def fetch_one(
     urls: list[str],
     reject_hashes: set[str] | None = None,
+    *,
+    max_width: int = MAX_WIDTH,
 ) -> FetchedImage | None:
     """Return one resized image for the subsection, or None if every
     candidate failed.
@@ -142,7 +148,7 @@ def fetch_one(
         return None
 
     img, sha = chosen
-    img = _resize(img)
+    img = _resize(img, max_width=max_width)
     data, mime = _encode(img)
     return FetchedImage(
         bytes_=data,
@@ -158,6 +164,35 @@ def _resize_to(img: Image.Image, max_w: int) -> Image.Image:
         return img
     new_size = (max_w, max(1, round(img.height * max_w / img.width)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def resize_to_box(
+    image_bytes: bytes, max_w_px: int, max_h_px: int
+) -> tuple[bytes, str, int, int] | None:
+    """Decode → downscale to fit inside ``(max_w_px × max_h_px)`` preserving
+    aspect ratio → re-encode. Returns ``(bytes, mime, width, height)`` or
+    ``None`` when Pillow can't decode the source.
+
+    Never upscales: if the image is already smaller than the box on both
+    axes, returns the re-encoded original at its native size.
+    """
+    if max_w_px <= 0 or max_h_px <= 0:
+        return None
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img.load()
+    except (UnidentifiedImageError, OSError) as e:
+        log.info("Image decode failed in resize_to_box: %s", e)
+        return None
+    w, h = img.width, img.height
+    if w == 0 or h == 0:
+        return None
+    scale = min(max_w_px / w, max_h_px / h, 1.0)
+    if scale < 1.0:
+        new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+    data, mime = _encode(img)
+    return data, mime, img.width, img.height
 
 
 def resize_for_pdf(

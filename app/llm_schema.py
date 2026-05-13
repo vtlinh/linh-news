@@ -69,7 +69,11 @@ class Stock(TypedDict):
     why_it_moved: WhyItMoved
 
 
-class LinhNews(TypedDict):
+class LinhNews(TypedDict, total=False):
+    # Optional — only set when at least one user section is marked
+    # ``can_be_headline`` and the LLM produced a top-of-front-page story.
+    # Same shape as a regular ``Subsection`` (reuses ``_SUBSECTION_SCHEMA``).
+    headline: Subsection
     sections: list[Section]
     stocks: list[Stock]
 
@@ -190,6 +194,17 @@ _STOCK_SCHEMA: dict[str, Any] = {
 EDITION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "headline": {
+            **_SUBSECTION_SCHEMA,
+            "description": (
+                "Optional. Top-of-front-page deep dive on a SINGLE story drawn "
+                "from one of the headline-eligible sections listed in the "
+                "prompt. Only include this field when the prompt asks for a "
+                "headline. The body must be at least 2x the length of a "
+                "normal subsection body and cover only that one story — no "
+                "'in other news', no 'meanwhile', no roundup framing."
+            ),
+        },
         "sections": {
             "type": "array",
             "description": (
@@ -209,6 +224,16 @@ EDITION_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["sections", "stocks"],
+    "additionalProperties": False,
+}
+
+
+# Schema used for the single-shot headline re-roll when the main call omits
+# the optional ``headline`` field but the user's settings asked for one.
+HEADLINE_REROLL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"headline": _SUBSECTION_SCHEMA},
+    "required": ["headline"],
     "additionalProperties": False,
 }
 

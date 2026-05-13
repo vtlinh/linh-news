@@ -44,6 +44,35 @@ def _render_sections_table(sections: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _render_headline_block(eligible_titles: list[str]) -> str:
+    """Return the headline-instruction block for the daily prompt, or an
+    empty string when no section is marked ``can_be_headline``."""
+    if not eligible_titles:
+        return ""
+    bullets = "\n".join(f"  - {t}" for t in eligible_titles)
+    return (
+        "## Headline (top-of-front-page deep dive)\n\n"
+        "In addition to the section content, return ONE `headline` object "
+        "— a focused, long-form treatment of a SINGLE story drawn from one "
+        "of these topics:\n"
+        f"{bullets}\n\n"
+        "Rules:\n"
+        "  - The body covers ONE story only. NO 'in other news', NO "
+        "'meanwhile', NO 'besides this', NO 'elsewhere'. Stay on that "
+        "one story.\n"
+        "  - Body length must be at least 2x a normal subsection body.\n"
+        "  - Tell us: what happened, who is involved, why it matters, "
+        "and what to watch next.\n"
+        "  - `sources`: >=3 strong, direct sources (Tier 1 outlets preferred).\n"
+        "  - Do NOT supply image URLs anywhere — the server fetches the "
+        "image from your sources.\n"
+        "  - Do NOT also include this same story as a subsection inside its "
+        "source section. Pick a different angle or a different story for "
+        "that section's subsections so the headline does not appear twice "
+        "on the page."
+    )
+
+
 def _render_children_block(children_json: list[dict], today: date) -> str:
     parsed = kids.parse_children(children_json)
     if not parsed:
@@ -70,11 +99,17 @@ def build_prompt(
     Python; the LLM receives a complete, ready-to-read prompt."""
 
     name = display_name.strip() or "the reader"
+    headline_titles = [
+        (s.get("title") or "").strip()
+        for s in sections
+        if s.get("can_be_headline") and (s.get("title") or "").strip()
+    ]
     return prompts.render(
         "edition_system",
         name=name,
         today_iso=today.isoformat(),
         sections_table=_render_sections_table(sections),
+        headline_block=_render_headline_block(headline_titles),
         children_block=_render_children_block(children, today),
         grade_label=kids.grades_label(children, today) or "(none)",
         watchlist_repr=", ".join(watchlist_stocks) if watchlist_stocks else "(empty)",

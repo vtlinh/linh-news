@@ -275,6 +275,33 @@
     }
     main.layout > .flow > section,
     main.layout > .rail > section { margin-bottom: 1.4em; }
+
+    /* Front-page headline (hero). Renders as a bordered banner spanning
+       the full flow width above the multi-column section content. Image
+       sits above the title + body, centered. No max-width cap on the
+       image — that's a PDF-only constraint. */
+    main.layout > .flow > section.hero {
+      column-span: all;
+      -webkit-column-span: all;
+      border: 1px solid var(--fg, #000);
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.4em;
+      break-inside: avoid;
+    }
+    section.hero .hero-image-link { display: block; text-align: center; }
+    section.hero .hero-image {
+      display: block;
+      margin: 0 auto 0.75rem;
+      max-width: 100%;
+      height: auto;
+    }
+    section.hero .hero-title {
+      margin: 0 0 0.5rem;
+      font-size: clamp(1.4rem, 2.8vw, 2rem);
+      line-height: 1.15;
+    }
+    section.hero .hero-body { font-size: clamp(1rem, 1.4vw, 1.15rem); line-height: 1.45; }
+    section.hero .hero-body p { margin: 0 0 0.6em; }
     main.layout > .rail { display: flex; flex-direction: column; gap: 1.4em; }
     @media (min-width: 768px) {
       main.layout > .flow { columns: 2; column-gap: 28px; }

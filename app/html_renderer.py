@@ -198,6 +198,36 @@ def _render_stocks_section(stocks: list[dict]) -> str:
     return f'<section class="stocks-section"><h2>📈 Stocks</h2>{rows}</section>'
 
 
+def _render_headline(headline: dict) -> str:
+    """Boxed hero block for the front-page headline. Image (when present)
+    sits above the title + body. The section the headline was drawn from
+    still renders its own subsections normally — the headline appears in
+    addition. No 50%-width cap on HTML; that's a PDF-only constraint."""
+    if not headline:
+        return ""
+    image_id = headline.get("image_id")
+    image_html = ""
+    if image_id:
+        src = f"/edition-image/{int(image_id)}"
+        image_html = (
+            f'<a class="hero-image-link" href="{src}" target="_blank" rel="noopener">'
+            f'<img class="hero-image" src="{src}" alt="" loading="lazy" />'
+            f"</a>"
+        )
+    title = _esc(headline.get("title", ""))
+    body = _format_text(headline.get("text", ""))
+    sources_html = _render_sources(headline.get("sources", []))
+    sources_block = f" {sources_html}" if sources_html else ""
+    return (
+        '<section class="hero">'
+        f"{image_html}"
+        f'<h2 class="hero-title">{title}</h2>'
+        f'<div class="hero-body">{body}</div>'
+        f"{sources_block}"
+        "</section>"
+    )
+
+
 def _section_by_key(sections: list[dict]) -> dict[str, dict]:
     return {s.get("key"): s for s in (sections or []) if s.get("key")}
 
@@ -209,7 +239,10 @@ def render_edition_html(linhnews: dict[str, Any]) -> str:
     prompt template asks the model to keep aligned with the user's
     configured section list.
     """
-    flow_inner = "".join(_render_section(s) for s in (linhnews.get("sections") or []))
+    hero_html = _render_headline(linhnews.get("headline") or {})
+    flow_inner = hero_html + "".join(
+        _render_section(s) for s in (linhnews.get("sections") or [])
+    )
     stocks_html = _render_stocks_section(linhnews.get("stocks") or [])
 
     rail_parts: list[str] = []

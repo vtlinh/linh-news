@@ -37,12 +37,16 @@ from app import (
 )
 from app.db import DebugEdition, Edition, SubsectionImage, session_factory
 from app.llm_schema import (
+    HEADLINE_REROLL_SCHEMA,
     MIN_STOCK_SOURCES,
     MIN_SUBSECTIONS,
     SECTION_REROLL_SCHEMA,
 )
 from app.pdf import _PLACEHOLDER_PDF
 from app.settings import get_settings, local_today
+
+# Sentinel section_key used for the headline image row in subsection_images.
+HEADLINE_SECTION_KEY = "__headline__"
 
 log = logging.getLogger(__name__)
 
@@ -169,6 +173,15 @@ def run(
 
     with _step("backfill_missing_sections"):
         linhnews = _backfill_missing_sections(linhnews, today, user_sections, masthead_name)
+
+    headline_eligible_titles = _headline_eligible_titles(user_sections)
+    if headline_eligible_titles and not linhnews.get("headline"):
+        with _step("reroll_headline"):
+            headline = _regenerate_headline(
+                headline_eligible_titles, today, masthead_name
+            )
+        if headline is not None:
+            linhnews["headline"] = headline
 
     # Persist a debug copy of the structured response *before* anything that
     # can fail downstream (image fetch, PDF render). Deleted after a successful
@@ -737,6 +750,52 @@ def _regenerate_section(sec: dict, today: date, display_name: str) -> dict | Non
     return {"key": key, "title": title, "subsections": subs}
 
 
+def _headline_eligible_titles(user_sections: list[dict]) -> list[str]:
+    """Titles of sections the user marked ``can_be_headline``. Empty list
+    means no headline should be produced this run."""
+    return [
+        (s.get("title") or "").strip()
+        for s in user_sections
+        if s.get("can_be_headline") and (s.get("title") or "").strip()
+    ]
+
+
+def _regenerate_headline(
+    eligible_titles: list[str], today: date, display_name: str
+) -> dict | None:
+    """Single-shot re-roll for a missing headline. Returns a Subsection-shaped
+    dict ({title, text, sources}) or None on failure."""
+    bullets = "\n".join(f"  - {t}" for t in eligible_titles)
+    system = prompts.render("headline_reroll_system", display_name=display_name)
+    user = prompts.render(
+        "headline_reroll_user",
+        today_iso=today.isoformat(),
+        eligible_titles_bullets=bullets,
+    )
+    try:
+        result = claude_client.call_with_schema(
+            system=system,
+            user=user,
+            schema=HEADLINE_REROLL_SCHEMA,
+            schema_name="return_headline",
+            schema_description="Return a single front-page headline subsection.",
+            extra_tools=[claude_client.WEB_SEARCH_TOOL],
+            max_tokens=4000,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Headline re-roll failed")
+        return None
+    headline = (result or {}).get("headline")
+    if not headline or not headline.get("text"):
+        log.warning("Headline re-roll returned empty result")
+        return None
+    log.info(
+        "Headline re-roll succeeded (%d words)",
+        len((headline.get("text") or "").split()),
+    )
+    return headline
+
+
 def _backfill_missing_sections(
     linhnews: dict,
     today: date,
@@ -959,6 +1018,43 @@ def _fetch_and_persist_images(
     )
 
     image_bytes_by_id: dict[int, tuple[bytes, str]] = {}
+
+    # Headline image (when present). Has its own image budget — does NOT
+    # consume the source section's at-most-one-image-per-section allotment.
+    headline = linhnews.get("headline")
+    if headline:
+        urls = _candidate_image_urls(headline)
+        fetched = None
+        if urls:
+            try:
+                fetched = images.fetch_one(
+                    urls,
+                    reject_hashes=reject_hashes,
+                    max_width=images.HEADLINE_MAX_WIDTH,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("Headline image fetch raised")
+                fetched = None
+        if fetched is not None:
+            reject_hashes.add(fetched.sha256)
+            row = SubsectionImage(
+                edition_date=day,
+                edition_email=email,
+                section_key=HEADLINE_SECTION_KEY,
+                subsection_idx=0,
+                bytes_=fetched.bytes_,
+                mime_type=fetched.mime_type,
+                width=fetched.width,
+                height=fetched.height,
+                image_hash=fetched.sha256,
+            )
+            s.add(row)
+            s.flush()
+            headline["image_id"] = row.id
+            image_bytes_by_id[row.id] = (fetched.bytes_, fetched.mime_type)
+        else:
+            log.info("Headline: no usable image (text-only)")
+
     for section in linhnews.get("sections") or []:
         key = section.get("key", "")
         # At most one image per section, attached to the earliest

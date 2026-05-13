@@ -786,8 +786,22 @@ def _regenerate_headline(
         log.exception("Headline re-roll failed")
         return None
     headline = (result or {}).get("headline")
-    if not headline or not headline.get("text"):
-        log.warning("Headline re-roll returned empty result")
+    # Sometimes the model returns the headline as a JSON-encoded string
+    # rather than the nested object the schema asks for. Try to recover.
+    if isinstance(headline, str):
+        import json
+
+        try:
+            headline = json.loads(headline)
+            log.info("Headline re-roll: recovered headline from JSON-string body")
+        except json.JSONDecodeError:
+            log.warning(
+                "Headline re-roll returned a string that is not valid JSON: %r",
+                headline[:200],
+            )
+            return None
+    if not isinstance(headline, dict) or not headline.get("text"):
+        log.warning("Headline re-roll returned empty/malformed result: %r", headline)
         return None
     log.info(
         "Headline re-roll succeeded (%d words)",

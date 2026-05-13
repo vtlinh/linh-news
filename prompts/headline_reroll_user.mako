@@ -5,7 +5,11 @@ ${eligible_titles_bullets}
 
 Rules:
   - The body covers ONE story only. No "in other news", no "meanwhile".
-  - Body length: at least 2x a normal subsection body.
-  - Tell us: what happened, who is involved, why it matters, what to watch next.
+  - Write as a single flowing newspaper article. Plain prose only —
+    NO section headings ("WHAT HAPPENED", "WHO IS INVOLVED", "WHY IT
+    MATTERS", etc.), NO bullet lists, NO labels, NO ALL-CAPS callouts.
+  - Length: between 250 and 500 words. Hard cap at 500.
+  - Weave the facts, context, key players, and what comes next through
+    paragraphs the way a Reuters or AP lead does.
   - sources: >=3 strong, direct sources (Tier 1 outlets preferred).
   - Do NOT supply image URLs anywhere.

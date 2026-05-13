@@ -65,7 +65,7 @@ def _render_headline_block(eligible_titles: list[str]) -> str:
         "NO labels, NO ALL-CAPS callouts. The reader should encounter "
         "the facts, context, key players, and what comes next woven "
         "through paragraphs, the way a Reuters or AP lead is written.\n"
-        "  - Length: between 250 and 500 words. Hard cap at 500. Do not "
+        "  - Length: between 200 and 350 words. Hard cap at 350. Do not "
         "pad. Cut anything that would be redundant with the section "
         "subsections.\n"
         "  - `sources`: >=3 strong, direct sources (Tier 1 outlets preferred).\n"

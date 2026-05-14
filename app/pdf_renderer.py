@@ -63,7 +63,10 @@ _FLOW_COLUMNS = 4
 # v4: layout chrome changed (band-divider added between upper and lower
 #     news bands) which reshuffles the rail's available height slightly;
 #     bump to force a fresh rail fit on the next refresh.
-PDF_RAIL_VERSION = 4
+# v5: rail fit now subtracts border-left + padding-left from the fit width
+#     to match the assembled aside.rail content area (was clipping the
+#     right edge of every line); refit needed.
+PDF_RAIL_VERSION = 5
 
 # Upper band's target share of the news area (the rest goes to the lower
 # band). Used to pick the section-split point.

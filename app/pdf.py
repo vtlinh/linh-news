@@ -1277,10 +1277,18 @@ def html_to_pdf_ex(
     else:
         rail_inner_init = parts.rail_inner_html
         if rail_inner_init.strip():
+            # The final ``aside.rail`` is border-box with border-left 0.5pt
+            # + padding-left 8pt, so its content area is narrower than
+            # ``_RAIL_W_IN``. The fit pass renders into a page sized to the
+            # exact content width, so subtract that chrome here — otherwise
+            # the fit lays out at a wider area than the document and the
+            # right edge of every rail line gets clipped in assembly.
+            rail_border_pad_in = (0.5 + 8) / 72
+            rail_fit_w_in = _RAIL_W_IN - rail_border_pad_in
             ra = _fit_region(
                 "rail",
                 rail_inner_init,
-                width_in=_RAIL_W_IN,
+                width_in=rail_fit_w_in,
                 height_in=body_h_in,
                 region_css=rail_region_css(),
                 font_face_css=parts.font_face_css,

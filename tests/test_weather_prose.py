@@ -75,11 +75,24 @@ def test_seed_phrases_have_required_slots() -> None:
 def test_seed_phrases_bold_keyword_present() -> None:
     import re
 
-    pat = re.compile(r"<b>(Today|Tomorrow|Tonight)</b>", re.IGNORECASE)
+    # {l} is the 7 AM–10 PM daytime low, so phrases no longer reference
+    # tonight / overnight here — only the day's own period word is bolded.
+    pat = re.compile(r"<b>(Today|Tomorrow)</b>", re.IGNORECASE)
     for b in weather_prose.BUCKETS:
         for p in weather_prose.PERIODS:
             for text in weather_prose.PHRASES[b][p]:
                 assert pat.search(text), f"no bold keyword in {b}/{p}: {text}"
+
+
+def test_seed_phrases_avoid_night_wording() -> None:
+    """Daytime phrases must not say "tonight" or "overnight" — that's the
+    night clause's job. Catches regressions if someone re-introduces the
+    old wording while editing the seed library."""
+    for b in weather_prose.BUCKETS:
+        for p in weather_prose.PERIODS:
+            for text in weather_prose.PHRASES[b][p]:
+                assert "tonight" not in text.lower(), f"'tonight' in {b}/{p}: {text}"
+                assert "overnight" not in text.lower(), f"'overnight' in {b}/{p}: {text}"
 
 
 # ─────────────────────── render_prose_html ───────────────────────

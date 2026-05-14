@@ -32,7 +32,7 @@ def test_run_upserts_latest_wins(db_session, monkeypatch, tmp_path):
     fake_list = patch.object(generate.calendar_oauth, "list_calendars", return_value=[])
     fake_fetch = patch.object(generate.calendar_oauth, "fetch_events", return_value=[])
     fake_movies = patch.object(generate.movies_mod, "get_movies", return_value=[])
-    fake_forecast = patch.object(generate.weather, "fetch_forecast", return_value={})
+    fake_forecast = patch.object(generate.weather, "refresh_and_summarize", return_value={})
     fake_alerts = patch.object(generate.weather, "fetch_alerts", return_value=[])
     fake_now = patch.object(generate.weather, "get_now_cached", return_value="")
     today = date(2026, 4, 30)
@@ -109,7 +109,7 @@ def test_build_context_includes_overlays(db_session, monkeypatch):
         patch.object(generate.calendar_oauth, "list_calendars", return_value=[]),
         patch.object(generate.calendar_oauth, "fetch_events", return_value=[]),
         patch.object(generate.movies_mod, "get_movies", return_value=[]),
-        patch.object(generate.weather, "fetch_forecast", return_value={}),
+        patch.object(generate.weather, "refresh_and_summarize", return_value={}),
         patch.object(generate.weather, "fetch_alerts", return_value=[]),
     ):
         ctx = generate._build_context(db_session, today, "evening")
@@ -167,7 +167,7 @@ def test_build_context_dorchester_passthrough(db_session, monkeypatch):
         patch.object(generate.calendar_oauth, "fetch_events", return_value=events),
         patch.object(generate.calendar_summary, "persist_events_for_days", return_value=None),
         patch.object(generate.movies_mod, "get_movies", return_value=[]),
-        patch.object(generate.weather, "fetch_forecast", return_value={}),
+        patch.object(generate.weather, "refresh_and_summarize", return_value={}),
         patch.object(generate.weather, "fetch_alerts", return_value=[]),
     ):
         ctx = generate._build_context(db_session, today, "evening")
@@ -217,7 +217,7 @@ def test_build_context_dedupes_calendar_events(db_session, monkeypatch):
             generate.calendar_summary, "persist_events_for_days", side_effect=fake_persist
         ),
         patch.object(generate.movies_mod, "get_movies", return_value=[]),
-        patch.object(generate.weather, "fetch_forecast", return_value={}),
+        patch.object(generate.weather, "refresh_and_summarize", return_value={}),
         patch.object(generate.weather, "fetch_alerts", return_value=[]),
     ):
         generate._build_context(db_session, today, "evening")

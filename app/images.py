@@ -52,6 +52,29 @@ class FetchedImage:
     width: int
     height: int
     sha256: str
+    # 64-bit perceptual hash (difference hash) of the decoded image. Used to
+    # detect visually-identical images that have different raw bytes (e.g. the
+    # same photo served by two different CDNs / re-encoded by the publisher),
+    # which raw-byte sha256 can't catch.
+    phash: int
+
+
+def _dhash(img: Image.Image, size: int = 8) -> int:
+    """8x8 difference hash. Two images with hamming distance 0 are visually
+    identical for our purposes; small distances (≤5) usually indicate the
+    same image with minor re-encoding or cropping differences."""
+    g = img.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS)
+    px = list(g.getdata())
+    bits = 0
+    for r in range(size):
+        for c in range(size):
+            i = r * (size + 1) + c
+            bits = (bits << 1) | (1 if px[i] > px[i + 1] else 0)
+    return bits
+
+
+def _hamming(a: int, b: int) -> int:
+    return (a ^ b).bit_count()
 
 
 def _download(url: str) -> bytes:
@@ -86,11 +109,12 @@ def _encode(img: Image.Image) -> tuple[bytes, str]:
     return buf.getvalue(), "image/jpeg"
 
 
-def _try_one(url: str) -> tuple[Image.Image, bool, str] | None:
-    """Download + decode a single URL. Returns (image, is_landscape, sha256)
-    of the *raw* downloaded bytes, or None on any failure. Hashing the raw
-    bytes (not the re-encoded JPEG) keeps cross-day dedup stable across
-    Pillow version differences."""
+def _try_one(url: str) -> tuple[Image.Image, bool, str, int] | None:
+    """Download + decode a single URL. Returns (image, is_landscape, sha256,
+    phash) — sha256 is of the *raw* downloaded bytes (stable for cross-day
+    dedup across Pillow versions); phash is a perceptual dhash of the decoded
+    image (catches visually-identical images served as different bytes).
+    Returns None on any failure."""
     if not url:
         return None
     try:
@@ -104,7 +128,7 @@ def _try_one(url: str) -> tuple[Image.Image, bool, str] | None:
     except (UnidentifiedImageError, OSError) as e:
         log.info("Image decode failed (%s): %s", url, e)
         return None
-    return img, img.width >= img.height, hashlib.sha256(raw).hexdigest()
+    return img, img.width >= img.height, hashlib.sha256(raw).hexdigest(), _dhash(img)
 
 
 def fetch_one(
@@ -113,6 +137,8 @@ def fetch_one(
     *,
     max_width: int = MAX_WIDTH,
     prefer_widest: bool = False,
+    reject_phashes: set[int] | None = None,
+    phash_threshold: int = 5,
 ) -> FetchedImage | None:
     """Return one resized image for the subsection, or None if every
     candidate failed.
@@ -125,24 +151,35 @@ def fetch_one(
     ``reject_hashes`` (sha256 of raw downloaded bytes) skips candidates
     whose bytes match any prior edition's image — used to suppress generic
     site banners that recur day after day.
+
+    ``reject_phashes`` (perceptual dhash ints) skips candidates that are
+    visually identical (or near-identical, within ``phash_threshold``
+    hamming bits) to any hash in the set — used to avoid two subsections
+    in the same edition showing the same photo when it's served by
+    different CDNs / re-encoded slightly.
     """
     if not urls:
         return None
     candidates = list(urls)
     random.shuffle(candidates)
 
-    chosen: tuple[Image.Image, str] | None = None
+    def _phash_dup(ph: int) -> bool:
+        if not reject_phashes:
+            return False
+        return any(_hamming(ph, prev) <= phash_threshold for prev in reject_phashes)
+
+    chosen: tuple[Image.Image, str, int] | None = None
     if prefer_widest:
         # Try ALL candidates, collect every landscape one that isn't a
         # reject-hash dup, then pick the widest (highest aspect = w/h).
         # Used by the headline image so the hero gets a wide cinematic
         # crop instead of a near-square thumbnail.
-        viable: list[tuple[float, Image.Image, str]] = []
+        viable: list[tuple[float, Image.Image, str, int]] = []
         for url in candidates:
             result = _try_one(url)
             if result is None:
                 continue
-            img, is_landscape, sha = result
+            img, is_landscape, sha, ph = result
             if not is_landscape:
                 log.info("Image rejected — portrait orientation: %s", url)
                 continue
@@ -152,34 +189,40 @@ def fetch_one(
                     sha[:12], url,
                 )
                 continue
+            if _phash_dup(ph):
+                log.info("Image rejected — perceptually duplicates a prior pick: %s", url)
+                continue
             aspect = img.width / max(1, img.height)
-            viable.append((aspect, img, sha))
+            viable.append((aspect, img, sha, ph))
         if viable:
             viable.sort(key=lambda v: -v[0])  # widest first
-            _aspect, img, sha = viable[0]
+            _aspect, img, sha, ph = viable[0]
             log.info(
                 "Image picked: aspect %.2f (best of %d landscape candidates)",
                 _aspect, len(viable),
             )
-            chosen = (img, sha)
+            chosen = (img, sha, ph)
     else:
         for url in candidates:
             result = _try_one(url)
             if result is None:
                 continue
-            img, is_landscape, sha = result
+            img, is_landscape, sha, ph = result
             if not is_landscape:
                 log.info("Image rejected — portrait orientation: %s", url)
                 continue
             if reject_hashes and sha in reject_hashes:
                 log.info("Image rejected — hash seen on prior day (%s): %s", sha[:12], url)
                 continue
-            chosen = (img, sha)
+            if _phash_dup(ph):
+                log.info("Image rejected — perceptually duplicates a prior pick: %s", url)
+                continue
+            chosen = (img, sha, ph)
             break
     if chosen is None:
         return None
 
-    img, sha = chosen
+    img, sha, ph = chosen
     img = _resize(img, max_width=max_width)
     data, mime = _encode(img)
     return FetchedImage(
@@ -188,6 +231,7 @@ def fetch_one(
         width=img.width,
         height=img.height,
         sha256=sha,
+        phash=ph,
     )
 
 

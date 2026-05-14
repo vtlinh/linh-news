@@ -298,6 +298,44 @@ class WeatherNow(Base):
     )
 
 
+class WeatherGrid(Base):
+    """Cached ``/points/{lat},{lon}`` → NWS grid identifier lookup.
+
+    Stored so every subsequent generation can hit
+    ``/gridpoints/{grid_id}/{grid_x},{grid_y}/forecast/hourly`` directly,
+    skipping the per-run resolution roundtrip."""
+
+    __tablename__ = "weather_grid"
+    coords: Mapped[str] = mapped_column(String, primary_key=True)
+    grid_id: Mapped[str] = mapped_column(String, nullable=False)
+    grid_x: Mapped[int] = mapped_column(Integer, nullable=False)
+    grid_y: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class WeatherHourly(Base):
+    """One hour of NWS hourly forecast, keyed by ``(coords, start_at)``.
+
+    Each generation upserts ~156 future hours from the NWS hourly endpoint
+    and prunes rows older than 14 days. This rolling cache lets the strip
+    renderer reconstruct any day within roughly ±7 days from the DB alone,
+    without an extra NWS call. Temperatures are normalised to integer
+    Celsius at write time (NWS hourly returns °F)."""
+
+    __tablename__ = "weather_hourly"
+    coords: Mapped[str] = mapped_column(String, primary_key=True)
+    start_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    temp_c: Mapped[int] = mapped_column(Integer, nullable=False)
+    short_forecast: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class WeatherPhrase(Base):
     """A hand-written prose clause used to render today/tomorrow weather as
     newspaper-style text. Twenty variants exist per (period, bucket); the

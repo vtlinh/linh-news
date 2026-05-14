@@ -86,10 +86,24 @@ def test_seed_phrases_bold_keyword_present() -> None:
 
 
 def _seed(s) -> None:
-    """Load every seed row into the in-memory test DB."""
+    """Load every seed row (today/tomorrow + night) into the in-memory test DB."""
     for r in weather_prose.all_seed_rows():
         s.add(WeatherPhrase(period=r["period"], bucket=r["bucket"], text=r["text"]))
+    for r in weather_prose.night_seed_rows():
+        s.add(WeatherPhrase(period=r["period"], bucket=r["bucket"], text=r["text"]))
     s.commit()
+
+
+def test_night_seed_library_shape() -> None:
+    rows = weather_prose.night_seed_rows()
+    assert len(rows) == 40
+    counts: dict[str, int] = {}
+    for r in rows:
+        assert r["period"] == "night"
+        assert r["bucket"] in weather_prose.NIGHT_BUCKETS
+        counts[r["bucket"]] = counts.get(r["bucket"], 0) + 1
+    for bkt in weather_prose.NIGHT_BUCKETS:
+        assert counts[bkt] == 20
 
 
 def test_render_prose_html_contains_today_and_tomorrow(db_session) -> None:
@@ -192,6 +206,65 @@ def test_render_prose_html_empty_when_no_phrases(db_session) -> None:
     }
     out = weather_prose.render_prose_html(forecast, [], db_session)
     assert out == ""
+
+
+def test_render_prose_html_appends_overnight_low_when_cold(db_session) -> None:
+    """night_l ≤ 5°C → today clause gets an "; overnight low N°C" tail."""
+    _seed(db_session)
+    forecast = {
+        "today_h": 8,
+        "today_l": 2,
+        "today_short": "Cloudy",
+        "today_night_l": 3,
+    }
+    out = weather_prose.render_prose_html(forecast, [], db_session, rng=random.Random(1))
+    assert "overnight low 3°C" in out
+
+
+def test_render_prose_html_no_overnight_tail_when_mild(db_session) -> None:
+    _seed(db_session)
+    forecast = {
+        "today_h": 22,
+        "today_l": 14,
+        "today_short": "Cloudy",
+        "today_night_l": 12,
+    }
+    out = weather_prose.render_prose_html(forecast, [], db_session, rng=random.Random(1))
+    assert "overnight low" not in out
+
+
+def test_render_prose_html_appends_severe_night_clause(db_session) -> None:
+    """today_night_severe → a night-period phrase from that bucket is
+    appended to the today clause."""
+    _seed(db_session)
+    forecast = {
+        "today_h": 18,
+        "today_l": 12,
+        "today_short": "Partly Cloudy",
+        "today_night_severe": "thunderstorm",
+    }
+    out = weather_prose.render_prose_html(forecast, [], db_session, rng=random.Random(2))
+    # At least one thunderstorm-night phrase keyword appears.
+    assert any(kw in out.lower() for kw in ("thunder", "storm", "lightning"))
+
+
+def test_render_prose_html_severe_clause_follows_overnight_tail(db_session) -> None:
+    """When both a cold-overnight tail and severe-night clause apply, the
+    night clause sits after the tail, not before it."""
+    _seed(db_session)
+    forecast = {
+        "today_h": -1,
+        "today_l": -5,
+        "today_short": "Snow",
+        "today_night_l": -8,
+        "today_night_severe": "snow",
+    }
+    out = weather_prose.render_prose_html(forecast, [], db_session, rng=random.Random(3))
+    tail_idx = out.find("overnight low")
+    # The night-clause phrases mention "snow" (case-insensitive).
+    night_kw_idx = out.lower().rfind("snow")
+    assert tail_idx != -1
+    assert night_kw_idx > tail_idx
 
 
 def test_render_prose_html_skips_periods_with_missing_data(db_session) -> None:

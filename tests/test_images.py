@@ -158,3 +158,45 @@ def test_fetch_one_returns_none_when_only_candidate_is_rejected():
             reject_hashes={src_hash},
         )
     assert out is None
+
+
+def _photo_bytes(width: int, height: int, seed: int = 0, fmt: str = "JPEG") -> bytes:
+    """Return raw bytes for a non-trivial test photo. Two encodings of the
+    *same* visual content (different JPEG quality, etc.) produce different
+    sha256 but the same perceptual hash."""
+    img = Image.new("RGB", (width, height))
+    px = img.load()
+    for y in range(height):
+        for x in range(width):
+            px[x, y] = ((x + seed) % 256, (y * 2) % 256, ((x + y) // 3) % 256)
+    buf = io.BytesIO()
+    if fmt == "JPEG":
+        img.save(buf, format="JPEG", quality=90)
+    else:
+        img.save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def test_fetch_one_skips_perceptually_duplicate_candidate():
+    """Two candidates that are visually identical but have different raw
+    bytes (e.g. same photo re-encoded by another CDN) should not both be
+    picked: once one is taken, the other is rejected via phash."""
+    a = _photo_bytes(64, 48, seed=0, fmt="JPEG")
+    # Re-encode the same pixel layout at a different JPEG quality so raw
+    # bytes differ but the perceptual content is the same.
+    img = Image.open(io.BytesIO(a))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=60)
+    b = buf.getvalue()
+    assert a != b  # sanity: bytes differ
+
+    with patch.object(images, "_download", return_value=a):
+        first = images.fetch_one(["https://x/a.jpg"])
+    assert first is not None
+
+    with patch.object(images, "_download", return_value=b):
+        second = images.fetch_one(
+            ["https://x/b.jpg"],
+            reject_phashes={first.phash},
+        )
+    assert second is None

@@ -209,9 +209,7 @@ def run(
     headline_eligible_titles = _headline_eligible_titles(user_sections)
     if headline_eligible_titles and not linhnews.get("headline"):
         with _step("reroll_headline"):
-            headline = _regenerate_headline(
-                headline_eligible_titles, today, masthead_name
-            )
+            headline = _regenerate_headline(headline_eligible_titles, today, masthead_name)
         if headline is not None:
             linhnews["headline"] = headline
 
@@ -303,9 +301,7 @@ def _run_post_llm_pipeline(
         first_edition_date = s.execute(
             select(Edition.date).order_by(Edition.date.asc()).limit(1)
         ).scalar()
-    vol_number = (
-        1 if first_edition_date is None else (today - first_edition_date).days + 1
-    )
+    vol_number = 1 if first_edition_date is None else (today - first_edition_date).days + 1
 
     # Anthropic API cost for this edition. In re-render mode the
     # accumulator is zero — fall back to the cost stored on the
@@ -725,8 +721,8 @@ def _build_context(
         pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
     dorchester_text = calendar_summary.build_dorchester_event_list(events, cal_names)
 
-    with _step("NWS fetch_forecast"):
-        weather_forecast = weather.fetch_forecast(coords)
+    with _step("NWS hourly refresh + summarize"):
+        weather_forecast = weather.refresh_and_summarize(s, coords, today)
     with _step("NWS fetch_alerts"):
         weather_alerts = weather.fetch_alerts(coords)
     # Render the human-sounding prose paragraph once per generation. The
@@ -829,9 +825,7 @@ def _headline_eligible_titles(user_sections: list[dict]) -> list[str]:
     ]
 
 
-def _regenerate_headline(
-    eligible_titles: list[str], today: date, display_name: str
-) -> dict | None:
+def _regenerate_headline(eligible_titles: list[str], today: date, display_name: str) -> dict | None:
     """Single-shot re-roll for a missing headline. Returns a Subsection-shaped
     dict ({title, text, sources}) or None on failure."""
     bullets = "\n".join(f"  - {t}" for t in eligible_titles)
@@ -1099,6 +1093,11 @@ def _fetch_and_persist_images(
         ).scalars()
         if h
     )
+    # Perceptual hashes of images picked earlier in *this* run. Lets us
+    # reject a candidate that is visually identical to one we've already
+    # placed even when its raw bytes differ (same photo served by a
+    # different CDN, or slightly re-encoded by the publisher).
+    reject_phashes: set[int] = set()
 
     image_bytes_by_id: dict[int, tuple[bytes, str]] = {}
 
@@ -1113,6 +1112,7 @@ def _fetch_and_persist_images(
                 fetched = images.fetch_one(
                     urls,
                     reject_hashes=reject_hashes,
+                    reject_phashes=reject_phashes,
                     max_width=images.HEADLINE_MAX_WIDTH,
                     prefer_widest=True,
                 )
@@ -1121,6 +1121,7 @@ def _fetch_and_persist_images(
                 fetched = None
         if fetched is not None:
             reject_hashes.add(fetched.sha256)
+            reject_phashes.add(fetched.phash)
             row = SubsectionImage(
                 edition_date=day,
                 edition_email=email,
@@ -1150,7 +1151,11 @@ def _fetch_and_persist_images(
             if not urls:
                 continue
             try:
-                fetched = images.fetch_one(urls, reject_hashes=reject_hashes)
+                fetched = images.fetch_one(
+                    urls,
+                    reject_hashes=reject_hashes,
+                    reject_phashes=reject_phashes,
+                )
             except Exception:  # noqa: BLE001
                 log.exception("Image fetch raised for %s/%d", key, idx)
                 continue
@@ -1160,8 +1165,11 @@ def _fetch_and_persist_images(
             # Within this single run, also reject hashes we've already used —
             # two subsections in the same edition shouldn't share an image.
             # This doesn't block same-day re-runs because the prior run's
-            # rows were deleted above before this loop started.
+            # rows were deleted above before this loop started. The
+            # perceptual hash also catches the same photo served as
+            # different bytes by another CDN.
             reject_hashes.add(fetched.sha256)
+            reject_phashes.add(fetched.phash)
             row = SubsectionImage(
                 edition_date=day,
                 edition_email=email,

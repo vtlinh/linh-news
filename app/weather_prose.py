@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PERIODS = ("today", "tomorrow")
+NIGHT_PERIOD = "night"
+NIGHT_BUCKETS = ("thunderstorm", "snow")
 BUCKETS = (
     "sunny",
     "mostly_sunny",
@@ -462,6 +464,63 @@ PHRASES: dict[str, dict[str, list[str]]] = {
 }
 
 
+# ─────────────────────── Night phrase library ───────────────────────
+#
+# Severe-overnight phrases. Appended after the today/tomorrow clause
+# (and after its optional "; overnight low …" tail) when the 10 PM–7 AM
+# window following that day contains thunderstorm or snow conditions.
+# 20 variants per bucket × 2 buckets = 40 phrases. Each phrase stands
+# on its own — no temperature slot, no period word — so it reads
+# naturally appended to either today's or tomorrow's sentence.
+
+NIGHT_PHRASES: dict[str, list[str]] = {
+    "thunderstorm": [
+        "Thunderstorms rumble through overnight.",
+        "Storms break out overnight.",
+        "Lightning lights the sky overnight.",
+        "Thunderstorms move in after dark.",
+        "Storms develop overnight.",
+        "Thunder rolls overnight.",
+        "Stormy weather overnight.",
+        "Thunderstorms push through the overnight hours.",
+        "Storms rumble after dark.",
+        "Thunderstorms light up the overnight.",
+        "Late-night thunderstorms.",
+        "Storms persist overnight.",
+        "Heavy thunderstorms after midnight.",
+        "Thunder and lightning overnight.",
+        "Storms sweep through overnight.",
+        "Overnight thunderstorms.",
+        "Bursts of thunder overnight.",
+        "Storms gather overnight.",
+        "Thunder echoes overnight.",
+        "Stormy skies overnight.",
+    ],
+    "snow": [
+        "Snow falls overnight.",
+        "Snowfall after dark.",
+        "Snow piles up overnight.",
+        "Wintry weather overnight.",
+        "Snow flies through the overnight hours.",
+        "Steady snow overnight.",
+        "Snow develops after midnight.",
+        "Snow showers overnight.",
+        "Overnight snowfall.",
+        "Snow blankets the area overnight.",
+        "Heavy snow overnight.",
+        "Snow persists overnight.",
+        "Late-night snow.",
+        "Snow drifts in overnight.",
+        "Snowy skies overnight.",
+        "Snow sweeps in after dark.",
+        "Snow continues overnight.",
+        "Overnight snow showers.",
+        "Snowflakes fall overnight.",
+        "Snow sets in overnight.",
+    ],
+}
+
+
 def all_seed_rows() -> list[dict]:
     """Flatten ``PHRASES`` into the row shape expected by the migration's
     ``op.bulk_insert``: ``[{"period", "bucket", "text"}, …]``."""
@@ -470,6 +529,16 @@ def all_seed_rows() -> list[dict]:
         for period in PERIODS:
             for text in PHRASES[bkt][period]:
                 rows.append({"period": period, "bucket": bkt, "text": text})
+    return rows
+
+
+def night_seed_rows() -> list[dict]:
+    """Flatten ``NIGHT_PHRASES`` into the same row shape, with
+    ``period="night"``."""
+    rows: list[dict] = []
+    for bkt in NIGHT_BUCKETS:
+        for text in NIGHT_PHRASES[bkt]:
+            rows.append({"period": NIGHT_PERIOD, "bucket": bkt, "text": text})
     return rows
 
 
@@ -500,6 +569,57 @@ def _pick_one(s: Session, period: str, bkt: str, rng: random.Random) -> str | No
     return rng.choice(rows)
 
 
+# Overnight lows colder than this threshold (in Celsius, regardless of the
+# user's display unit) earn a "; overnight low N°C" tail on the prose
+# clause. Above the threshold the tail is omitted — readers can already
+# infer "a normal cool overnight" from the day clause.
+NIGHT_L_TAIL_C_THRESHOLD = 5
+
+
+def _render_period(
+    s: Session,
+    period: str,
+    forecast: dict,
+    rng: random.Random,
+    *,
+    short_key: str,
+    h_key: str,
+    l_key: str,
+    night_l_key: str,
+    night_severe_key: str,
+) -> str | None:
+    """Render one period's clause (today or tomorrow) plus, if applicable,
+    its overnight-low tail and severe-overnight night clause.
+
+    Returns ``None`` when the day's high/low are missing — caller skips."""
+    h = forecast.get(h_key)
+    low = forecast.get(l_key)
+    if h is None or low is None:
+        return None
+    bkt = classify_bucket(forecast.get(short_key, "") or "")
+    text = _pick_one(s, period, bkt, rng)
+    if not text:
+        return None
+    clause = text.format(h=h, l=low)
+
+    night_l = forecast.get(night_l_key)
+    if night_l is not None and int(night_l) <= NIGHT_L_TAIL_C_THRESHOLD:
+        # Strip a trailing period so the tail reads as one sentence; restore
+        # it after appending.
+        body = clause.rstrip()
+        if body.endswith("."):
+            body = body[:-1]
+        clause = f"{body}; overnight low {int(night_l)}°C."
+
+    night_severe = forecast.get(night_severe_key)
+    if night_severe in NIGHT_BUCKETS:
+        night_text = _pick_one(s, NIGHT_PERIOD, night_severe, rng)
+        if night_text:
+            clause = f"{clause} {night_text}"
+
+    return clause
+
+
 def render_prose_html(
     forecast: dict,
     alerts: list[str],
@@ -513,6 +633,15 @@ def render_prose_html(
     callers should treat the empty string as "fall back to the legacy strip"
     so a missing-data day still renders something sensible.
 
+    Each period clause may be followed by:
+
+    1. ``; overnight low N°C`` — when ``{period}_night_l`` is at or below
+       :data:`NIGHT_L_TAIL_C_THRESHOLD` (5°C, evaluated in Celsius regardless
+       of the user's display unit; ``app.weather.convert_celsius_html`` does
+       the final °C→°F swap downstream).
+    2. A severe-overnight night phrase from :data:`NIGHT_PHRASES` — when
+       ``{period}_night_severe`` is ``"thunderstorm"`` or ``"snow"``.
+
     Alerts are appended as ``⚠ {alert}`` segments after the prose, matching
     the suffix style used in ``app.weather.build_weather_strip``."""
     if rng is None:
@@ -520,21 +649,33 @@ def render_prose_html(
 
     parts: list[str] = []
 
-    today_h = forecast.get("today_h")
-    today_l = forecast.get("today_l")
-    if today_h is not None and today_l is not None:
-        bkt = classify_bucket(forecast.get("today_short", ""))
-        text = _pick_one(s, "today", bkt, rng)
-        if text:
-            parts.append(text.format(h=today_h, l=today_l))
+    today_clause = _render_period(
+        s,
+        "today",
+        forecast,
+        rng,
+        short_key="today_short",
+        h_key="today_h",
+        l_key="today_l",
+        night_l_key="today_night_l",
+        night_severe_key="today_night_severe",
+    )
+    if today_clause:
+        parts.append(today_clause)
 
-    tomorrow_h = forecast.get("tomorrow_h")
-    tomorrow_l = forecast.get("tomorrow_l")
-    if tomorrow_h is not None and tomorrow_l is not None:
-        bkt = classify_bucket(forecast.get("tomorrow_short", ""))
-        text = _pick_one(s, "tomorrow", bkt, rng)
-        if text:
-            parts.append(text.format(h=tomorrow_h, l=tomorrow_l))
+    tomorrow_clause = _render_period(
+        s,
+        "tomorrow",
+        forecast,
+        rng,
+        short_key="tomorrow_short",
+        h_key="tomorrow_h",
+        l_key="tomorrow_l",
+        night_l_key="tomorrow_night_l",
+        night_severe_key="tomorrow_night_severe",
+    )
+    if tomorrow_clause:
+        parts.append(tomorrow_clause)
 
     if not parts:
         return ""
@@ -553,9 +694,14 @@ def count_seed_rows() -> int:
 
 __all__ = [
     "BUCKETS",
+    "NIGHT_BUCKETS",
+    "NIGHT_L_TAIL_C_THRESHOLD",
+    "NIGHT_PERIOD",
+    "NIGHT_PHRASES",
     "PERIODS",
     "PHRASES",
     "all_seed_rows",
     "count_seed_rows",
+    "night_seed_rows",
     "render_prose_html",
 ]

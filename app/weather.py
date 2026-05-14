@@ -13,8 +13,9 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
@@ -55,6 +56,8 @@ def convert_celsius_html(html: str, unit: str) -> str:
         return f"{round(c * 9 / 5 + 32)}°"
 
     return _CELSIUS_BARE_DEGREE_RE.sub(_bare_to_f, html)
+
+
 _TIMEOUT = 8  # seconds per request
 
 _CONDITION_EMOJI: list[tuple[str, str]] = [
@@ -244,7 +247,52 @@ def fetch_current_now(lat_lon: str) -> str:
         return ""
 
 
-# ───────────────── Forecast (today + tomorrow H/L) ─────────────────
+# ───────────────── Hourly forecast (grid cache + summarize) ─────────────────
+
+
+# Bucket precedence used to pick a single dominant condition for a multi-hour
+# daytime window. Most newsworthy first — a day with two hours of
+# thunderstorms and fourteen hours of partly cloudy reads as "thunderstorms".
+_BUCKET_PRIORITY: tuple[str, ...] = (
+    "thunderstorm",
+    "snow",
+    "rain",
+    "fog",
+    "windy",
+    "cloudy",
+    "partly_cloudy",
+    "mostly_sunny",
+    "sunny",
+)
+
+# Severe buckets that earn an overnight clause when seen in the 10 PM–7 AM
+# window. Must stay in sync with ``app.weather_prose.NIGHT_BUCKETS``.
+_NIGHT_SEVERE_BUCKETS: frozenset[str] = frozenset({"thunderstorm", "snow"})
+
+# Bucket → display emoji, used for the dominant-condition emoji on a
+# summarized day. Distinct from ``_CONDITION_EMOJI`` (which keys on the raw
+# NWS shortForecast string).
+_BUCKET_EMOJI: dict[str, str] = {
+    "thunderstorm": "⛈",
+    "snow": "❄️",
+    "rain": "🌧",
+    "fog": "🌫",
+    "windy": "💨",
+    "cloudy": "☁️",
+    "partly_cloudy": "⛅",
+    "mostly_sunny": "🌤",
+    "sunny": "☀️",
+}
+
+# Daytime window expressed in local hours: 7 AM (inclusive) – 10 PM (exclusive).
+# The 10 PM hour itself is the first hour of the overnight window.
+_DAY_START_HOUR = 7
+_DAY_END_HOUR_EXCL = 22
+
+# How many days of past hourly data we retain in ``weather_hourly``. Anything
+# older is pruned on each refresh. ±7 days of look-back is the user-visible
+# guarantee; 14 leaves slack for clock skew and missed runs.
+_HOURLY_RETENTION_DAYS = 14
 
 
 def _to_celsius(value: float, unit: str) -> float:
@@ -255,63 +303,37 @@ def _to_celsius(value: float, unit: str) -> float:
     return float(value)
 
 
-def fetch_forecast(lat_lon: str) -> dict:
-    """Return today/tomorrow high/low + condition emoji.
+def _dominant_bucket(short_forecasts: list[str]) -> str:
+    """Pick the most newsworthy bucket across a set of hourly shortForecast
+    strings. Falls back to ``"cloudy"`` (the default in :func:`bucket`) when
+    the input list is empty."""
+    seen = {bucket(s) for s in short_forecasts if s}
+    for b in _BUCKET_PRIORITY:
+        if b in seen:
+            return b
+    return "cloudy"
 
-    Shape::
-        {"today_h": 14, "today_l": 7, "today_em": "☀️",
-         "tomorrow_h": 16, "tomorrow_l": 9, "tomorrow_em": "☁️"}
 
-    Returns ``{}`` on any error so the caller can render a partial strip.
-    """
+def resolve_grid(s: Session, coords: str) -> tuple[str, int, int] | None:
+    """Return ``(grid_id, grid_x, grid_y)`` for ``coords`` — cached forever
+    in ``weather_grid`` once resolved.
+
+    Subsequent generations skip the ``/points`` lookup entirely. Returns
+    ``None`` if NWS refuses the resolution (network error, coords outside
+    NWS coverage); callers should treat that as "no hourly data available"."""
+    from app.db import WeatherGrid
+
+    row = s.get(WeatherGrid, coords)
+    if row is not None:
+        return row.grid_id, row.grid_x, row.grid_y
+
     try:
-        lat, lon = [p.strip() for p in lat_lon.split(",", 1)]
-
+        lat, lon = [p.strip() for p in coords.split(",", 1)]
         point = _get_json(f"https://api.weather.gov/points/{lat},{lon}")
-        forecast_url = point["properties"]["forecast"]
-        # Request SI so the temperature comes back in °C without conversion.
-        if "?" in forecast_url:
-            forecast_url += "&units=si"
-        else:
-            forecast_url += "?units=si"
-
-        data = _get_json(forecast_url)
-        periods = data.get("properties", {}).get("periods", [])
-        if not periods:
-            log.warning("NWS forecast: no periods returned for %s", lat_lon)
-            return {}
-
-        # NWS periods alternate day/night; first 4 = today day/night + tomorrow
-        # day/night (or starting from tomorrow if it's already evening).
-        today_day = next((p for p in periods if p.get("isDaytime")), None)
-        nights = [p for p in periods if not p.get("isDaytime")]
-        days = [p for p in periods if p.get("isDaytime")]
-
-        out: dict = {}
-        if today_day:
-            today_short = today_day.get("shortForecast", "") or ""
-            out["today_h"] = round(
-                _to_celsius(today_day["temperature"], today_day.get("temperatureUnit", "C"))
-            )
-            out["today_em"] = _emoji(today_short)
-            out["today_short"] = today_short
-        if nights:
-            out["today_l"] = round(
-                _to_celsius(nights[0]["temperature"], nights[0].get("temperatureUnit", "C"))
-            )
-        if len(days) >= 2:
-            tomorrow_short = days[1].get("shortForecast", "") or ""
-            out["tomorrow_h"] = round(
-                _to_celsius(days[1]["temperature"], days[1].get("temperatureUnit", "C"))
-            )
-            out["tomorrow_em"] = _emoji(tomorrow_short)
-            out["tomorrow_short"] = tomorrow_short
-        if len(nights) >= 2:
-            out["tomorrow_l"] = round(
-                _to_celsius(nights[1]["temperature"], nights[1].get("temperatureUnit", "C"))
-            )
-        return out
-
+        props = point["properties"]
+        grid_id = props["gridId"]
+        grid_x = int(props["gridX"])
+        grid_y = int(props["gridY"])
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
@@ -321,8 +343,217 @@ def fetch_forecast(lat_lon: str) -> dict:
         ValueError,
         json.JSONDecodeError,
     ) as e:
-        log.warning("NWS forecast fetch failed: %s", e)
-        return {}
+        log.warning("NWS grid lookup failed for %s: %s", coords, e)
+        return None
+
+    s.add(
+        WeatherGrid(
+            coords=coords,
+            grid_id=grid_id,
+            grid_x=grid_x,
+            grid_y=grid_y,
+            resolved_at=datetime.now(UTC),
+        )
+    )
+    s.commit()
+    return grid_id, grid_x, grid_y
+
+
+def fetch_hourly_forecast(grid_id: str, grid_x: int, grid_y: int) -> list[dict]:
+    """Fetch the hourly forecast from ``/gridpoints/{id}/{x},{y}/forecast/hourly``.
+
+    Returns a list of ``{"start_at": datetime(UTC), "temp_c": int,
+    "short_forecast": str}``. Returns ``[]`` on any error so the caller
+    can fall back to whatever is already cached in ``weather_hourly``.
+    """
+    url = f"https://api.weather.gov/gridpoints/{grid_id}/{grid_x},{grid_y}/forecast/hourly"
+    try:
+        data = _get_json(url)
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        OSError,
+        KeyError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as e:
+        log.warning("NWS hourly fetch failed for %s/%d,%d: %s", grid_id, grid_x, grid_y, e)
+        return []
+
+    out: list[dict] = []
+    for p in data.get("properties", {}).get("periods", []) or []:
+        try:
+            start_raw = p["startTime"]
+            start_at = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone(UTC)
+            temp_c = round(_to_celsius(p["temperature"], p.get("temperatureUnit", "C")))
+            short = (p.get("shortForecast") or "").strip()
+        except (KeyError, ValueError, TypeError):
+            continue
+        out.append({"start_at": start_at, "temp_c": temp_c, "short_forecast": short})
+    return out
+
+
+def cache_hourly_forecast(s: Session, coords: str, periods: list[dict]) -> int:
+    """Upsert ``periods`` (output of :func:`fetch_hourly_forecast`) into
+    ``weather_hourly`` and prune rows older than the retention window.
+
+    Returns the number of rows written. Idempotent: re-running with the
+    same periods re-stamps ``fetched_at`` but does not duplicate rows."""
+    from app.db import WeatherHourly
+
+    if not periods:
+        # Still prune even when the fetch failed — keeps the table bounded
+        # even during long NWS outages.
+        _prune_hourly(s, coords)
+        return 0
+
+    now = datetime.now(UTC)
+    written = 0
+    for p in periods:
+        existing = s.get(WeatherHourly, (coords, p["start_at"]))
+        if existing is None:
+            s.add(
+                WeatherHourly(
+                    coords=coords,
+                    start_at=p["start_at"],
+                    temp_c=p["temp_c"],
+                    short_forecast=p["short_forecast"],
+                    fetched_at=now,
+                )
+            )
+        else:
+            existing.temp_c = p["temp_c"]
+            existing.short_forecast = p["short_forecast"]
+            existing.fetched_at = now
+        written += 1
+
+    _prune_hourly(s, coords)
+    s.commit()
+    return written
+
+
+def _prune_hourly(s: Session, coords: str) -> None:
+    """Delete rows older than ``_HOURLY_RETENTION_DAYS`` for ``coords``."""
+    from app.db import WeatherHourly
+
+    cutoff = datetime.now(UTC) - timedelta(days=_HOURLY_RETENTION_DAYS)
+    s.execute(
+        delete(WeatherHourly).where(
+            WeatherHourly.coords == coords,
+            WeatherHourly.start_at < cutoff,
+        ),
+        execution_options={"synchronize_session": False},
+    )
+
+
+def _local_tz():
+    """Return the configured local timezone — imported lazily to avoid a
+    circular import via ``app.settings``."""
+    from app.settings import LOCAL_TZ
+
+    return LOCAL_TZ
+
+
+def _day_window_utc(local_day: date) -> tuple[datetime, datetime]:
+    """UTC ``[start, end)`` interval covering the 7 AM–10 PM local-time
+    daytime window for ``local_day``."""
+    tz = _local_tz()
+    start = datetime.combine(local_day, time(_DAY_START_HOUR, 0), tzinfo=tz)
+    end = datetime.combine(local_day, time(_DAY_END_HOUR_EXCL, 0), tzinfo=tz)
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
+def _night_window_utc(local_day: date) -> tuple[datetime, datetime]:
+    """UTC ``[start, end)`` interval covering the 10 PM–7 AM local-time
+    overnight window that follows ``local_day``."""
+    tz = _local_tz()
+    start = datetime.combine(local_day, time(_DAY_END_HOUR_EXCL, 0), tzinfo=tz)
+    end = datetime.combine(local_day + timedelta(days=1), time(_DAY_START_HOUR, 0), tzinfo=tz)
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
+def _hours_in(s: Session, coords: str, start: datetime, end: datetime) -> list:
+    """Return ``WeatherHourly`` rows for ``coords`` whose ``start_at`` is in
+    ``[start, end)``, ordered by time."""
+    from app.db import WeatherHourly
+
+    return list(
+        s.execute(
+            select(WeatherHourly)
+            .where(
+                WeatherHourly.coords == coords,
+                WeatherHourly.start_at >= start,
+                WeatherHourly.start_at < end,
+            )
+            .order_by(WeatherHourly.start_at.asc())
+        ).scalars()
+    )
+
+
+def summarize_forecast(s: Session, coords: str, today: date) -> dict:
+    """Build the today + tomorrow summary dict consumed by
+    :func:`build_weather_strip` and :func:`app.weather_prose.render_prose_html`.
+
+    Reads exclusively from the ``weather_hourly`` cache, so it can rebuild a
+    past day's strip after the fact provided the rows were upserted during
+    that day's generation run. Returns ``{}`` when nothing is cached.
+
+    Shape (all keys optional — present only when data exists)::
+
+        {
+            "today_h", "today_l", "today_em", "today_short",
+            "tomorrow_h", "tomorrow_l", "tomorrow_em", "tomorrow_short",
+            "today_night_l", "today_night_severe",
+            "tomorrow_night_l", "tomorrow_night_severe",
+        }
+    """
+    out: dict = {}
+    for label, day in (("today", today), ("tomorrow", today + timedelta(days=1))):
+        day_rows = _hours_in(s, coords, *_day_window_utc(day))
+        if day_rows:
+            temps = [r.temp_c for r in day_rows]
+            shorts = [r.short_forecast for r in day_rows]
+            bkt = _dominant_bucket(shorts)
+            rep_short = next(
+                (sf for sf in shorts if bucket(sf) == bkt),
+                shorts[0],
+            )
+            out[f"{label}_h"] = max(temps)
+            out[f"{label}_l"] = min(temps)
+            out[f"{label}_em"] = _BUCKET_EMOJI[bkt]
+            out[f"{label}_short"] = rep_short
+
+        night_rows = _hours_in(s, coords, *_night_window_utc(day))
+        if night_rows:
+            out[f"{label}_night_l"] = min(r.temp_c for r in night_rows)
+            severe = next(
+                (
+                    bucket(r.short_forecast)
+                    for r in night_rows
+                    if bucket(r.short_forecast) in _NIGHT_SEVERE_BUCKETS
+                ),
+                None,
+            )
+            if severe is not None:
+                out[f"{label}_night_severe"] = severe
+
+    return out
+
+
+def refresh_and_summarize(s: Session, coords: str, today: date) -> dict:
+    """One-call entry point used by the generation pipeline.
+
+    Resolves (and caches) the NWS grid, fetches the hourly forecast,
+    upserts it into ``weather_hourly``, then returns the today/tomorrow
+    summary. Tolerates partial failure: if the network is down but cached
+    rows exist for the requested days, the summary still renders."""
+    grid = resolve_grid(s, coords)
+    if grid is not None:
+        grid_id, grid_x, grid_y = grid
+        periods = fetch_hourly_forecast(grid_id, grid_x, grid_y)
+        cache_hourly_forecast(s, coords, periods)
+    return summarize_forecast(s, coords, today)
 
 
 # ───────────────── Active alerts (NWS) ─────────────────
@@ -450,34 +681,41 @@ def build_weather_strip(
     mirroring the masthead-corner refreshed label in the PDF.
     """
 
+    # Threshold for showing the strip's "L overnight N°" tail — same rule as
+    # the prose paragraph (evaluated in Celsius regardless of display unit).
+    NIGHT_TAIL_THRESHOLD_C = 5
+
+    def _period_parts(label: str, key: str) -> list[str]:
+        h = forecast.get(f"{key}_h")
+        low = forecast.get(f"{key}_l")
+        em = forecast.get(f"{key}_em", "")
+        night_l = forecast.get(f"{key}_night_l")
+        night_severe = forecast.get(f"{key}_night_severe")
+
+        out: list[str] = []
+        if h is not None or low is not None:
+            bits = [label]
+            if h is not None:
+                bits.append(f"H {h}°")
+            if low is not None:
+                bits.append(f"/ L {low}°")
+            if em:
+                bits.append(em)
+            out.append(" ".join(bits))
+        if night_l is not None and int(night_l) <= NIGHT_TAIL_THRESHOLD_C:
+            out.append(f"L overnight {int(night_l)}°")
+        if night_severe == "thunderstorm":
+            out.append("⛈ Storms overnight")
+        elif night_severe == "snow":
+            out.append("❄️ Snow overnight")
+        return out
+
     parts: list[str] = []
     if now:
         parts.append(f"Now {now}")
     if forecast:
-        today_h = forecast.get("today_h")
-        today_l = forecast.get("today_l")
-        today_em = forecast.get("today_em", "")
-        if today_h is not None or today_l is not None:
-            bits = ["Today"]
-            if today_h is not None:
-                bits.append(f"H {today_h}°")
-            if today_l is not None:
-                bits.append(f"/ L {today_l}°")
-            if today_em:
-                bits.append(today_em)
-            parts.append(" ".join(bits))
-        tom_h = forecast.get("tomorrow_h")
-        tom_l = forecast.get("tomorrow_l")
-        tom_em = forecast.get("tomorrow_em", "")
-        if tom_h is not None or tom_l is not None:
-            bits = ["Tomorrow"]
-            if tom_h is not None:
-                bits.append(f"H {tom_h}°")
-            if tom_l is not None:
-                bits.append(f"/ L {tom_l}°")
-            if tom_em:
-                bits.append(tom_em)
-            parts.append(" ".join(bits))
+        parts.extend(_period_parts("Today", "today"))
+        parts.extend(_period_parts("Tomorrow", "tomorrow"))
     for a in alerts or []:
         parts.append(f"⚠ {a}")
     inner = " · ".join(p for p in parts if p)

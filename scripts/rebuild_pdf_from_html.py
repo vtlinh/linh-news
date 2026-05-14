@@ -86,7 +86,7 @@ def main(target: date) -> int:
         coords = get_settings().weather_coords
         try:
             now_text = weather.get_now_cached(s, coords)
-            forecast = weather.fetch_forecast(coords)
+            forecast = weather.refresh_and_summarize(s, coords, target)
             alerts = weather.fetch_alerts(coords)
             weather_strip_html = weather.build_weather_strip(
                 now_text,

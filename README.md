@@ -24,7 +24,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 ## Tooling
 
 - Python 3.12, managed with **uv** (`uv sync`, `uv run …`). `uv.lock` is committed.
-- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (33 migrations).
+- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (34 migrations).
 - Anthropic SDK with prompt caching, streaming, structured-output tool schemas.
 - WeasyPrint for the PDF (custom User-Agent so Wikimedia thumbnails load).
 - Persistent cache layer (`app/cache.py`): Redis when `REDIS_URL` is set, SQLite `kv_cache` table otherwise.

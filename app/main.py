@@ -202,6 +202,18 @@ def logout(request: Request, s: Session = Depends(get_session)):
 # ──────────────────────── Viewer ────────────────────────
 
 
+def _user_temperature_unit(s: Session, email: str | None) -> str:
+    """Return the user's preferred temperature unit (``"C"`` or ``"F"``).
+    Falls back to ``"C"`` when no row exists or the value is unset."""
+    if not email:
+        return "F"
+    from app.db import UserSettings as _US
+
+    row = s.get(_US, email)
+    unit = (row.temperature_unit if row else None) or "F"
+    return unit.upper() if unit.upper() in ("C", "F") else "F"
+
+
 def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     """Replace ``<!-- WEATHER_PLACEHOLDER -->`` with the hand-written prose
     paragraph baked at generation time on
@@ -215,6 +227,7 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
     forecast = (edition.weather_forecast_json if edition else None) or {}
     alerts = (edition.weather_alerts_json if edition else None) or []
     refreshed_at = edition.generated_at if edition else None
+    unit = _user_temperature_unit(s, edition.email if edition else None)
     prose_html = forecast.get("prose_html") or ""
     if prose_html:
         refreshed_html = weather.build_refreshed_span(refreshed_at)
@@ -232,6 +245,7 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
         replacement = weather.build_weather_strip(
             now, forecast, alerts, refreshed_at=refreshed_at
         )
+    replacement = weather.convert_celsius_html(replacement, unit)
     return html.replace("<!-- WEATHER_PLACEHOLDER -->", replacement, 1)
 
 

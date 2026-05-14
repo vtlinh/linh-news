@@ -352,6 +352,12 @@ class UserSettings(Base):
     address: Mapped[str | None] = mapped_column(String, nullable=True)
     # "lat,lon" — resolved from ``address`` on save via Nominatim.
     weather_coords: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Preferred temperature unit for weather display: "C" (default) or "F".
+    # Applied at render time — the underlying NWS data is always fetched
+    # in Celsius; the renderer converts to °F when this is "F".
+    temperature_unit: Mapped[str] = mapped_column(
+        String, nullable=False, default="F", server_default="F"
+    )
     sections_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     # List of ``{"name": str, "birthday": "YYYY-MM-DD"}``. Drives kid-age /
     # grade computation that feeds the prompt's school grade-filter rule.

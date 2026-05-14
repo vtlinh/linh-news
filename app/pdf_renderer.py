@@ -47,6 +47,31 @@ from app.html_renderer import format_percent, percent_color, text_to_html
 
 log = logging.getLogger(__name__)
 
+# Codepoint ranges considered "emoji" for PDF stripping. Mirrors the
+# unicode-range of the LinhEmoji @font-face fallback so anything that
+# would have rendered through the color-emoji font is removed instead.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001f000-\U0001ffff"
+    "☀-➿"
+    "\U0001f1e6-\U0001f1ff"
+    "⌀-⏿"
+    "⬀-⯿"
+    "⤀-⥿"
+    "\U0001f900-\U0001f9ff"
+    "\U0001fa70-\U0001faff"
+    "]"
+)
+
+
+def strip_emojis(s: str) -> str:
+    """Remove emoji codepoints from ``s``. The PDF deliberately omits
+    emoji so the print-style serif body is uninterrupted."""
+    if not s:
+        return s
+    return _EMOJI_RE.sub("", s)
+
+
 _MASTHEAD_FONT_PATH = Path(__file__).resolve().parent / "fonts" / "Chomsky.otf"
 _MASTHEAD_FONT_FAMILY = "Linh Times Masthead"
 
@@ -66,7 +91,9 @@ _FLOW_COLUMNS = 4
 # v5: rail fit now subtracts border-left + padding-left from the fit width
 #     to match the assembled aside.rail content area (was clipping the
 #     right edge of every line); refit needed.
-PDF_RAIL_VERSION = 5
+# v6: PDF strips emoji codepoints from all body/rail content — cached
+#     rails from v5 may still contain emoji glyphs; force a refit.
+PDF_RAIL_VERSION = 6
 
 # Upper band's target share of the news area (the rest goes to the lower
 # band). Used to pick the section-split point.
@@ -231,8 +258,8 @@ def _render_story_html(
     image_bytes_by_id: dict[int, tuple[bytes, str]] | None,
     with_image: bool,
 ) -> str:
-    title = _esc(sub.get("title", ""))
-    body = text_to_html(sub.get("text", ""))
+    title = strip_emojis(_esc(sub.get("title", "")))
+    body = strip_emojis(text_to_html(sub.get("text", "")))
     image_html = ""
     if with_image and image_bytes_by_id:
         image_id = sub.get("image_id")
@@ -254,7 +281,7 @@ def _render_section_for_pdf(
 ) -> tuple[str, list[str]]:
     """Return (header_html, [story_html, …]) for a single news section."""
     key = section.get("key", "")
-    title = _esc(section.get("title", "") or key)
+    title = strip_emojis(_esc(section.get("title", "") or key))
     header = f'<section class="news-header"><h2>{title}</h2></section>'
     stories: list[str] = []
     image_used = False
@@ -366,6 +393,7 @@ def _render_top_inner(
     title_pt: int,
     vol_number: int,
     ai_cost_usd: float,
+    weather_location_label: str = "",
 ) -> str:
     """Masthead + dateline inner HTML.
 
@@ -375,15 +403,18 @@ def _render_top_inner(
     title_text = f"The {masthead_name} Times"
     dateline = _format_date(today)
     motto_quote = f'"All the News<br>That\'s Fit for {masthead_name}"'
+    if weather_location_label:
+        weather_title_html = (
+            f"The Weather<br>for {_esc(weather_location_label)}"
+        )
+    else:
+        weather_title_html = "The Weather"
     weather_block = (
-        f'<span class="weather-title">The Weather</span>{weather_inner}'
+        f'<span class="weather-title">{weather_title_html}</span>{weather_inner}'
         if weather_inner.strip()
         else ""
     )
-    price_block = (
-        f'<span class="ai-cost-label">Prices vary by AI</span>'
-        f'<span class="ai-cost-value">${ai_cost_usd:.2f}</span>'
-    )
+    price_block = f'<span class="ai-cost-value">${ai_cost_usd:.2f}</span>'
     return (
         '<header class="masthead">'
         f'<div class="motto"><span>{motto_quote}</span></div>'
@@ -494,6 +525,12 @@ def news_region_css() -> str:
     .region section.news-story img.story-image {{
         display: block; width: auto; max-width: 100%;
         height: auto; margin: 0 0 4pt;
+        /* Prevent the multicolumn flow from slicing through the image
+           when its natural height exceeds the remaining column space:
+           WeasyPrint will push the image to the next column instead of
+           clipping it against ``overflow: hidden``. */
+        break-inside: avoid;
+        page-break-inside: avoid;
     }}
     .region div.sep-story {{
         display: block; text-align: center;
@@ -579,7 +616,6 @@ def top_region_css() -> str:
     .dateline .vol, .dateline .ai-cost {{ flex: 0 0 22%; }}
     .dateline .vol {{ text-align: left; }}
     .dateline .ai-cost {{ text-align: right; text-transform: none; letter-spacing: 0; }}
-    .dateline .ai-cost .ai-cost-label {{ font-size: 6pt; color: #555; margin-right: 18pt; }}
     .dateline .ai-cost .ai-cost-value {{ font-size: 11pt; }}
     .dateline .refreshed {{ text-align: right; }}
     .dateline .date {{ flex: 1 1 auto; text-align: center; }}
@@ -658,6 +694,7 @@ def build_pdf_parts(
     masthead_name: str = "Linh",
     vol_number: int = 1,
     ai_cost_usd: float = 0.0,
+    weather_location_label: str = "",
 ) -> PdfParts:
     """Slice ``linhnews`` into the five region fragments the per-region
     fit pass will operate on.
@@ -670,9 +707,17 @@ def build_pdf_parts(
                                   per user spec),
       * ``[(upper, w_u), (lower, w_l)]`` when ≥ 2 sections.
     """
+    # The PDF deliberately drops emoji codepoints — all body text, the
+    # rail (calendar/movies), and the weather strip are stripped at the
+    # boundary so per-region fit measurement and final assembly see the
+    # same stripped content.
+    pdf_calendar_html = strip_emojis(pdf_calendar_html)
+    pdf_movies_html = strip_emojis(pdf_movies_html)
+    weather_strip_html = strip_emojis(weather_strip_html)
+    weather_prose_html = strip_emojis(weather_prose_html)
     weather_inner = _format_weather_for_pdf(weather_strip_html, weather_prose_html)
     title_text = f"The {masthead_name} Times"
-    title_pt = max(36, min(72, 900 // max(len(title_text), 1)))
+    title_pt = max(36, min(100, 1400 // max(len(title_text), 1)))
 
     top_inner = _render_top_inner(
         today=today,
@@ -681,6 +726,7 @@ def build_pdf_parts(
         title_pt=title_pt,
         vol_number=vol_number,
         ai_cost_usd=ai_cost_usd,
+        weather_location_label=weather_location_label,
     )
 
     sections = [s for s in (linhnews.get("sections") or []) if s.get("key")]
@@ -707,8 +753,8 @@ def build_pdf_parts(
     headline_title = ""
     headline_word_count = 0
     if has_headline:
-        headline_title = headline.get("title", "") or ""
-        headline_body_html = text_to_html(headline.get("text", "") or "")
+        headline_title = strip_emojis(headline.get("title", "") or "")
+        headline_body_html = strip_emojis(text_to_html(headline.get("text", "") or ""))
         headline_word_count = (
             len((headline_title or "").split())
             + len((headline.get("text") or "").split())

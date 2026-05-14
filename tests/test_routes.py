@@ -67,8 +67,10 @@ def test_home_substitutes_weather_placeholder(client, login_as, db_session):
         r = client.get("/d/2026-05-02")
     assert r.status_code == 200
     assert "<!-- WEATHER_PLACEHOLDER -->" not in r.text
-    assert "Now 12°C ⛅" in r.text
-    assert "Today H 14° / L 7° ☀️" in r.text
+    # Default temperature unit is "F"; the injector converts the Celsius
+    # numbers from the cached 'Now' string and the forecast highs/lows.
+    assert "Now 54°F ⛅" in r.text
+    assert "Today H 57° / L 45° ☀️" in r.text
     assert "⚠ Wind Advisory until 6 PM" in r.text
     # The view-time injector passes the edition's generated_at so the
     # "Refreshed at HH:MM TZ" badge renders on the right of the strip.

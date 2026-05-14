@@ -18,6 +18,13 @@
       <input type="text" id="address">
       <span class="sub">Used to fetch local weather. Resolved on save.</span>
     </label>
+    <label>Temperature unit
+      <select id="temperature-unit">
+        <option value="F">Fahrenheit (°F)</option>
+        <option value="C">Celsius (°C)</option>
+      </select>
+      <span class="sub">Applied to the weather block in your HTML and PDF editions.</span>
+    </label>
   </section>
 
   <h2 class="sections-h">Children</h2>
@@ -46,8 +53,9 @@
     background: var(--surface); margin-bottom: 18px; }
   .user-fields label { display: flex; flex-direction: column; gap: 4px;
     font-weight: 600; }
-  .user-fields input { font: inherit; padding: 8px 10px; border: 1px solid var(--rule);
-    border-radius: 4px; min-height: 40px; }
+  .user-fields input, .user-fields select { font: inherit; padding: 8px 10px;
+    border: 1px solid var(--rule); border-radius: 4px; min-height: 40px;
+    background: var(--surface); color: inherit; }
   .user-fields .sub { font-weight: normal; color: var(--muted); font-size: 0.88em; }
   h2.sections-h { margin-top: 8px; }
 
@@ -147,6 +155,7 @@
   const $addChild = document.getElementById('add-child');
   const $displayName = document.getElementById('display-name');
   const $address = document.getElementById('address');
+  const $tempUnit = document.getElementById('temperature-unit');
   const $saveBtn = document.getElementById('save-btn');
   const $saveStatus = document.getElementById('save-status');
   const $addSection = document.getElementById('add-section');
@@ -444,6 +453,7 @@
   function loadInto(settings) {
     $displayName.value = settings.display_name || '';
     $address.value = settings.address || '';
+    $tempUnit.value = (settings.temperature_unit || 'F').toUpperCase() === 'C' ? 'C' : 'F';
     $sections.replaceChildren();
     const sections = (settings.sections && settings.sections.length)
       ? settings.sections
@@ -475,6 +485,7 @@
     return {
       display_name: $displayName.value.trim(),
       address: $address.value.trim(),
+      temperature_unit: ($tempUnit.value === 'C' ? 'C' : 'F'),
       sections: Array.from($sections.children).map(r => r._collect()),
       children: Array.from($children.children).map(r => r._collect()),
     };

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,6 +20,41 @@ from sqlalchemy.orm import Session
 log = logging.getLogger(__name__)
 
 _UA = "Linh-News/1.0 (vtlinh87+linhnews@gmail.com)"
+
+# Regex over rendered HTML / plain text to find integer Celsius readings
+# emitted by ``build_weather_strip`` / ``weather_prose`` / NWS now-cache.
+# Captures the signed integer so we can convert in-place to Fahrenheit
+# at the display boundary.
+_CELSIUS_NUMBER_RE = re.compile(r"(-?\d+)°C")
+_CELSIUS_BARE_DEGREE_RE = re.compile(r"(-?\d+)°(?!C|F)")
+
+
+def convert_celsius_html(html: str, unit: str) -> str:
+    """Convert every integer °C reading in ``html`` to °F when ``unit``
+    is ``"F"`` (case-insensitive). When ``unit`` is anything else, return
+    the input unchanged.
+
+    Catches two forms: ``"12°C"`` (the cached "Now" string and the prose
+    paragraph use this) and the bare-degree form ``"H 14°"`` /
+    ``"L 7°"`` emitted by the weather strip — those carry an implicit
+    Celsius unit and need conversion too. The bare-degree regex is
+    deliberately written to not double-convert a degree marker that's
+    already followed by ``C`` or ``F``.
+    """
+    if not html or (unit or "").upper() != "F":
+        return html
+
+    def _to_f(m: re.Match) -> str:
+        c = int(m.group(1))
+        return f"{round(c * 9 / 5 + 32)}°F"
+
+    html = _CELSIUS_NUMBER_RE.sub(_to_f, html)
+
+    def _bare_to_f(m: re.Match) -> str:
+        c = int(m.group(1))
+        return f"{round(c * 9 / 5 + 32)}°"
+
+    return _CELSIUS_BARE_DEGREE_RE.sub(_bare_to_f, html)
 _TIMEOUT = 8  # seconds per request
 
 _CONDITION_EMOJI: list[tuple[str, str]] = [

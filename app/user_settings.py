@@ -40,6 +40,7 @@ def to_dict(row: UserSettings) -> dict:
         "display_name": row.display_name,
         "address": row.address,
         "weather_coords": row.weather_coords,
+        "temperature_unit": (row.temperature_unit or "F").upper(),
         "sections": list(row.sections_json or []),
         "children": list(row.children_json or []),
     }
@@ -56,6 +57,7 @@ def get(s: Session, email: str) -> dict:
         "display_name": None,
         "address": None,
         "weather_coords": None,
+        "temperature_unit": "F",
         "sections": [],
         "children": [],
     }
@@ -291,6 +293,8 @@ def save(s: Session, email: str, payload: dict) -> dict:
         coords = prior_coords
 
     display_name = (payload.get("display_name") or "").strip() or None
+    temp_unit_raw = (payload.get("temperature_unit") or "F").strip().upper()
+    temperature_unit = temp_unit_raw if temp_unit_raw in ("C", "F") else "F"
 
     if row is None:
         row = UserSettings(
@@ -298,6 +302,7 @@ def save(s: Session, email: str, payload: dict) -> dict:
             display_name=display_name,
             address=address,
             weather_coords=coords,
+            temperature_unit=temperature_unit,
             sections_json=sections_clean,
             children_json=children_clean,
             updated_at=datetime.now(UTC),
@@ -307,6 +312,7 @@ def save(s: Session, email: str, payload: dict) -> dict:
         row.display_name = display_name
         row.address = address
         row.weather_coords = coords
+        row.temperature_unit = temperature_unit
         row.sections_json = sections_clean
         row.children_json = children_clean
         row.updated_at = datetime.now(UTC)

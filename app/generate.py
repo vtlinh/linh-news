@@ -54,6 +54,27 @@ log = logging.getLogger(__name__)
 Slot = Literal["morning", "evening", "refresh"]
 
 
+def _weather_location_label(address: str) -> str:
+    """Extract ``CITY, ST`` (uppercased, 2-letter state) from a free-form
+    address like ``"15 Hunter Ridge, Woodcliff Lake, NJ 07677"``. Returns
+    an empty string if the address doesn't parse — caller falls back to
+    the plain "The Weather" title.
+    """
+    if not address:
+        return ""
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if len(parts) < 2:
+        return ""
+    state_zip = parts[-1].split()
+    if not state_zip:
+        return ""
+    state = state_zip[0].upper()
+    if len(state) != 2 or not state.isalpha():
+        return ""
+    city = parts[-2].upper()
+    return f"{city}, {state}" if city else ""
+
+
 def _is_calendar_oauth_error(e: BaseException) -> bool:
     """True if ``e`` looks like a Google OAuth refresh-token problem (revoked,
     expired, missing). Used to decide whether the smart-cron path should
@@ -109,6 +130,11 @@ def run(
         usettings = user_settings_mod.get(s, target_email)
     masthead_name = (usettings.get("display_name") or "the reader").strip() or "the reader"
     weather_coords = (usettings.get("weather_coords") or settings.weather_coords).strip()
+    weather_address = (usettings.get("address") or settings.weather_address or "").strip()
+    weather_location_label = _weather_location_label(weather_address)
+    temperature_unit = (usettings.get("temperature_unit") or "F").upper()
+    if temperature_unit not in ("C", "F"):
+        temperature_unit = "F"
     user_sections = list(usettings.get("sections") or [])
     user_children = list(usettings.get("children") or [])
 
@@ -214,6 +240,8 @@ def run(
             weather_forecast=weather_forecast,
             weather_alerts=weather_alerts,
             weather_coords=weather_coords,
+            weather_location_label=weather_location_label,
+            temperature_unit=temperature_unit,
             masthead_name=masthead_name,
             debug_generated_at=debug_generated_at,
         )
@@ -241,6 +269,8 @@ def _run_post_llm_pipeline(
     weather_forecast: dict,
     weather_alerts: list,
     weather_coords: str,
+    weather_location_label: str,
+    temperature_unit: str,
     masthead_name: str,
     debug_generated_at: datetime,
 ) -> None:
@@ -262,6 +292,10 @@ def _run_post_llm_pipeline(
         pdf_now,
         weather_forecast,
         weather_alerts,
+    )
+    pdf_weather_strip = weather.convert_celsius_html(pdf_weather_strip, temperature_unit)
+    pdf_prose_html = weather.convert_celsius_html(
+        weather_forecast.get("prose_html", "") or "", temperature_unit
     )
     # VOL number = days since the first generated PDF (1-indexed).
     Maker = session_factory()
@@ -285,9 +319,9 @@ def _run_post_llm_pipeline(
         ai_cost_usd_raw = fresh_cost_usd
     else:
         ai_cost_usd_raw = float(linhnews.get("_ai_cost_usd") or 0.0)
-    # Round up to the nearest dime for the dateline display so the price
-    # is a visually clean newspaper-style number ($0.40 / $1.30 / $2.10).
-    ai_cost_usd = math.ceil(ai_cost_usd_raw * 10) / 10 if ai_cost_usd_raw > 0 else 0.0
+    # Round up to the nearest nickel for the dateline display so the price
+    # is a visually clean newspaper-style number ($0.35 / $1.25 / $2.10).
+    ai_cost_usd = math.ceil(ai_cost_usd_raw * 20) / 20 if ai_cost_usd_raw > 0 else 0.0
 
     with _step("pdf_renderer.build_pdf_parts"):
         pdf_parts = pdf_renderer.build_pdf_parts(
@@ -295,12 +329,13 @@ def _run_post_llm_pipeline(
             pdf_calendar_html=pdf_calendar_html,
             pdf_movies_html=pdf_movies_html,
             weather_strip_html=pdf_weather_strip,
-            weather_prose_html=weather_forecast.get("prose_html", "") or "",
+            weather_prose_html=pdf_prose_html,
             today=today,
             image_bytes_by_id=image_bytes_by_id,
             masthead_name=masthead_name,
             vol_number=vol_number,
             ai_cost_usd=ai_cost_usd,
+            weather_location_label=weather_location_label,
         )
 
     # No pre-WeasyPrint HTML snapshot in the 5-region pipeline: the input is

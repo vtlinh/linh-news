@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import hashlib
 import logging
+import math
 import re
 import sys
 import time
@@ -118,6 +119,11 @@ def run(
         today,
         target_email,
     )
+
+    # Reset the Anthropic API cost accumulator so this run's cost is
+    # captured in isolation (regardless of whether the LLM is called at
+    # all — re-render mode reuses cached content_json and skips LLM).
+    claude_client.reset_usage_log()
 
     if skip_rail_cache:
         cached_rail = None
@@ -257,6 +263,32 @@ def _run_post_llm_pipeline(
         weather_forecast,
         weather_alerts,
     )
+    # VOL number = days since the first generated PDF (1-indexed).
+    Maker = session_factory()
+    with Maker() as s:
+        first_edition_date = s.execute(
+            select(Edition.date).order_by(Edition.date.asc()).limit(1)
+        ).scalar()
+    vol_number = (
+        1 if first_edition_date is None else (today - first_edition_date).days + 1
+    )
+
+    # Anthropic API cost for this edition. In re-render mode the
+    # accumulator is zero — fall back to the cost stored on the
+    # original ``content_json`` so the dateline keeps showing the real
+    # number across rerenders. Real LLM runs persist the fresh number
+    # back onto ``linhnews`` for future rerenders.
+    fresh_cost_usd = claude_client.get_session_cost_usd()
+    log.info("LLM cost summary: %s", claude_client.get_session_usage_summary())
+    if fresh_cost_usd > 0:
+        linhnews["_ai_cost_usd"] = fresh_cost_usd
+        ai_cost_usd_raw = fresh_cost_usd
+    else:
+        ai_cost_usd_raw = float(linhnews.get("_ai_cost_usd") or 0.0)
+    # Round up to the nearest dime for the dateline display so the price
+    # is a visually clean newspaper-style number ($0.40 / $1.30 / $2.10).
+    ai_cost_usd = math.ceil(ai_cost_usd_raw * 10) / 10 if ai_cost_usd_raw > 0 else 0.0
+
     with _step("pdf_renderer.build_pdf_parts"):
         pdf_parts = pdf_renderer.build_pdf_parts(
             linhnews,
@@ -267,6 +299,8 @@ def _run_post_llm_pipeline(
             today=today,
             image_bytes_by_id=image_bytes_by_id,
             masthead_name=masthead_name,
+            vol_number=vol_number,
+            ai_cost_usd=ai_cost_usd,
         )
 
     # No pre-WeasyPrint HTML snapshot in the 5-region pipeline: the input is
@@ -1045,6 +1079,7 @@ def _fetch_and_persist_images(
                     urls,
                     reject_hashes=reject_hashes,
                     max_width=images.HEADLINE_MAX_WIDTH,
+                    prefer_widest=True,
                 )
             except Exception:  # noqa: BLE001
                 log.exception("Headline image fetch raised")

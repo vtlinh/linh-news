@@ -292,6 +292,7 @@
     section.hero .hero-image {
       display: block;
       margin: 0 auto 0.75rem;
+      width: 100%;
       max-width: 100%;
       height: auto;
     }
@@ -317,6 +318,12 @@
         grid-template-columns: 2fr 1fr;
         column-gap: 32px;
       }
+      /* Grid items default to min-width: auto, which lets a wide child
+         (e.g. the front-page headline image at intrinsic 1200px) expand
+         the track past its declared fraction — causing horizontal page
+         scroll. Force the tracks to honor their fr widths. */
+      main.layout:has(> .rail) > .flow,
+      main.layout:has(> .rail) > .rail { min-width: 0; }
       main.layout:has(> .rail) > .flow { columns: 2; column-gap: 32px; }
       /* Fallback for legacy editions without a rail: stay 3-col multi-col. */
       main.layout:not(:has(> .rail)) { columns: 3; column-gap: 32px; }

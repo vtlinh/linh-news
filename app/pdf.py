@@ -41,8 +41,11 @@ from dataclasses import dataclass
 from app.pdf_renderer import (
     AssemblyLayout,
     PdfParts,
+    _esc,
     assemble_final_html,
     build_single_region_html,
+    headline_body_region_css,
+    headline_title_region_css,
     news_region_css,
     rail_region_css,
     stocks_region_css,
@@ -626,34 +629,42 @@ def _try_fit(
     region_css: str,
     font_face_css: str,
     url_fetcher,
+    font_min_override: float | None = None,
+    font_max_override: float | None = None,
 ) -> _FitResult | None:
     """One pass of the MIN-then-grow binary search. ``None`` means MIN
-    doesn't fit (caller should drop)."""
+    doesn't fit (caller should drop). ``font_min_override`` lowers the
+    floor below the module-level ``_FONT_MIN`` — used by the headline
+    fit where dense long-form prose needs to fit in 1/3 of news area.
+    ``font_max_override`` caps the ceiling below ``_FONT_MAX`` — used by
+    the headline body to keep it from outsizing the rest of the page."""
     page_h_target_in = height_in
+    font_min = font_min_override if font_min_override is not None else _FONT_MIN
+    font_max = font_max_override if font_max_override is not None else _FONT_MAX
     min_html = build_single_region_html(
         inner_html,
         width_in=width_in,
         height_in=height_in,
-        font_pt=_FONT_MIN,
+        font_pt=font_min,
         region_css=region_css,
         font_face_css=font_face_css,
     )
     _doc, _pdf, n_pages, deepest, page_h_px = _render_doc(min_html, url_fetcher)
     tried: list[str] = []
     fits_at_min = n_pages <= 1 and (page_h_px <= 0 or deepest <= page_h_px)
-    tried.append(f"{_FONT_MIN:.1f}{'✓' if fits_at_min else '✗'}")
+    tried.append(f"{font_min:.1f}{'✓' if fits_at_min else '✗'}")
     if not fits_at_min:
         log.info("PDF region %s: MIN font doesn't fit (%s)", name, " ".join(tried))
         return None
 
-    best_pt = _FONT_MIN
+    best_pt = font_min
     best_blank = 1.0 if page_h_px <= 0 else max(0.0, 1.0 - deepest / page_h_px)
 
     # Seed binary search with the cache-predicted font (clipped to window)
     # — gives us a much better starting point than blind midpoints.
     seed = _floor_step(_predict_font(name, _count_words(inner_html)))
-    seed = max(_FONT_MIN, min(_FONT_MAX, seed))
-    if seed > _FONT_MIN:
+    seed = max(font_min, min(font_max, seed))
+    if seed > font_min:
         seed_html = build_single_region_html(
             inner_html,
             width_in=width_in,
@@ -668,11 +679,11 @@ def _try_fit(
         if fits:
             best_pt = seed
             best_blank = max(0.0, 1.0 - deepest / page_h_px)
-            lo, hi = seed, _FONT_MAX
+            lo, hi = seed, font_max
         else:
-            lo, hi = _FONT_MIN, seed
+            lo, hi = font_min, seed
     else:
-        lo, hi = _FONT_MIN, _FONT_MAX
+        lo, hi = font_min, font_max
 
     # Binary-search upward for the biggest font that fits.
     while hi - lo > _FONT_STEP:
@@ -734,6 +745,215 @@ def _measure_natural_height_in(
     )
     _doc, _pdf, _n, deepest_px, _page_h = _render_doc(html_str, url_fetcher)
     return deepest_px / _PX_PER_IN + 0.05
+
+
+# ── Headline (front-page hero) fit ───────────────────────────────────────
+
+
+@dataclass
+class _HeadlineFit:
+    col_span: int                # 2 or 3
+    box_w_in: float
+    headline_h_in: float
+    image_w_in: float
+    image_h_in: float
+    image_data_uri: str
+    body_font_pt: float
+    title_font_pt: float
+    # Body's per-column slice height. With column-fill: auto and a fixed
+    # body height, WeasyPrint fills column 1 to this height before
+    # overflowing into column 2 (and column 3 when col_span == 3).
+    body_col_h_in: float
+
+
+def _fit_headline(
+    parts: PdfParts,
+    *,
+    news_w_in: float,
+    upper_h_total_in: float,
+    url_fetcher,
+) -> _HeadlineFit | None:
+    """Decide column span (2 vs 3), font size, and image dimensions for
+    the headline box. Pre-scales the image bytes to exact pixels so
+    WeasyPrint does no runtime scaling. Returns ``None`` if neither
+    column span fits even at the floor font."""
+    from app import images as _images
+
+    body_html = parts.headline_body_html or ""
+    if not body_html.strip():
+        return None
+
+    col_gap_in = 14 / 72
+    col_w_in = (news_w_in - 3 * col_gap_in) / 4
+    pad_top_in = 8 / 72
+    pad_bottom_in = 3 / 72  # tighter bottom — body's last column rarely fills to the corner
+    border_in = 1 / 72
+    img_text_gap_in = 6 / 72
+    # Title is hard-coded at 18pt. We measure its actual rendered height
+    # per col_span (since title wraps differently at 2-col vs 3-col box
+    # width) instead of reserving a generous flat 45pt — the over-reserve
+    # was causing visible empty space at the bottom of the headline box.
+    title_font_pt = 18.0
+    title_html = f'<h3>{_esc(parts.headline_title or "")}</h3>'
+    title_css = headline_title_region_css(title_font_pt)
+
+    # Headline box height fixed at body_h/3. body_h is the printable region
+    # minus masthead and stocks footer; ``upper_h_total_in`` is 70% of body_h.
+    body_h_total_in = upper_h_total_in / 0.7
+    headline_min_h_in = body_h_total_in / 3.0
+    headline_max_h_in = body_h_total_in / 3.0
+    img_max_w_in = news_w_in / 2.0
+    # Image height is capped so the body always gets enough vertical room.
+    img_max_h_in = 3.0
+    aspect = parts.headline_image_aspect or 16 / 9  # fallback aspect
+
+    # Headline is always 3 columns wide per user spec. Try image-height
+    # candidates from biggest to smallest, keeping image as long as the
+    # body can fit at the floor font.
+    img_height_candidates = (img_max_h_in, 2.5, 2.0, 1.5, 1.25, 1.0, 0.75, 0.5, 0.0)
+    col_span = 3
+
+    for img_h_cap in img_height_candidates:
+        # 3-col headline width = 3 cols + 2 inter-col gaps. The right
+        # pane sits in the standard 4-col grid's column 4 (1 col wide),
+        # separated by a single col-gap from this box.
+        box_w_in = col_span * col_w_in + (col_span - 1) * col_gap_in
+        inner_w_in = box_w_in - 2 * pad_top_in - 2 * border_in
+        if parts.headline_image_bytes and img_h_cap > 0:
+            img_w_in = min(inner_w_in, img_max_w_in)
+            img_h_in = img_w_in / aspect if aspect > 0 else 0
+            if img_h_in > img_h_cap:
+                img_h_in = img_h_cap
+                img_w_in = img_h_in * aspect
+        else:
+            img_w_in = 0.0
+            img_h_in = 0.0
+        # Measure actual title height at this col_span's inner width.
+        try:
+            title_h_in = _measure_natural_height_in(
+                title_html,
+                width_in=inner_w_in,
+                font_pt=title_font_pt,
+                region_css=title_css,
+                font_face_css=parts.font_face_css,
+                url_fetcher=url_fetcher,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Could not measure headline title height; using 45pt fallback")
+            title_h_in = 45 / 72
+        chrome_in = pad_top_in + pad_bottom_in + 2 * border_in + title_h_in
+        if img_h_in > 0:
+            chrome_in += img_h_in + img_text_gap_in
+        text_h_max = headline_max_h_in - chrome_in
+        if text_h_max < 0.4:
+            continue
+
+        fit = _try_fit(
+            f"headline-{col_span}c",
+            body_html,
+            width_in=inner_w_in,
+            height_in=text_h_max,
+            region_css=headline_body_region_css(col_span),
+            font_face_css=parts.font_face_css,
+            url_fetcher=url_fetcher,
+            # Headline body uses the same 10pt floor as the news bands.
+            font_min_override=10.0,
+            # Cap the headline body at 13.5pt so it doesn't outsize the
+            # rest of the page when the content is short enough to grow
+            # past the regular news font.
+            font_max_override=13.5,
+        )
+        if fit is None:
+            continue
+
+        # Measure the body's actual rendered height at the chosen font in
+        # col_span layout. With column-fill: balance + body height = this
+        # measured value, content fills both columns evenly with no
+        # ragged whitespace at the bottom.
+        try:
+            measured_h_in = _measure_natural_height_in(
+                body_html,
+                width_in=inner_w_in,
+                font_pt=fit.font_pt,
+                region_css=headline_body_region_css(col_span),
+                font_face_css=parts.font_face_css,
+                url_fetcher=url_fetcher,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Could not measure headline col_span height; using cap")
+            measured_h_in = text_h_max
+        body_col_h_in = min(text_h_max, max(0.3, measured_h_in))
+        # Box is always exactly body_h/3 (min == max). Content may be
+        # shorter — empty space sits below the balanced body columns.
+        headline_h_in = headline_min_h_in
+
+        image_data_uri = ""
+        if parts.headline_image_bytes and img_w_in > 0 and img_h_in > 0:
+            # Embed at 200 PPI for print-quality sharpness. The CSS keeps
+            # the displayed size in inches so PDF readers rasterize the
+            # high-resolution bitmap into the smaller physical box.
+            img_w_px = max(1, round(img_w_in * 200))
+            img_h_px = max(1, round(img_h_in * 200))
+            resized = _images.resize_to_box(
+                parts.headline_image_bytes, img_w_px, img_h_px
+            )
+            if resized is not None:
+                data, mime, _w, _h = resized
+                image_data_uri = _images.to_data_uri(data, mime)
+            else:
+                # Decode failed — fall through text-only.
+                headline_h_in -= img_h_in + img_text_gap_in
+                img_w_in = 0.0
+                img_h_in = 0.0
+
+        log.info(
+            "PDF: headline fit at %d cols, box=%.2fx%.2fin, img=%.2fx%.2fin, "
+            "font=%.1fpt, body-col=%.2fin",
+            col_span, box_w_in, headline_h_in, img_w_in, img_h_in,
+            fit.font_pt, body_col_h_in,
+        )
+        return _HeadlineFit(
+            col_span=col_span,
+            box_w_in=box_w_in,
+            headline_h_in=headline_h_in,
+            image_w_in=img_w_in,
+            image_h_in=img_h_in,
+            image_data_uri=image_data_uri,
+            body_font_pt=fit.font_pt,
+            # Hard-coded 18pt — independent of the body font so the title
+            # always has the same visual weight at the front of the page.
+            title_font_pt=title_font_pt,
+            body_col_h_in=body_col_h_in,
+        )
+    return None
+
+
+def _split_sections_by_area(
+    sections: list[dict],
+    *,
+    first_area: float,
+    second_area: float,
+) -> tuple[list[dict], list[dict]]:
+    """Sub-split upper-band sections into two panes by word count
+    proportional to area, preserving LLM order. ``sections[:k]`` goes to
+    the first pane (target area = ``first_area``), the rest to the second."""
+    from app.pdf_renderer import _section_word_count
+
+    if not sections:
+        return [], []
+    total_area = max(1e-6, first_area + second_area)
+    target_first_ratio = first_area / total_area
+    counts = [_section_word_count(s) for s in sections]
+    total_words = sum(counts) or 1
+    best_k = 0
+    best_diff = float("inf")
+    for k in range(0, len(sections) + 1):
+        first_ratio = sum(counts[:k]) / total_words
+        diff = abs(first_ratio - target_first_ratio)
+        if diff < best_diff:
+            best_diff = diff
+            best_k = k
+    return sections[:best_k], sections[best_k:]
 
 
 # ── Top-level entry point ────────────────────────────────────────────────
@@ -882,6 +1102,22 @@ def html_to_pdf_ex(
         lower_h_total, lower_h_fit,
     )
 
+    # ── Headline fit (optional) ─────────────────────────────────────────
+    # Decide column span, font size, body slice height, and image dims
+    # before fitting the upper band. The upper band's content is then
+    # sub-split into right-of-headline + below-headline slices, each
+    # fit independently with the same _fit_region primitive.
+    headline_fit: _HeadlineFit | None = None
+    if parts.has_headline:
+        headline_fit = _fit_headline(
+            parts,
+            news_w_in=news_w_in,
+            upper_h_total_in=upper_h_total,
+            url_fetcher=url_fetcher,
+        )
+        if headline_fit is None:
+            log.warning("Headline did not fit at 2 or 3 cols — falling back to no-headline layout")
+
     # ── Fit upper + lower news bands ────────────────────────────────────
     if len(parts.news_bands) == 2:
         upper_inner, _ = parts.news_bands[0]
@@ -898,6 +1134,98 @@ def html_to_pdf_ex(
     lower_pt = _FONT_MIN
     fitted_upper = upper_inner
     fitted_lower = lower_inner
+    fitted_upper_right_html = ""
+    fitted_upper_bottom_html = ""
+    upper_right_pt = _FONT_MIN
+    upper_bottom_pt = _FONT_MIN
+
+    if headline_fit is not None:
+        # New side-by-side layout: split upper-band sections between
+        #   * .upper-right pane: full upper-band height × 1 col width
+        #   * .upper-bottom pane: (upper_h - headline_h) × box_w_in
+        # Each fit independently via the existing _fit_region primitive.
+        # The final .upper-right pane is rendered with border-left (0.5pt) +
+        # padding-left (7pt) inside a border-box flex item whose outer width
+        # is `news_u_right_w_in` (which already includes a 12pt safety
+        # margin vs. raw column-4 width). The fit pass renders content into
+        # a page of width = content-area width, so subtract the 7.5pt of
+        # left chrome here too — otherwise the fit pass lays out at a
+        # wider content area than the final document, and content overflows
+        # the clip box in assembly.
+        safety_pt = 12.0
+        border_pad_pt = 7.5
+        right_w_in = (
+            news_w_in
+            - headline_fit.box_w_in
+            - _CONTENT_GAP_IN
+            - (safety_pt + border_pad_pt) / 72.0
+        )
+        right_h_in = upper_h_fit  # right pane is FULL upper band height
+        bottom_h_in = max(0.0, upper_h_fit - headline_fit.headline_h_in - 6 / 72)
+        right_cols = 1
+        upper_secs = parts.upper_sections or []
+        # Section assignment order: first sections in LLM order go to the
+        # upper-bottom pane (directly below the headline), then upper-right,
+        # then lower band. _split_sections_by_area picks the area-proportional
+        # split between bottom and right, preserving LLM order.
+        below_sections, right_sections = _split_sections_by_area(
+            upper_secs,
+            first_area=headline_fit.box_w_in * bottom_h_in,
+            second_area=right_w_in * right_h_in,
+        )
+        from app.pdf_renderer import _render_news_band  # local: avoid cycle
+
+        right_html_raw = _render_news_band(
+            right_sections, image_bytes_by_id=parts.image_bytes_by_id
+        )
+        below_html_raw = _render_news_band(
+            below_sections, image_bytes_by_id=parts.image_bytes_by_id
+        )
+        right_css = news_region_css().replace(
+            "column-count: 4;", f"column-count: {right_cols}; column-fill: auto;"
+        )
+        # .upper-bottom uses the same column count as the headline (3),
+        # so news flowing under the box lines up visually.
+        below_css = news_region_css().replace(
+            "column-count: 4", f"column-count: {headline_fit.col_span}"
+        )
+        if right_html_raw.strip() and right_h_in > 0.3 and right_w_in > 0.5:
+            ra = _fit_region(
+                "upper-right",
+                right_html_raw,
+                width_in=right_w_in,
+                height_in=right_h_in,
+                region_css=right_css,
+                font_face_css=parts.font_face_css,
+                drop_fns=[_drop_one_article, _drop_one_section],
+                url_fetcher=url_fetcher,
+            )
+            if ra is None:
+                log.warning("Upper-right unfittable; rendering empty pane")
+            else:
+                fitted_upper_right_html = ra.inner_html
+                upper_right_pt = ra.font_pt
+        if below_html_raw.strip() and bottom_h_in > 0.3:
+            bo = _fit_region(
+                "upper-bottom",
+                below_html_raw,
+                width_in=headline_fit.box_w_in,
+                height_in=bottom_h_in,
+                region_css=below_css,
+                font_face_css=parts.font_face_css,
+                drop_fns=[_drop_one_article, _drop_one_section],
+                url_fetcher=url_fetcher,
+            )
+            if bo is None:
+                log.warning("Upper-bottom unfittable; rendering empty pane")
+            else:
+                fitted_upper_bottom_html = bo.inner_html
+                upper_bottom_pt = bo.font_pt
+        # Headline path renders the upper band itself — suppress the
+        # legacy upper-band fit. (When headline_fit is None we left
+        # upper_inner as the pre-rendered upper band, so the legacy path
+        # below renders it as a normal 4-col upper band.)
+        upper_inner = ""
 
     if upper_inner.strip():
         up = _fit_region(
@@ -972,6 +1300,7 @@ def html_to_pdf_ex(
         trimmed_rail = _extract_rail_blocks(rail_inner)
 
     # ── Assemble + render once more (the real PDF) ──────────────────────
+    fitted_has_headline = headline_fit is not None
     fitted_parts = PdfParts(
         top_inner_html=parts.top_inner_html,
         news_bands=[(fitted_upper, _count_words(fitted_upper))]
@@ -981,6 +1310,13 @@ def html_to_pdf_ex(
         font_face_css=parts.font_face_css,
         masthead_title_pt=parts.masthead_title_pt,
         section_count=parts.section_count,
+        has_headline=fitted_has_headline,
+        headline_title=parts.headline_title,
+        headline_body_html=parts.headline_body_html,
+        headline_word_count=parts.headline_word_count,
+        headline_image_bytes=parts.headline_image_bytes,
+        headline_image_mime=parts.headline_image_mime,
+        headline_image_aspect=parts.headline_image_aspect,
     )
     layout = AssemblyLayout(
         page_w_in=_PAGE_W_IN,
@@ -998,6 +1334,21 @@ def html_to_pdf_ex(
         top_font_pt=_TOP_FONT_PT,
         stocks_font_pt=_STOCKS_FONT_PT,
         masthead_title_pt=parts.masthead_title_pt,
+        headline_h_in=headline_fit.headline_h_in if headline_fit else 0.0,
+        headline_box_w_in=headline_fit.box_w_in if headline_fit else 0.0,
+        headline_col_span=headline_fit.col_span if headline_fit else 0,
+        headline_image_w_in=headline_fit.image_w_in if headline_fit else 0.0,
+        headline_image_h_in=headline_fit.image_h_in if headline_fit else 0.0,
+        headline_image_data_uri=headline_fit.image_data_uri if headline_fit else "",
+        headline_title=parts.headline_title,
+        headline_body_html=parts.headline_body_html,
+        headline_body_font_pt=headline_fit.body_font_pt if headline_fit else 0.0,
+        headline_title_font_pt=headline_fit.title_font_pt if headline_fit else 0.0,
+        headline_body_col_h_in=headline_fit.body_col_h_in if headline_fit else 0.0,
+        upper_right_html=fitted_upper_right_html,
+        upper_right_font_pt=upper_right_pt,
+        upper_bottom_html=fitted_upper_bottom_html,
+        upper_bottom_font_pt=upper_bottom_pt,
     )
     final_html = assemble_final_html(fitted_parts, layout)
 

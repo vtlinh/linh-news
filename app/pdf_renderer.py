@@ -101,6 +101,22 @@ class PdfParts:
     masthead_title_pt: int
     section_count: int = 0
 
+    # ── Optional headline (front-page hero). Set only when the LLM
+    # response carries ``LinhNews.headline``. When set, the upper band
+    # in the assembled PDF is restructured into an L-shape:
+    #   upper-top (height = headline_h): [headline-box, news-u-right]
+    #   news-u-bottom (block, column-count: 4) below the upper-top.
+    has_headline: bool = False
+    headline_title: str = ""
+    headline_body_html: str = ""
+    headline_word_count: int = 0
+    headline_image_bytes: bytes | None = None
+    headline_image_mime: str | None = None
+    headline_image_aspect: float | None = None
+    upper_sections: list[dict] | None = None
+    lower_sections: list[dict] | None = None
+    image_bytes_by_id: dict[int, tuple[bytes, str]] | None = None
+
 
 # ── small utilities ───────────────────────────────────────────────────────
 
@@ -345,16 +361,25 @@ def _render_top_inner(
     weather_inner: str,
     masthead_name: str,
     title_pt: int,
+    vol_number: int,
+    ai_cost_usd: float,
 ) -> str:
-    """Masthead + dateline inner HTML."""
+    """Masthead + dateline inner HTML.
+
+    ``vol_number`` is the days-since-first-edition count (1-indexed).
+    ``ai_cost_usd`` is the total Anthropic API cost for the current
+    edition; rendered in the dateline's right slot."""
     title_text = f"The {masthead_name} Times"
     dateline = _format_date(today)
-    vol_roman = _roman(_day_of_year(today))
     motto_quote = f'"All the News<br>That\'s Fit for {masthead_name}"'
     weather_block = (
         f'<span class="weather-title">The Weather</span>{weather_inner}'
         if weather_inner.strip()
         else ""
+    )
+    price_block = (
+        f'<span class="ai-cost-label">Prices vary by AI</span>'
+        f'<span class="ai-cost-value">${ai_cost_usd:.2f}</span>'
     )
     return (
         '<header class="masthead">'
@@ -363,9 +388,9 @@ def _render_top_inner(
         f'<div class="weather-corner">{weather_block}</div>'
         "</header>"
         '<div class="dateline">'
-        f'<span class="vol">VOL. {vol_roman}</span>'
+        f'<span class="vol">VOL. {_roman(vol_number)}</span>'
         f'<span class="date">{dateline}</span>'
-        '<span class="refreshed"></span>'
+        f'<span class="ai-cost">{price_block}</span>'
         "</div>"
     )
 
@@ -436,17 +461,29 @@ def news_region_css() -> str:
         font-size: 1.375em; font-weight: bold !important;
         margin: 4pt 0 2pt;
         font-family: "Times New Roman", Georgia, serif, {_EMOJI_FAMILY};
+        overflow-wrap: break-word;
+        word-wrap: break-word;
     }}
     .region section.news-story h3 {{
         font-size: 1.125em; font-weight: bold !important;
         margin: 3pt 0 1pt;
         font-family: "Times New Roman", Georgia, serif, {_EMOJI_FAMILY};
+        overflow-wrap: break-word;
+        word-wrap: break-word;
     }}
     .region section.news-story p,
     .region section.news-story ul,
     .region section.news-story li {{
         margin: 0 0 3pt; font-size: 1em; line-height: 1.15;
         font-family: "Times New Roman", Georgia, serif, {_EMOJI_FAMILY};
+        text-align: justify;
+        hyphens: auto;
+        -webkit-hyphens: auto;
+        /* Allow long unbreakable words (acronyms, URLs, "U.S.A.E.") to
+           break mid-word as a last resort so they don't extend past the
+           column and get chopped by overflow: hidden. */
+        overflow-wrap: break-word;
+        word-wrap: break-word;
     }}
     .region section, .region article, .region header, .region footer {{
         margin: 0 0 3pt;
@@ -536,10 +573,55 @@ def top_region_css() -> str:
         border-bottom: 0.5pt solid #000;
         letter-spacing: .05em; text-transform: uppercase;
     }}
-    .dateline .vol, .dateline .refreshed {{ flex: 0 0 22%; }}
+    .dateline .vol, .dateline .ai-cost {{ flex: 0 0 22%; }}
     .dateline .vol {{ text-align: left; }}
+    .dateline .ai-cost {{ text-align: right; text-transform: none; letter-spacing: 0; }}
+    .dateline .ai-cost .ai-cost-label {{ font-size: 6pt; color: #555; margin-right: 18pt; }}
+    .dateline .ai-cost .ai-cost-value {{ font-size: 11pt; }}
     .dateline .refreshed {{ text-align: right; }}
     .dateline .date {{ flex: 1 1 auto; text-align: center; }}
+    """
+
+
+def headline_title_region_css(title_font_pt: float) -> str:
+    """CSS for a one-off measurement pass that renders just the headline's
+    h3 title at its target font size. Used to size the title's vertical
+    reservation in the box height calc without over-allocating space."""
+    return f"""
+    .region h3 {{
+        margin: 0 0 4pt;
+        font-weight: bold;
+        font-size: {title_font_pt:.2f}pt;
+        line-height: 1.15;
+        font-family: "Times New Roman", Georgia, serif;
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+    }}
+    """
+
+
+def headline_body_region_css(col_count: int) -> str:
+    """CSS used during the headline-fit pass + natural-height measurement.
+
+    ``column-fill: balance`` (instead of auto) lets us measure the actual
+    balanced multicolumn height with a single render — no need to render
+    a 1-col version and divide by N. The body's height is determined by
+    its content (no ``height: 100%``); WeasyPrint balances the columns
+    to that natural height."""
+    return f"""
+    .region {{
+        column-count: {col_count};
+        column-gap: 14pt;
+        column-rule: none;
+        column-fill: balance;
+        text-align: justify;
+        hyphens: auto;
+        -webkit-hyphens: auto;
+    }}
+    .region p, .region ul, .region li {{
+        margin: 0 0 3pt; font-size: 1em; line-height: 1.25;
+        font-family: "Times New Roman", Georgia, serif, {_EMOJI_FAMILY};
+    }}
     """
 
 
@@ -571,6 +653,8 @@ def build_pdf_parts(
     image_bytes_by_id: dict[int, tuple[bytes, str]] | None = None,
     weather_prose_html: str = "",
     masthead_name: str = "Linh",
+    vol_number: int = 1,
+    ai_cost_usd: float = 0.0,
 ) -> PdfParts:
     """Slice ``linhnews`` into the five region fragments the per-region
     fit pass will operate on.
@@ -592,26 +676,82 @@ def build_pdf_parts(
         weather_inner=weather_inner,
         masthead_name=masthead_name,
         title_pt=title_pt,
+        vol_number=vol_number,
+        ai_cost_usd=ai_cost_usd,
     )
 
     sections = [s for s in (linhnews.get("sections") or []) if s.get("key")]
     section_count = len(sections)
 
-    bands: list[tuple[str, int]] = []
+    upper_slice: list[dict] = []
+    lower_slice: list[dict] = []
     if section_count >= 2:
         k = _pick_split_index(sections) or 1
         upper_slice = sections[:k]
         lower_slice = sections[k:]
-        upper_html = _render_news_band(upper_slice, image_bytes_by_id=image_bytes_by_id)
-        lower_html = _render_news_band(lower_slice, image_bytes_by_id=image_bytes_by_id)
-        upper_words = sum(_section_word_count(s) for s in upper_slice)
-        lower_words = sum(_section_word_count(s) for s in lower_slice)
-        bands = [(upper_html, upper_words), (lower_html, lower_words)]
     elif section_count == 1:
-        single_html = _render_news_band(sections, image_bytes_by_id=image_bytes_by_id)
-        bands = [(single_html, _section_word_count(sections[0]))]
+        upper_slice = sections
+
+    # Headline detection. When present, ``app.pdf`` handles the upper-band
+    # render itself (after fitting headline geometry), so we pass it raw
+    # section slices rather than pre-rendered HTML for the upper band.
+    headline = linhnews.get("headline") or {}
+    has_headline = bool(headline.get("text"))
+    headline_image_bytes: bytes | None = None
+    headline_image_mime: str | None = None
+    headline_image_aspect: float | None = None
+    headline_body_html = ""
+    headline_title = ""
+    headline_word_count = 0
+    if has_headline:
+        headline_title = headline.get("title", "") or ""
+        headline_body_html = text_to_html(headline.get("text", "") or "")
+        headline_word_count = (
+            len((headline_title or "").split())
+            + len((headline.get("text") or "").split())
+        )
+        image_id = headline.get("image_id")
+        if image_id and image_bytes_by_id is not None:
+            entry = image_bytes_by_id.get(int(image_id))
+            if entry is not None:
+                headline_image_bytes, headline_image_mime = entry
+                try:
+                    import io as _io
+
+                    from PIL import Image
+                    with Image.open(_io.BytesIO(headline_image_bytes)) as _img:
+                        if _img.height > 0:
+                            headline_image_aspect = _img.width / _img.height
+                except Exception:  # noqa: BLE001
+                    log.exception("Could not decode headline image for aspect ratio")
+                    headline_image_aspect = None
+
+    bands: list[tuple[str, int]] = []
+    if has_headline:
+        # Lower band rendered as usual; upper band ALSO pre-rendered so
+        # we have a fallback if the headline fit fails in ``app.pdf``.
+        # When fit succeeds, ``app.pdf`` ignores news_bands[0] and renders
+        # the L-layout from upper_sections instead.
+        upper_html = _render_news_band(upper_slice, image_bytes_by_id=image_bytes_by_id)
+        upper_words = sum(_section_word_count(s) for s in upper_slice)
+        if lower_slice:
+            lower_html = _render_news_band(lower_slice, image_bytes_by_id=image_bytes_by_id)
+            lower_words = sum(_section_word_count(s) for s in lower_slice)
+            bands = [(upper_html, upper_words), (lower_html, lower_words)]
+        elif upper_slice:
+            bands = [(upper_html, upper_words)]
     else:
-        bands = []
+        if section_count >= 2:
+            upper_html = _render_news_band(upper_slice, image_bytes_by_id=image_bytes_by_id)
+            lower_html = _render_news_band(lower_slice, image_bytes_by_id=image_bytes_by_id)
+            upper_words = sum(_section_word_count(s) for s in upper_slice)
+            lower_words = sum(_section_word_count(s) for s in lower_slice)
+            bands = [(upper_html, upper_words), (lower_html, lower_words)]
+        elif section_count == 1:
+            single_html = _render_news_band(sections, image_bytes_by_id=image_bytes_by_id)
+            bands = [(single_html, _section_word_count(sections[0]))]
+        else:
+            bands = []
 
     rail_inner = _render_rail_inner(pdf_calendar_html, pdf_movies_html)
     stocks_inner = _render_stocks_inner(linhnews.get("stocks") or [])
@@ -624,6 +764,16 @@ def build_pdf_parts(
         font_face_css=_build_font_face_css(),
         masthead_title_pt=title_pt,
         section_count=section_count,
+        has_headline=has_headline,
+        headline_title=headline_title,
+        headline_body_html=headline_body_html,
+        headline_word_count=headline_word_count,
+        headline_image_bytes=headline_image_bytes,
+        headline_image_mime=headline_image_mime,
+        headline_image_aspect=headline_image_aspect,
+        upper_sections=upper_slice if has_headline else None,
+        lower_sections=lower_slice if has_headline else None,
+        image_bytes_by_id=image_bytes_by_id if has_headline else None,
     )
 
 
@@ -666,6 +816,31 @@ class AssemblyLayout:
     masthead_name: str = "Linh"
     masthead_title_pt: int = 72
 
+    # ── Headline L-layout (only used when PdfParts.has_headline). ──────
+    # When headline_h_in > 0, the upper band region is replaced by:
+    #   .upper-top (row flex, height = headline_h_in)
+    #     ├── .headline-box  (column-count = headline_col_span)
+    #     └── .news-u-right  (column-count = 4 − headline_col_span)
+    #   .news-u-bottom (block, column-count: 4, height = upper_h - headline_h)
+    # In other words, .upper-top + .news-u-bottom replace .news-u as
+    # direct children of .news-stack — same depth of flex nesting as
+    # the existing news-u / news-l pair.
+    headline_h_in: float = 0.0
+    headline_box_w_in: float = 0.0
+    headline_col_span: int = 0
+    headline_image_w_in: float = 0.0
+    headline_image_h_in: float = 0.0
+    headline_image_data_uri: str = ""
+    headline_title: str = ""
+    headline_body_html: str = ""
+    headline_body_font_pt: float = 0.0
+    headline_title_font_pt: float = 0.0
+    headline_body_col_h_in: float = 0.0
+    upper_right_html: str = ""
+    upper_right_font_pt: float = 0.0
+    upper_bottom_html: str = ""
+    upper_bottom_font_pt: float = 0.0
+
     @property
     def inner_w_in(self) -> float:
         return self.page_w_in - 2 * self.margin_in
@@ -682,6 +857,36 @@ class AssemblyLayout:
     def news_w_in(self) -> float:
         return self.inner_w_in - self.rail_w_in - self.content_gap_in
 
+    @property
+    def news_u_right_w_in(self) -> float:
+        """Width of the right pane (column 4 of the 4-col newspaper grid,
+        full upper-band height).
+
+        The 12pt safety margin absorbs WeasyPrint's tendency to render
+        text spans a few pt past the declared flex-item width (which
+        ``overflow: hidden`` then clips mid-letter), plus accounts for
+        the 7pt padding-left + 0.5pt border-left of the pane itself."""
+        safety_pt = 12.0
+        return (
+            self.news_w_in
+            - self.headline_box_w_in
+            - self.content_gap_in
+            - safety_pt / 72.0
+        )
+
+
+def _news_u_flex_rule(layout: AssemblyLayout, use_headline_layout: bool) -> str:
+    """When a headline is present, .news-u is a row flex container
+    holding .upper-left + .upper-right side by side. Without a headline
+    it's a plain block holding the legacy multicolumn upper-band flow."""
+    if not use_headline_layout:
+        return ""
+    gap_pt = layout.content_gap_in * 72
+    return (
+        f"display: flex; flex-direction: row; gap: {gap_pt:.1f}pt; "
+        "align-items: stretch;"
+    )
+
 
 def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
     """Compose the final one-page document. Each region carries its
@@ -690,6 +895,7 @@ def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
 
     upper_inner = parts.news_bands[0][0] if parts.news_bands else ""
     lower_inner = parts.news_bands[1][0] if len(parts.news_bands) > 1 else ""
+    use_headline_layout = parts.has_headline and layout.headline_h_in > 0
 
     common = f"""
     {parts.font_face_css}
@@ -712,6 +918,32 @@ def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
     lower_css = _scope(news_region_css(), "news-l")
     rail_css = _scope(rail_region_css(), "rail")
     stocks_css = _scope(stocks_region_css(), "stocks-footer")
+    # L-layout right pane (column-count = 4 − headline_col_span) and
+    # below-headline pane (column-count = 4). Both reuse news_region_css
+    # with a substituted column-count.
+    upper_right_css = ""
+    upper_bottom_css = ""
+    if use_headline_layout:
+        # Right pane is a tall single-column flow (column 4 of the
+        # newspaper grid), full upper-band height. ``column-count: 1``
+        # keeps news_region_css's typography rules but drops the
+        # multicolumn flow.
+        upper_right_css = _scope(
+            news_region_css().replace(
+                f"column-count: {_FLOW_COLUMNS};",
+                "column-count: 1; column-fill: auto;",
+            ),
+            "upper-right",
+        )
+        # Below-headline pane uses the same column count as the headline
+        # (3) so news flowing beneath the box lines up visually.
+        upper_bottom_css = _scope(
+            news_region_css().replace(
+                f"column-count: {_FLOW_COLUMNS}",
+                f"column-count: {layout.headline_col_span}",
+            ),
+            "upper-bottom",
+        )
 
     # Per-region absolute placement. The middle row uses flexbox: the news
     # stack flexes wide, the rail is fixed width. Within the news stack
@@ -747,7 +979,8 @@ def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
                font-size: {layout.upper_font_pt:.2f}pt;
                line-height: 1.15;
                overflow: hidden;
-               box-sizing: border-box; }}
+               box-sizing: border-box;
+               {_news_u_flex_rule(layout, use_headline_layout)} }}
     .news-l {{ flex: 0 0 {(layout.lower_h_in or 0):.3f}in;
                height: {(layout.lower_h_in or 0):.3f}in;
                max-height: {(layout.lower_h_in or 0):.3f}in;
@@ -755,6 +988,72 @@ def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
                line-height: 1.15;
                overflow: hidden;
                box-sizing: border-box; }}
+    /* ── Headline side-by-side layout (when headline is present) ──
+       The .news-u flex row contains .upper-left (col-flex with headline
+       + below-headline news flow) and .upper-right (full-height single
+       column with a vertical separator on its left edge).
+       Same 4-ingredient recipe (flex: 0 0 X; explicit width/height;
+       min-width: 0; overflow: hidden) applied throughout. */
+    .upper-left {{ flex: 0 0 {layout.headline_box_w_in:.3f}in;
+                   width: {layout.headline_box_w_in:.3f}in;
+                   height: {layout.upper_h_in:.3f}in;
+                   max-height: {layout.upper_h_in:.3f}in;
+                   display: flex; flex-direction: column;
+                   min-width: 0;
+                   overflow: hidden;
+                   box-sizing: border-box; }}
+    .headline-box {{ flex: 0 0 {layout.headline_h_in:.3f}in;
+                     width: {layout.headline_box_w_in:.3f}in;
+                     height: {layout.headline_h_in:.3f}in;
+                     min-width: 0;
+                     border: 1pt solid #000;
+                     /* Asymmetric: lighter padding at bottom so the body's
+                        last column doesn't leave a ragged gap above the
+                        border. */
+                     padding: 8pt 8pt 3pt 8pt;
+                     margin-bottom: 6pt;
+                     box-sizing: border-box;
+                     overflow: hidden;
+                     font-size: {layout.headline_body_font_pt:.2f}pt;
+                     line-height: 1.25; }}
+    .headline-box .hero-title {{ margin: 0 0 4pt;
+                                 font-weight: bold;
+                                 font-size: {layout.headline_title_font_pt:.2f}pt;
+                                 line-height: 1.15;
+                                 font-family: "Times New Roman", Georgia, serif; }}
+    .headline-box .hero-image {{ display: block; margin: 0 auto 6pt;
+                                 /* w/h pinned inline below — no CSS scaling */ }}
+    .headline-box .hero-body {{ column-gap: 14pt;
+                                column-rule: none;
+                                column-fill: balance;
+                                text-align: justify;
+                                hyphens: auto;
+                                -webkit-hyphens: auto;
+                                font-family: "Times New Roman", Georgia, serif; }}
+    .headline-box .hero-body p,
+    .headline-box .hero-body ul,
+    .headline-box .hero-body li {{ margin: 0 0 3pt; }}
+    .upper-bottom {{ flex: 1 1 auto;
+                     width: {layout.headline_box_w_in:.3f}in;
+                     height: {(layout.upper_h_in - layout.headline_h_in - 6/72):.3f}in;
+                     max-height: {(layout.upper_h_in - layout.headline_h_in - 6/72):.3f}in;
+                     min-width: 0;
+                     font-size: {layout.upper_bottom_font_pt:.2f}pt;
+                     line-height: 1.15;
+                     overflow: hidden;
+                     box-sizing: border-box; }}
+    .upper-right {{ flex: 0 0 {layout.news_u_right_w_in:.3f}in;
+                    width: {layout.news_u_right_w_in:.3f}in;
+                    height: {layout.upper_h_in:.3f}in;
+                    max-height: {layout.upper_h_in:.3f}in;
+                    min-width: 0;
+                    /* Vertical separator between left/right panes. */
+                    border-left: 0.5pt solid #999;
+                    padding-left: 7pt;
+                    font-size: {layout.upper_right_font_pt:.2f}pt;
+                    line-height: 1.15;
+                    overflow: hidden;
+                    box-sizing: border-box; }}
     /* Double horizontal-rule separator between the upper and lower bands.
        Top line is twice as thick as the bottom (1.5pt vs 0.75pt), with a
        small gap drawn by the element's padding. The whole element is a
@@ -795,18 +1094,59 @@ def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
         lower_css,
         rail_css,
         stocks_css,
+        upper_right_css,
+        upper_bottom_css,
         layout_css,
         "</style></head><body>",
         f'<div class="top">{parts.top_inner_html}</div>',
     ]
 
-    has_news = bool(upper_inner.strip() or lower_inner.strip())
+    has_news = (
+        bool(upper_inner.strip() or lower_inner.strip())
+        or use_headline_layout
+    )
     has_rail = bool(parts.rail_inner_html.strip())
     if has_news or has_rail:
         parts_html.append('<div class="content">')
         if has_news:
             parts_html.append('<div class="news-stack">')
-            parts_html.append(f'<div class="news-u">{upper_inner}</div>')
+            if use_headline_layout:
+                # Side-by-side: .news-u is a flex row holding .upper-left
+                # (col flex with headline + below) and .upper-right (tall
+                # single column with vertical separator).
+                img_html = ""
+                if layout.headline_image_data_uri and layout.headline_image_w_in > 0:
+                    img_html = (
+                        f'<img class="hero-image" '
+                        f'src="{layout.headline_image_data_uri}" '
+                        f'style="width:{layout.headline_image_w_in:.3f}in;'
+                        f'height:{layout.headline_image_h_in:.3f}in;" '
+                        f'alt="" />'
+                    )
+                body_h_style = (
+                    f"height:{layout.headline_body_col_h_in:.3f}in;"
+                    if layout.headline_body_col_h_in > 0
+                    else ""
+                )
+                hero_inner = (
+                    f"{img_html}"
+                    f'<h3 class="hero-title">{_esc(layout.headline_title)}</h3>'
+                    f'<div class="hero-body" '
+                    f'style="column-count:{layout.headline_col_span};{body_h_style}">'
+                    f"{layout.headline_body_html}"
+                    f"</div>"
+                )
+                parts_html.append(
+                    f'<div class="news-u">'
+                    f'<div class="upper-left">'
+                    f'<div class="headline-box">{hero_inner}</div>'
+                    f'<div class="upper-bottom">{layout.upper_bottom_html}</div>'
+                    f"</div>"
+                    f'<div class="upper-right">{layout.upper_right_html}</div>'
+                    f"</div>"
+                )
+            else:
+                parts_html.append(f'<div class="news-u">{upper_inner}</div>')
             if lower_inner.strip() or layout.lower_h_in:
                 parts_html.append('<div class="band-divider"></div>')
                 parts_html.append(f'<div class="news-l">{lower_inner}</div>')

@@ -134,7 +134,7 @@ def test_prompt_template_emits_headline_block_when_eligible():
         dorchester_events="",
     )
     # Block markers
-    assert "Headline (top-of-front-page deep dive)" in out
+    assert "Headline (top-of-front-page lead article)" in out
     # Both eligible titles listed
     assert "World" in out
     assert "AI" in out

@@ -112,6 +112,7 @@ def fetch_one(
     reject_hashes: set[str] | None = None,
     *,
     max_width: int = MAX_WIDTH,
+    prefer_widest: bool = False,
 ) -> FetchedImage | None:
     """Return one resized image for the subsection, or None if every
     candidate failed.
@@ -131,19 +132,50 @@ def fetch_one(
     random.shuffle(candidates)
 
     chosen: tuple[Image.Image, str] | None = None
-    for url in candidates:
-        result = _try_one(url)
-        if result is None:
-            continue
-        img, is_landscape, sha = result
-        if not is_landscape:
-            log.info("Image rejected — portrait orientation: %s", url)
-            continue
-        if reject_hashes and sha in reject_hashes:
-            log.info("Image rejected — hash seen on prior day (%s): %s", sha[:12], url)
-            continue
-        chosen = (img, sha)
-        break
+    if prefer_widest:
+        # Try ALL candidates, collect every landscape one that isn't a
+        # reject-hash dup, then pick the widest (highest aspect = w/h).
+        # Used by the headline image so the hero gets a wide cinematic
+        # crop instead of a near-square thumbnail.
+        viable: list[tuple[float, Image.Image, str]] = []
+        for url in candidates:
+            result = _try_one(url)
+            if result is None:
+                continue
+            img, is_landscape, sha = result
+            if not is_landscape:
+                log.info("Image rejected — portrait orientation: %s", url)
+                continue
+            if reject_hashes and sha in reject_hashes:
+                log.info(
+                    "Image rejected — hash seen on prior day (%s): %s",
+                    sha[:12], url,
+                )
+                continue
+            aspect = img.width / max(1, img.height)
+            viable.append((aspect, img, sha))
+        if viable:
+            viable.sort(key=lambda v: -v[0])  # widest first
+            _aspect, img, sha = viable[0]
+            log.info(
+                "Image picked: aspect %.2f (best of %d landscape candidates)",
+                _aspect, len(viable),
+            )
+            chosen = (img, sha)
+    else:
+        for url in candidates:
+            result = _try_one(url)
+            if result is None:
+                continue
+            img, is_landscape, sha = result
+            if not is_landscape:
+                log.info("Image rejected — portrait orientation: %s", url)
+                continue
+            if reject_hashes and sha in reject_hashes:
+                log.info("Image rejected — hash seen on prior day (%s): %s", sha[:12], url)
+                continue
+            chosen = (img, sha)
+            break
     if chosen is None:
         return None
 

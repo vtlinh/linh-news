@@ -1051,9 +1051,18 @@ def assemble_final_html(parts: PdfParts, layout: AssemblyLayout) -> str:
                    min-width: 0;
                    overflow: hidden;
                    box-sizing: border-box; }}
-    .headline-box {{ flex: 0 0 {layout.headline_h_in:.3f}in;
+    /* WeasyPrint quirk: in flex layout the declared ``height`` is treated
+       as the content-box height regardless of ``box-sizing``. Subtract the
+       vertical chrome (1pt top border + 8pt top padding + 3pt bottom
+       padding + 1pt bottom border = 13pt) so the rendered margin-box
+       height equals the intended ``headline_h_in``. Without this the
+       headline-box renders ~13pt taller than its budget, the flex
+       container shrinks the sibling .upper-bottom (flex: 1 1 auto) by the
+       same amount, and the upper-bottom's pre-fit content overflows the
+       shrunken box and gets clipped by ``overflow: hidden``. */
+    .headline-box {{ flex: 0 0 {(layout.headline_h_in - 13 / 72):.3f}in;
                      width: {layout.headline_box_w_in:.3f}in;
-                     height: {layout.headline_h_in:.3f}in;
+                     height: {(layout.headline_h_in - 13 / 72):.3f}in;
                      min-width: 0;
                      border: 1pt solid #000;
                      /* Asymmetric: lighter padding at bottom so the body's

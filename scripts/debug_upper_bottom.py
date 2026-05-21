@@ -35,7 +35,6 @@ from app.pdf_renderer import (  # noqa: E402
 
 
 def _find_box_by_class(root, class_name):
-    cls = (getattr(getattr(root, "style", None), "_NAME_TO_VALUE", {}) or {})
     el_classes = []
     try:
         el = root.element if hasattr(root, "element") else None
@@ -137,9 +136,7 @@ def main():
     fit_root = getattr(fit_page, "_page_box", None)
     fit_deepest = _deepest(fit_root) if fit_root else 0.0
     print(f"FIT step:    page_h_px={fit_page_h_px:.2f} deepest={fit_deepest:.2f}")
-    print(
-        f"             (page H = {bottom_h:.3f}in * 96 dpi = {bottom_h * 96:.1f}px)"
-    )
+    print(f"             (page H = {bottom_h:.3f}in * 96 dpi = {bottom_h * 96:.1f}px)")
 
     # ─────────────────── Render 2: flex-assembly style ───────────────────
     # Reproduce just .upper-left containing .headline-box (dummy) +

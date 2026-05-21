@@ -54,9 +54,12 @@ def _walk_text_boxes(box, out):
     in WeasyPrint sits inside ``LineBox`` (anonymous line boxes) or
     ``TextBox`` leaves."""
     tag = type(box).__name__
-    if tag in ("LineBox", "TextBox", "InlineBox"):
-        if float(getattr(box, "width", 0) or 0) > 0 and float(getattr(box, "height", 0) or 0) > 0:
-            out.append(box)
+    if (
+        tag in ("LineBox", "TextBox", "InlineBox")
+        and float(getattr(box, "width", 0) or 0) > 0
+        and float(getattr(box, "height", 0) or 0) > 0
+    ):
+        out.append(box)
     for c in getattr(box, "children", ()) or ():
         _walk_text_boxes(c, out)
 

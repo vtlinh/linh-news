@@ -251,6 +251,7 @@
   const volNum = document.getElementById('tts-volume-num');
 
   const isAndroid = /Android/i.test(navigator.userAgent || '');
+  const isMobile = isAndroid || /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
   if (!isAndroid) {
     engineSel.hidden = true;
     engineLabel.hidden = true;
@@ -351,8 +352,17 @@
       if (opt) voiceSel.value = opt.value;
     }
     if (!voiceSel.value) {
-      // No saved preference yet — default to Google US English when present.
-      const opt = Array.from(voiceSel.options).find(o => o.dataset.name === 'Google US English');
+      // No saved preference yet — default to Google US English when
+      // present; otherwise on mobile fall back to the first en-US voice
+      // that's available (Android exposes voices as "English United
+      // States" or just lang="en-US" / "en_US" without a Google prefix).
+      let opt = Array.from(voiceSel.options).find(o => o.dataset.name === 'Google US English');
+      if (!opt && isMobile) {
+        opt = Array.from(voiceSel.options).find(o => {
+          const v = voices.find(x => x.voiceURI === o.value);
+          return v && /en[-_]US/i.test(v.lang || '');
+        });
+      }
       if (opt) voiceSel.value = opt.value;
     }
   }
@@ -372,6 +382,10 @@
     }
     const google = voices.find(v => v.name === 'Google US English');
     if (google) return google;
+    if (isMobile) {
+      const enUS = voices.find(v => /en[-_]US/i.test(v.lang || ''));
+      if (enUS) return enUS;
+    }
     return voices.find(v => v.default) || voices[0] || null;
   }
 

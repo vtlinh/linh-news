@@ -15,6 +15,47 @@
     </section>
   {% endif %}
 </main>
+<aside class="tts-sheet" id="tts-sheet" hidden aria-label="Text-to-speech reader">
+  <div class="tts-handle" aria-hidden="true"></div>
+  <div class="tts-text" id="tts-text" aria-live="polite"></div>
+  <div class="tts-controls">
+    <button type="button" id="tts-play" aria-label="Play / pause">▶</button>
+    <button type="button" id="tts-prev" aria-label="Previous paragraph">⏮</button>
+    <button type="button" id="tts-next" aria-label="Next paragraph">⏭</button>
+    <button type="button" id="tts-get-google" aria-label="Get Google voice" title="Get Google voice" hidden>↓G</button>
+    <span class="tts-spacer"></span>
+    <button type="button" id="tts-gear" aria-pressed="false" aria-label="Settings">⚙</button>
+    <button type="button" id="tts-close" class="tts-close" aria-label="Close">×</button>
+  </div>
+  <div class="tts-settings" id="tts-settings" hidden>
+    <label for="tts-engine" id="tts-engine-label">Engine</label>
+    <select id="tts-engine"></select>
+    <label for="tts-voice">Voice</label>
+    <select id="tts-voice"></select>
+    <label for="tts-rate">Rate</label>
+    <div class="tts-slider-row">
+      <button type="button" class="tts-step" data-key="rate" data-step="-0.1" aria-label="Decrease rate">−</button>
+      <input type="range" id="tts-rate" min="0.5" max="2" step="0.05">
+      <button type="button" class="tts-step" data-key="rate" data-step="0.1" aria-label="Increase rate">+</button>
+      <span class="tts-num" id="tts-rate-num">1.00</span>
+    </div>
+    <label for="tts-pitch">Pitch</label>
+    <div class="tts-slider-row">
+      <button type="button" class="tts-step" data-key="pitch" data-step="-0.1" aria-label="Decrease pitch">−</button>
+      <input type="range" id="tts-pitch" min="0" max="2" step="0.05">
+      <button type="button" class="tts-step" data-key="pitch" data-step="0.1" aria-label="Increase pitch">+</button>
+      <span class="tts-num" id="tts-pitch-num">1.00</span>
+    </div>
+    <label for="tts-volume">Volume</label>
+    <div class="tts-slider-row">
+      <button type="button" class="tts-step" data-key="volume" data-step="-0.1" aria-label="Decrease volume">−</button>
+      <input type="range" id="tts-volume" min="0" max="1" step="0.05">
+      <button type="button" class="tts-step" data-key="volume" data-step="0.1" aria-label="Increase volume">+</button>
+      <span class="tts-num" id="tts-volume-num">1.00</span>
+    </div>
+  </div>
+</aside>
+<script id="tts-prefs-data" type="application/json">{{ tts_prefs | tojson }}</script>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -176,6 +217,541 @@
   // Movie cards no longer carry an inline ✕ — admins hide titles from the
   // dedicated /movies admin page (the X visually attaches to the backdrop
   // image and reads as "discard the image", which we don't support).
+})();
+</script>
+<script>
+(function () {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+
+  const DEFAULTS = { voice_uri: null, voice_name: null, engine: null, rate: 1.0, pitch: 1.0, volume: 1.0 };
+  let prefs;
+  try {
+    const raw = JSON.parse(document.getElementById('tts-prefs-data').textContent || '{}');
+    prefs = Object.assign({}, DEFAULTS, raw || {});
+  } catch { prefs = Object.assign({}, DEFAULTS); }
+
+  const sheet = document.getElementById('tts-sheet');
+  const textBox = document.getElementById('tts-text');
+  const playBtn = document.getElementById('tts-play');
+  const prevBtn = document.getElementById('tts-prev');
+  const nextBtn = document.getElementById('tts-next');
+  const getGoogleBtn = document.getElementById('tts-get-google');
+  const gearBtn = document.getElementById('tts-gear');
+  const closeBtn = document.getElementById('tts-close');
+  const settings = document.getElementById('tts-settings');
+  const engineLabel = document.getElementById('tts-engine-label');
+  const engineSel = document.getElementById('tts-engine');
+  const voiceSel = document.getElementById('tts-voice');
+  const rateInp = document.getElementById('tts-rate');
+  const pitchInp = document.getElementById('tts-pitch');
+  const volInp = document.getElementById('tts-volume');
+  const rateNum = document.getElementById('tts-rate-num');
+  const pitchNum = document.getElementById('tts-pitch-num');
+  const volNum = document.getElementById('tts-volume-num');
+
+  const isAndroid = /Android/i.test(navigator.userAgent || '');
+  if (!isAndroid) {
+    engineSel.hidden = true;
+    engineLabel.hidden = true;
+  }
+
+  let voices = [];
+  let playlist = [];
+  let blockIdx = 0;
+  let sentIdx = 0;
+  let speaking = false;
+  let paused = false;
+  let currentUtterance = null;
+  let restartTimer = null;
+
+  function restartCurrentForLiveChange() {
+    if (!speaking || paused) return;
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => {
+      if (!speaking || paused) return;
+      cancelSpeech();
+      speakCurrent();
+    }, 180);
+  }
+
+  function inferEngine(v) {
+    const n = (v && v.name) || '';
+    if (/^Google/.test(n)) return 'Google';
+    if (/^Samsung/.test(n)) return 'Samsung';
+    if (/^Microsoft/.test(n)) return 'Microsoft';
+    if (/Siri|^Apple/i.test(n)) return 'Apple';
+    if (/eSpeak/i.test(n)) return 'eSpeak';
+    return 'System';
+  }
+
+  function loadVoices() {
+    voices = synth.getVoices() || [];
+    populateEngines();
+    populateVoices();
+    refreshGetGoogleBtn();
+  }
+
+  // Android's Google TTS engine app. Desktop Chrome already ships the
+  // "Google US English" voice itself and iOS doesn't allow third-party TTS
+  // engines, so this button is Android-only.
+  const ANDROID_TTS_URL = 'https://play.google.com/store/apps/details?id=com.google.android.tts';
+
+  function hasGoogleVoice() {
+    return voices.some(v => /^Google\b/.test(v.name || ''));
+  }
+
+  function refreshGetGoogleBtn() {
+    const showOnAndroid = isAndroid && !hasGoogleVoice();
+    getGoogleBtn.hidden = !showOnAndroid;
+    if (showOnAndroid) getGoogleBtn.title = 'Install Google TTS engine';
+  }
+
+  function makeOpt(value, label, dataset) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (dataset) for (const k of Object.keys(dataset)) opt.dataset[k] = dataset[k];
+    return opt;
+  }
+
+  function populateEngines() {
+    if (!isAndroid) return;
+    engineSel.replaceChildren();
+    engineSel.appendChild(makeOpt('', 'All engines'));
+    const engines = Array.from(new Set(voices.map(inferEngine))).sort();
+    engines.forEach(e => engineSel.appendChild(makeOpt(e, e)));
+    if (prefs.engine && engines.includes(prefs.engine)) engineSel.value = prefs.engine;
+  }
+
+  function populateVoices() {
+    const filter = isAndroid ? (engineSel.value || '') : '';
+    const filtered = filter ? voices.filter(v => inferEngine(v) === filter) : voices;
+    const byEngine = {};
+    for (const v of filtered) {
+      const e = inferEngine(v);
+      (byEngine[e] = byEngine[e] || []).push(v);
+    }
+    voiceSel.replaceChildren();
+    Object.keys(byEngine).sort().forEach(eng => {
+      const group = document.createElement('optgroup');
+      group.label = eng;
+      byEngine[eng].forEach(v => {
+        const label = `${v.name} (${v.lang})${v.default ? ' — default' : ''}`;
+        group.appendChild(makeOpt(v.voiceURI, label, { name: v.name }));
+      });
+      voiceSel.appendChild(group);
+    });
+    if (prefs.voice_uri) {
+      const opt = Array.from(voiceSel.options).find(o => o.value === prefs.voice_uri);
+      if (opt) voiceSel.value = prefs.voice_uri;
+    }
+    if (!voiceSel.value && prefs.voice_name) {
+      const opt = Array.from(voiceSel.options).find(o => o.dataset.name === prefs.voice_name);
+      if (opt) voiceSel.value = opt.value;
+    }
+    if (!voiceSel.value) {
+      // No saved preference yet — default to Google US English when present.
+      const opt = Array.from(voiceSel.options).find(o => o.dataset.name === 'Google US English');
+      if (opt) voiceSel.value = opt.value;
+    }
+  }
+
+  function pickVoice() {
+    if (prefs.voice_uri) {
+      const v = voices.find(x => x.voiceURI === prefs.voice_uri);
+      if (v) return v;
+    }
+    if (prefs.voice_name) {
+      const v = voices.find(x => x.name === prefs.voice_name);
+      if (v) return v;
+    }
+    if (prefs.engine) {
+      const v = voices.find(x => inferEngine(x) === prefs.engine);
+      if (v) return v;
+    }
+    const google = voices.find(v => v.name === 'Google US English');
+    if (google) return google;
+    return voices.find(v => v.default) || voices[0] || null;
+  }
+
+  // ── Text extraction ───────────────────────────────────────────────────
+  const SENT_SPLIT = /(?<=[.!?])\s+(?=["'(\[]?[A-Z0-9])/;
+  const WORD_RE = /\S+/g;
+
+  function splitSentences(text) {
+    const parts = text.split(SENT_SPLIT);
+    const out = [];
+    let pos = 0;
+    for (const p of parts) {
+      if (!p.trim()) continue;
+      const idx = text.indexOf(p, pos);
+      if (idx < 0) continue;
+      out.push({ text: p, start: idx, end: idx + p.length });
+      pos = idx + p.length;
+    }
+    return out.length ? out : (text.trim() ? [{ text, start: 0, end: text.length }] : []);
+  }
+
+  function splitWords(sentence) {
+    const out = [];
+    for (const m of sentence.text.matchAll(WORD_RE)) {
+      out.push({
+        text: m[0],
+        start: sentence.start + m.index,
+        end: sentence.start + m.index + m[0].length,
+      });
+    }
+    return out;
+  }
+
+  function cleanText(s) {
+    return s.replace(/\s*Sources?\s*:\s*.*$/i, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function buildPlaylist(startStory) {
+    const stories = Array.from(document.querySelectorAll('main .news-story, main .hero'));
+    const startI = stories.indexOf(startStory);
+    if (startI < 0) return [];
+    const blocks = [];
+    for (let i = startI; i < stories.length; i++) {
+      const sec = stories[i];
+      sec.querySelectorAll('h2, h3, p, li').forEach(el => {
+        if (el.closest('.tooltip, .tooltip-popup, .sources-popup, button')) return;
+        const text = cleanText(el.textContent || '');
+        if (!text) return;
+        const sentences = splitSentences(text).map(s => ({ ...s, words: splitWords(s) }));
+        if (sentences.length) blocks.push({ sectionEl: sec, blockEl: el, text, sentences });
+      });
+    }
+    return blocks;
+  }
+
+  function renderWindow() {
+    textBox.replaceChildren();
+    if (blockIdx >= playlist.length) return;
+    const lo = Math.max(0, blockIdx - 1);
+    const hi = Math.min(playlist.length, blockIdx + 3);
+    for (let bi = lo; bi < hi; bi++) {
+      const block = playlist[bi];
+      const blockDiv = document.createElement('p');
+      blockDiv.className = 'tts-block';
+      blockDiv.dataset.bi = bi;
+      block.sentences.forEach((sn, si) => {
+        const span = document.createElement('span');
+        span.className = 'tts-sentence';
+        span.dataset.bi = bi;
+        span.dataset.si = si;
+        if (bi === blockIdx && si === sentIdx) span.classList.add('tts-current');
+        else if (bi < blockIdx || (bi === blockIdx && si < sentIdx)) span.classList.add('tts-prev');
+        else span.classList.add('tts-next');
+        sn.words.forEach((w, wi) => {
+          const wspan = document.createElement('span');
+          wspan.className = 'tts-word';
+          wspan.dataset.wi = wi;
+          wspan.textContent = w.text;
+          span.appendChild(wspan);
+          span.appendChild(document.createTextNode(' '));
+        });
+        blockDiv.appendChild(span);
+        blockDiv.appendChild(document.createTextNode(' '));
+      });
+      textBox.appendChild(blockDiv);
+    }
+    const cur = textBox.querySelector('.tts-sentence.tts-current');
+    if (cur) cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  function highlightWord(charIndex) {
+    if (blockIdx >= playlist.length) return;
+    const sn = playlist[blockIdx].sentences[sentIdx];
+    if (!sn) return;
+    let target = -1;
+    for (let i = 0; i < sn.words.length; i++) {
+      const w = sn.words[i];
+      const lo = w.start - sn.start;
+      const hi = w.end - sn.start;
+      if (charIndex >= lo && charIndex < hi) { target = i; break; }
+      if (charIndex < lo) { target = i; break; }
+    }
+    if (target < 0) target = sn.words.length - 1;
+    const curSn = textBox.querySelector(`.tts-sentence[data-bi="${blockIdx}"][data-si="${sentIdx}"]`);
+    if (!curSn) return;
+    curSn.querySelectorAll('.tts-word.tts-current').forEach(el => el.classList.remove('tts-current'));
+    const w = curSn.querySelector(`.tts-word[data-wi="${target}"]`);
+    if (w) w.classList.add('tts-current');
+  }
+
+  function speakCurrent() {
+    if (blockIdx >= playlist.length) { stop(); return; }
+    const block = playlist[blockIdx];
+    if (sentIdx >= block.sentences.length) {
+      blockIdx++;
+      sentIdx = 0;
+      renderWindow();
+      speakCurrent();
+      return;
+    }
+    renderWindow();
+    const sn = block.sentences[sentIdx];
+    const u = new SpeechSynthesisUtterance(sn.text);
+    const v = pickVoice();
+    if (v) u.voice = v;
+    u.rate = prefs.rate;
+    u.pitch = prefs.pitch;
+    u.volume = prefs.volume;
+    u.onboundary = (ev) => {
+      if (ev.name && ev.name !== 'word') return;
+      if (u !== currentUtterance) return;
+      highlightWord(ev.charIndex || 0);
+    };
+    u.onend = () => {
+      // Ignore stale onend events fired by utterances we cancelled.
+      if (u !== currentUtterance) return;
+      sentIdx++;
+      setTimeout(() => { if (speaking && !paused) speakCurrent(); }, 30);
+    };
+    u.onerror = () => {};
+    currentUtterance = u;
+    synth.speak(u);
+  }
+
+  function start(startStory, sentenceTarget) {
+    cancelSpeech();
+    playlist = buildPlaylist(startStory);
+    if (!playlist.length) { if (window.toast) window.toast('Nothing to read here.'); return; }
+    blockIdx = 0;
+    sentIdx = 0;
+    if (sentenceTarget) {
+      for (let bi = 0; bi < playlist.length; bi++) {
+        if (playlist[bi].blockEl === sentenceTarget.blockEl) {
+          blockIdx = bi;
+          sentIdx = Math.max(0, Math.min(sentenceTarget.sentIdx || 0, playlist[bi].sentences.length - 1));
+          break;
+        }
+      }
+    }
+    sheet.hidden = false;
+    requestAnimationFrame(() => sheet.classList.add('open'));
+    speaking = true;
+    paused = false;
+    playBtn.textContent = '⏸';
+    speakCurrent();
+  }
+
+  function cancelSpeech() {
+    currentUtterance = null;
+    if (synth.speaking || synth.pending) synth.cancel();
+  }
+
+  function stop() {
+    cancelSpeech();
+    speaking = false;
+    paused = false;
+    playBtn.textContent = '▶';
+  }
+
+  function togglePlay() {
+    if (!playlist.length) return;
+    if (!speaking) {
+      speaking = true;
+      paused = false;
+      playBtn.textContent = '⏸';
+      speakCurrent();
+      return;
+    }
+    if (paused) {
+      synth.resume();
+      paused = false;
+      playBtn.textContent = '⏸';
+    } else {
+      synth.pause();
+      paused = true;
+      playBtn.textContent = '▶';
+    }
+  }
+
+  function jumpRel(delta) {
+    if (!playlist.length) return;
+    cancelSpeech();
+    blockIdx = Math.max(0, Math.min(playlist.length - 1, blockIdx + delta));
+    sentIdx = 0;
+    renderWindow();
+    if (speaking && !paused) speakCurrent();
+  }
+
+  function closeSheet() {
+    stop();
+    sheet.classList.remove('open');
+    setTimeout(() => { sheet.hidden = true; }, 240);
+  }
+
+  let saveTimer = null;
+  function savePrefs() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      fetch('/tts/prefs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prefs),
+      }).catch(() => {});
+    }, 500);
+  }
+
+  function syncNumLabels() {
+    rateNum.textContent = Number(prefs.rate).toFixed(2);
+    pitchNum.textContent = Number(prefs.pitch).toFixed(2);
+    volNum.textContent = Number(prefs.volume).toFixed(2);
+  }
+
+  function applyPrefsToControls() {
+    rateInp.value = prefs.rate;
+    pitchInp.value = prefs.pitch;
+    volInp.value = prefs.volume;
+    syncNumLabels();
+  }
+
+  playBtn.addEventListener('click', togglePlay);
+  prevBtn.addEventListener('click', () => jumpRel(-1));
+  nextBtn.addEventListener('click', () => jumpRel(1));
+  getGoogleBtn.addEventListener('click', () => {
+    window.open(ANDROID_TTS_URL, '_blank', 'noopener');
+  });
+  closeBtn.addEventListener('click', closeSheet);
+  gearBtn.addEventListener('click', () => {
+    const showing = !settings.hidden;
+    settings.hidden = showing;
+    gearBtn.setAttribute('aria-pressed', String(!showing));
+  });
+
+  engineSel.addEventListener('change', () => {
+    prefs.engine = engineSel.value || null;
+    populateVoices();
+    if (prefs.engine) {
+      const v = voices.find(x => x.voiceURI === prefs.voice_uri);
+      if (!v || inferEngine(v) !== prefs.engine) {
+        const alt = voices.find(x => inferEngine(x) === prefs.engine);
+        if (alt) {
+          prefs.voice_uri = alt.voiceURI;
+          prefs.voice_name = alt.name;
+          voiceSel.value = alt.voiceURI;
+        }
+      }
+    }
+    savePrefs();
+  });
+
+  voiceSel.addEventListener('change', () => {
+    const opt = voiceSel.selectedOptions[0];
+    prefs.voice_uri = voiceSel.value || null;
+    prefs.voice_name = opt ? (opt.dataset.name || null) : null;
+    if (prefs.voice_uri) {
+      const v = voices.find(x => x.voiceURI === prefs.voice_uri);
+      if (v && isAndroid) prefs.engine = inferEngine(v);
+    }
+    savePrefs();
+  });
+
+  const SLIDER_INPUTS = { rate: rateInp, pitch: pitchInp, volume: volInp };
+
+  function bindSlider(inp, key) {
+    inp.addEventListener('input', () => {
+      prefs[key] = parseFloat(inp.value);
+      syncNumLabels();
+      savePrefs();
+      restartCurrentForLiveChange();
+    });
+  }
+  bindSlider(rateInp, 'rate');
+  bindSlider(pitchInp, 'pitch');
+  bindSlider(volInp, 'volume');
+
+  document.querySelectorAll('.tts-step').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      const step = parseFloat(btn.dataset.step);
+      const inp = SLIDER_INPUTS[key];
+      if (!inp) return;
+      const min = parseFloat(inp.min);
+      const max = parseFloat(inp.max);
+      const next = Math.min(max, Math.max(min, Math.round((prefs[key] + step) * 100) / 100));
+      prefs[key] = next;
+      inp.value = next;
+      syncNumLabels();
+      savePrefs();
+      restartCurrentForLiveChange();
+    });
+  });
+
+  loadVoices();
+  if (synth.onvoiceschanged !== undefined) {
+    synth.onvoiceschanged = loadVoices;
+  }
+  applyPrefsToControls();
+
+  function offsetWithinBlock(block, node, nodeOffset) {
+    if (!block.contains(node)) return -1;
+    let total = 0;
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+    let n;
+    while ((n = walker.nextNode())) {
+      if (n === node) return total + nodeOffset;
+      total += n.nodeValue.length;
+    }
+    return -1;
+  }
+
+  function clickedSentenceIndex(block, ev) {
+    let range = null;
+    if (document.caretRangeFromPoint) {
+      range = document.caretRangeFromPoint(ev.clientX, ev.clientY);
+    } else if (document.caretPositionFromPoint) {
+      const cp = document.caretPositionFromPoint(ev.clientX, ev.clientY);
+      if (cp) {
+        range = document.createRange();
+        range.setStart(cp.offsetNode, cp.offset);
+        range.collapse(true);
+      }
+    }
+    if (!range) return 0;
+    const rawOffset = offsetWithinBlock(block, range.startContainer, range.startOffset);
+    if (rawOffset < 0) return 0;
+    // Project the click offset onto our cleaned text (same cleaning as
+    // cleanText: strip trailing "Sources:" and collapse whitespace).
+    const rawText = block.textContent || '';
+    const before = cleanText(rawText.slice(0, rawOffset));
+    const cleanedPos = before.length;
+    const cleanedFull = cleanText(rawText);
+    const sentences = splitSentences(cleanedFull);
+    // splitSentences returns offsets within the cleaned text. Pick the
+    // sentence whose [start, end] range contains cleanedPos; if past the
+    // end (e.g. user clicked the trailing "Sources:" we stripped), use the
+    // last sentence.
+    for (let i = 0; i < sentences.length; i++) {
+      if (cleanedPos < sentences[i].end) return i;
+    }
+    return Math.max(0, sentences.length - 1);
+  }
+
+  document.addEventListener('dblclick', (ev) => {
+    const target = ev.target;
+    if (!target || target.closest('.tts-sheet')) return;
+    const story = target.closest('.news-story, .hero');
+    if (!story) return;
+    let block = target.closest('h2, h3, p, li');
+    if (!block || !story.contains(block)) {
+      block = story.querySelector('h3, p, li');
+    }
+    const sentenceTarget = block
+      ? { blockEl: block, sentIdx: clickedSentenceIndex(block, ev) }
+      : null;
+    start(story, sentenceTarget);
+  });
+
+  if (typeof window.spaOnUnload === 'function') {
+    window.spaOnUnload(stop);
+  }
+  window.addEventListener('beforeunload', () => synth.cancel());
 })();
 </script>
 {% endblock %}

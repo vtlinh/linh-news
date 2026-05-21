@@ -57,9 +57,7 @@ def _upsert_google_oauth(s: Session, email: str, refresh_token: str | None) -> N
 
     settings_obj = get_settings()
     s_email = email.lower()
-    row = s.execute(
-        select(GoogleOAuth).where(GoogleOAuth.email == s_email)
-    ).scalar_one_or_none()
+    row = s.execute(select(GoogleOAuth).where(GoogleOAuth.email == s_email)).scalar_one_or_none()
     if row is None:
         if not refresh_token:
             # First-time consent must produce a refresh_token. Without one
@@ -235,16 +233,12 @@ def _inject_weather(html: str, s: Session, edition: Edition | None) -> str:
         # prose paragraph's line-box and baseline; the prose text wraps
         # around it on the same row.
         opening = '<div class="weather-prose">'
-        prose_with_badge = prose_html.replace(
-            opening, opening + refreshed_html, 1
-        )
+        prose_with_badge = prose_html.replace(opening, opening + refreshed_html, 1)
         replacement = f'<div class="weather">{prose_with_badge}</div>'
     else:
         coords = get_settings().weather_coords
         now = weather.get_now_cached(s, coords)
-        replacement = weather.build_weather_strip(
-            now, forecast, alerts, refreshed_at=refreshed_at
-        )
+        replacement = weather.build_weather_strip(now, forecast, alerts, refreshed_at=refreshed_at)
     replacement = weather.convert_celsius_html(replacement, unit)
     return html.replace("<!-- WEATHER_PLACEHOLDER -->", replacement, 1)
 
@@ -364,9 +358,8 @@ def _render_viewer(request: Request, day: date, s: Session, viewer_email: str) -
             # no flash if a background refresh is already running.
             "refresh_in_progress": cache.edition_refresh_in_progress(),
             "edition_generated_at": (edition.generated_at.isoformat() if edition else None),
-            "masthead_name": _masthead_name(
-                s, viewer_email, is_personalized=is_personalized
-            ),
+            "masthead_name": _masthead_name(s, viewer_email, is_personalized=is_personalized),
+            "tts_prefs": user_settings.get(s, viewer_email).get("tts_prefs") or {},
         },
     )
 
@@ -409,16 +402,12 @@ def _resolve_user_handle(s: Session, handle: str) -> str:
     if not needle:
         raise HTTPException(404, "Unknown user.")
     if needle.isdigit():
-        row = s.execute(
-            select(_US.email).where(_US.user_id == int(needle))
-        ).scalar_one_or_none()
+        row = s.execute(select(_US.email).where(_US.user_id == int(needle))).scalar_one_or_none()
         if row is None:
             raise HTTPException(404, "Unknown user.")
         return row.lower()
     rows = (
-        s.execute(
-            select(_US.email).where(func.lower(_US.display_name) == needle.lower())
-        )
+        s.execute(select(_US.email).where(func.lower(_US.display_name) == needle.lower()))
         .scalars()
         .all()
     )
@@ -488,9 +477,7 @@ def _resolve_token_owner(s: Session, presented: str) -> str | None:
 
     if not presented:
         return None
-    row = s.execute(
-        select(_US).where(_US.pdf_token == presented)
-    ).scalar_one_or_none()
+    row = s.execute(select(_US).where(_US.pdf_token == presented)).scalar_one_or_none()
     if row is None:
         return None
     # Constant-time confirm to avoid leaking timing info on partial matches.
@@ -711,9 +698,7 @@ async def refresh(
             status.HTTP_409_CONFLICT,
             "A refresh is already in progress.",
         )
-    pid = _spawn_generate_subprocess(
-        "refresh", target_date=target_date, target_email=email
-    )
+    pid = _spawn_generate_subprocess("refresh", target_date=target_date, target_email=email)
     cache.set_edition_refresh_pid(pid)
     return {"ok": True, "date": effective_date, "in_progress": True}
 
@@ -795,6 +780,17 @@ async def data_save(
         return {"ok": False, "errors": errors}
     saved = user_settings.save(s, email, body)
     return {"ok": True, "settings": saved}
+
+
+@app.post("/tts/prefs")
+async def tts_prefs_save(
+    request: Request,
+    email: str = Depends(auth.require_viewer),
+    s: Session = Depends(get_session),
+):
+    body = await request.json()
+    saved = user_settings.save_tts_prefs(s, email, body)
+    return {"ok": True, "tts_prefs": saved}
 
 
 # ──────────────────────── Admin ─────────────────────────
@@ -934,9 +930,7 @@ def admin_events_data(
     hidden_ids = {c["id"] for c in overlays.hidden_calendar_ids(s, email)}
     cal_events = [e for e in cal_events if e.get("calendar_id") not in hidden_ids]
     page = cal_events[offset : offset + limit]
-    rows = s.execute(
-        select(ImportantEvent.ical_uid).where(ImportantEvent.email == email)
-    ).all()
+    rows = s.execute(select(ImportantEvent.ical_uid).where(ImportantEvent.email == email)).all()
     important_uids = {r[0] for r in rows if r[0]}
     suppressed_uids = overlays.suppressed_event_uids(s, email)
     return {
@@ -1099,9 +1093,7 @@ def admin_movies_data(
     s: Session = Depends(get_session),
 ):
     requested = [r for r in request.query_params.getlist("ratings") if r in _ALL_MOVIE_RATINGS]
-    selected = (
-        set(requested) if requested else set(prefs.get_allowed_ratings(email=email))
-    )
+    selected = set(requested) if requested else set(prefs.get_allowed_ratings(email=email))
     include_unrated = "Unrated" in selected
     movies = movies_mod.get_movies(refresh_if_stale=bool(refresh))
     favorites = overlays.favorite_movie_titles(s, email)
@@ -1256,10 +1248,7 @@ async def admin_calendars_toggle(
     if not calendar_id:
         raise HTTPException(400, "calendar_id required")
     try:
-        all_cals = {
-            c["id"]: c["name"]
-            for c in calendar_oauth.cached_calendars(s, email=email)
-        }
+        all_cals = {c["id"]: c["name"] for c in calendar_oauth.cached_calendars(s, email=email)}
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
     if calendar_id not in all_cals:
@@ -1304,12 +1293,8 @@ def admin_users_get(
     from app.db import Edition, GoogleOAuth, UserSettings
 
     admin = _admin_email()
-    settings_rows = (
-        s.execute(select(UserSettings).order_by(UserSettings.email)).scalars().all()
-    )
-    oauth_rows = s.execute(
-        select(GoogleOAuth.email, GoogleOAuth.revoked_at)
-    ).all()
+    settings_rows = s.execute(select(UserSettings).order_by(UserSettings.email)).scalars().all()
+    oauth_rows = s.execute(select(GoogleOAuth.email, GoogleOAuth.revoked_at)).all()
     oauth_emails = {em for em, _ in oauth_rows}
     revoked_emails = {em for em, rev in oauth_rows if rev is not None}
     # Most recent personalized edition per user — drives "Last refreshed".
@@ -1333,9 +1318,7 @@ def admin_users_get(
                 "pdf_token": r.pdf_token or "",
                 # Emit ISO-8601 with offset so the client renders it in the
                 # user's local timezone (the DB column is timezone-aware).
-                "last_refreshed_at": (
-                    last_ts.isoformat() if last_ts else None
-                ),
+                "last_refreshed_at": (last_ts.isoformat() if last_ts else None),
             }
         )
     # Admin first; everyone else by ascending user_id (assignment order).
@@ -1425,15 +1408,11 @@ async def admin_users_set_name(
     if row is None:
         raise HTTPException(404, "Unknown user.")
     has_signed_in = (
-        s.execute(
-            select(GoogleOAuth.email).where(GoogleOAuth.email == target)
-        ).scalar_one_or_none()
+        s.execute(select(GoogleOAuth.email).where(GoogleOAuth.email == target)).scalar_one_or_none()
         is not None
     )
     if has_signed_in:
-        raise HTTPException(
-            403, "User has signed in — they manage their name on the Data tab."
-        )
+        raise HTTPException(403, "User has signed in — they manage their name on the Data tab.")
     body = await request.json()
     name = (body.get("name") or "").strip() or None
     row.display_name = name

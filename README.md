@@ -12,6 +12,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 - **Calendar** combines Google Calendar events from all subscribed calendars; auto-marks important categories (school closures, kids' events, anniversaries) and lets you add custom ones. The per-day summary line is rendered in pure Python; per-event emojis come from a DB-cached title→emoji map (`event_emojis`) — Claude (Haiku) is consulted only the first time a new title appears, never on cached titles. The one calendar that *is* surfaced to the LLM is the Dorchester Parent Calendar — its upcoming events are passed in so Claude can ground the school-news section in real dates.
 - **Stocks** with hover-revealed "why it moved" tooltip backed by ≥5 trust-sorted sources.
 - **Movies** filtered by MPAA rating tied to the kids' age (auto-advances on August 1 each year). The admin **Movies** page holds the year-out outlook; the daily edition (HTML and PDF) reuses that cached list — no extra LLM call — and shows only films with a wide-release date in `[today − 3 weeks, today + 2 months]`. Each card carries a randomly-picked TMDB landscape backdrop above the title, plus the summary, MPAA cert, and real YouTube trailers.
+- **Listen to the page** — double-click anywhere in a news article to open a bottom-sheet text-to-speech reader with karaoke-style sentence + word highlighting. Reads sentence-by-sentence so iOS Safari (no boundary events) and desktop Chrome (full word boundaries) both work. Controls: play/pause, prev/next paragraph, voice picker, rate / pitch / volume sliders with ± step buttons. Per-user voice/engine/rate/pitch/volume are persisted in `user_settings.tts_prefs_json` and follow the user across devices. Defaults to "Google US English" when present; on Android, exposes an engine picker and a one-tap link to install the Google TTS engine if no Google voice is found.
 - **Linh Times PDF** — single-page New-York-Times-style broadsheet (15.296 × 27.193 in) with masthead, dense columns, and a color-coded stocks ticker. The print HTML is built deterministically in Python (`app/pdf_renderer.py`) from the structured `LinhNews` response, then piped through WeasyPrint via a per-region fit pass (`app/pdf.py`). Emoji codepoints are stripped from all body/rail content for a clean print-style serif look. The masthead title scales with the display name length: `max(36, min(100, 1400 // len("The {Name} Times")))` pt; the dateline shows the per-edition Anthropic API cost rounded up to the nearest nickel. Every render is also snapshotted to `logs/pdf-{slot}-{ts}.pdf` for debugging.
 
 ## Admin pages (only `vtlinh87@gmail.com`)
@@ -24,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture and the planning doc at `~/.claude/p
 ## Tooling
 
 - Python 3.12, managed with **uv** (`uv sync`, `uv run …`). `uv.lock` is committed.
-- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (34 migrations).
+- FastAPI + Jinja2; SQLAlchemy + Alembic for the schema (35 migrations).
 - Anthropic SDK with prompt caching, streaming, structured-output tool schemas.
 - WeasyPrint for the PDF (custom User-Agent so Wikimedia thumbnails load).
 - Persistent cache layer (`app/cache.py`): Redis when `REDIS_URL` is set, SQLite `kv_cache` table otherwise.

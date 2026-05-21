@@ -43,7 +43,73 @@ def to_dict(row: UserSettings) -> dict:
         "temperature_unit": (row.temperature_unit or "F").upper(),
         "sections": list(row.sections_json or []),
         "children": list(row.children_json or []),
+        "tts_prefs": _normalize_tts_prefs(row.tts_prefs_json or {}),
     }
+
+
+# ── TTS prefs ────────────────────────────────────────────────────────────
+
+_TTS_DEFAULTS = {
+    "voice_uri": None,
+    "voice_name": None,
+    "engine": None,
+    "rate": 1.0,
+    "pitch": 1.0,
+    "volume": 1.0,
+}
+
+
+def _clamp(v: Any, lo: float, hi: float, default: float) -> float:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    if f != f:  # NaN
+        return default
+    return max(lo, min(hi, f))
+
+
+def _normalize_tts_prefs(raw: Any) -> dict:
+    """Coerce arbitrary input into the canonical TTS-prefs shape with
+    clamped numeric ranges. Unknown keys are dropped."""
+    if not isinstance(raw, dict):
+        raw = {}
+    voice_uri = raw.get("voice_uri")
+    voice_name = raw.get("voice_name")
+    engine = raw.get("engine")
+    return {
+        "voice_uri": (str(voice_uri).strip() or None) if voice_uri else None,
+        "voice_name": (str(voice_name).strip() or None) if voice_name else None,
+        "engine": (str(engine).strip() or None) if engine else None,
+        "rate": _clamp(raw.get("rate", 1.0), 0.5, 2.0, 1.0),
+        "pitch": _clamp(raw.get("pitch", 1.0), 0.0, 2.0, 1.0),
+        "volume": _clamp(raw.get("volume", 1.0), 0.0, 1.0, 1.0),
+    }
+
+
+def save_tts_prefs(s: Session, email: str, payload: Any) -> dict:
+    """Upsert just the TTS prefs for a user. Lightweight — does not touch
+    sections/children/address. Returns the normalized prefs that were
+    written."""
+    prefs = _normalize_tts_prefs(payload)
+    row = s.get(UserSettings, email)
+    if row is None:
+        row = UserSettings(
+            email=email,
+            display_name=None,
+            address=None,
+            weather_coords=None,
+            sections_json=[],
+            children_json=[],
+            tts_prefs_json=prefs,
+            updated_at=datetime.now(UTC),
+        )
+        s.add(row)
+    else:
+        row.tts_prefs_json = prefs
+        row.updated_at = datetime.now(UTC)
+    s.commit()
+    return prefs
 
 
 def get(s: Session, email: str) -> dict:
@@ -60,6 +126,7 @@ def get(s: Session, email: str) -> dict:
         "temperature_unit": "F",
         "sections": [],
         "children": [],
+        "tts_prefs": dict(_TTS_DEFAULTS),
     }
 
 

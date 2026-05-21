@@ -463,6 +463,154 @@
       from { transform: translateY(20px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+
+    /* ── TTS reader ─────────────────────────────────────────────── */
+    .tts-word.tts-current {
+      background: #ffe066;
+      color: #111;
+      border-radius: 3px;
+      box-shadow: 0 0 0 2px #ffe066;
+    }
+    html[data-theme="dark"] .tts-word.tts-current {
+      background: #6b5b00;
+      color: #fff;
+      box-shadow: 0 0 0 2px #6b5b00;
+    }
+    .tts-sentence.tts-current {
+      background: rgba(255, 224, 102, 0.35);
+      border-radius: 3px;
+    }
+    html[data-theme="dark"] .tts-sentence.tts-current {
+      background: rgba(255, 224, 102, 0.18);
+    }
+    .tts-sheet {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      background: var(--surface);
+      color: var(--fg);
+      border-top: 1px solid var(--rule);
+      box-shadow: 0 -6px 24px var(--shadow);
+      z-index: 1000;
+      transform: translateY(100%);
+      transition: transform 0.22s ease-out;
+      display: flex;
+      flex-direction: column;
+      max-height: 60vh;
+      border-top-left-radius: 14px;
+      border-top-right-radius: 14px;
+      padding: 8px 12px 14px;
+      box-sizing: border-box;
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    }
+    .tts-sheet[hidden] { display: none; }
+    .tts-sheet.open { transform: translateY(0); }
+    .tts-handle {
+      width: 44px; height: 5px; border-radius: 3px;
+      background: var(--rule);
+      margin: 2px auto 8px;
+      cursor: grab;
+    }
+    .tts-text {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      font-size: clamp(15px, 2.6vw, 17px);
+      line-height: 1.55;
+      padding: 4px 4px 10px;
+      min-height: 80px;
+    }
+    .tts-text .tts-sentence { padding: 1px 2px; }
+    .tts-text .tts-sentence.tts-prev,
+    .tts-text .tts-sentence.tts-next {
+      opacity: 0.55;
+    }
+    .tts-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      padding-top: 6px;
+      border-top: 1px solid var(--rule);
+    }
+    .tts-controls button {
+      min-width: 44px;
+      min-height: 44px;
+      font-size: 18px;
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .tts-controls button:hover { background: rgba(0,0,0,0.04); }
+    html[data-theme="dark"] .tts-controls button:hover { background: rgba(255,255,255,0.06); }
+    .tts-controls button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .tts-controls .tts-spacer { flex: 1 1 auto; }
+    .tts-controls .tts-close {
+      font-size: 22px;
+      line-height: 1;
+    }
+    .tts-settings {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 10px;
+      align-items: center;
+      padding: 8px 0 0;
+      font-size: 14px;
+    }
+    .tts-settings[hidden] { display: none; }
+    .tts-settings label { font-weight: 600; }
+    .tts-settings select {
+      width: 100%;
+      min-height: 36px;
+      font-size: 14px;
+    }
+    .tts-slider-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tts-slider-row input[type="range"] {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 36px;
+    }
+    .tts-step {
+      min-width: 36px;
+      min-height: 36px;
+      font-size: 18px;
+      line-height: 1;
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      cursor: pointer;
+      padding: 0 6px;
+    }
+    .tts-step:hover { background: rgba(0,0,0,0.04); }
+    html[data-theme="dark"] .tts-step:hover { background: rgba(255,255,255,0.06); }
+    .tts-num {
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      min-width: 4ch;
+      text-align: right;
+      padding-left: 4px;
+    }
+    @media (min-width: 768px) {
+      .tts-sheet {
+        left: auto;
+        right: 16px;
+        bottom: 16px;
+        width: 440px;
+        max-width: calc(100vw - 32px);
+        max-height: 70vh;
+        border-radius: 14px;
+        border: 1px solid var(--rule);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tts-sheet { transition: none; }
+    }
   </style>
 </head>
 <script>

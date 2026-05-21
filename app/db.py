@@ -256,9 +256,7 @@ class GoogleOAuth(Base):
     # the row is treated as if it were absent: require_viewer bounces the
     # user to re-consent and the cron skips them. Cleared on the next
     # successful sign-in that captures a fresh refresh token.
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SharedEdition(Base):
@@ -310,9 +308,7 @@ class WeatherGrid(Base):
     grid_id: Mapped[str] = mapped_column(String, nullable=False)
     grid_x: Mapped[int] = mapped_column(Integer, nullable=False)
     grid_y: Mapped[int] = mapped_column(Integer, nullable=False)
-    resolved_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class WeatherHourly(Base):
@@ -326,14 +322,10 @@ class WeatherHourly(Base):
 
     __tablename__ = "weather_hourly"
     coords: Mapped[str] = mapped_column(String, primary_key=True)
-    start_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
-    )
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     temp_c: Mapped[int] = mapped_column(Integer, nullable=False)
     short_forecast: Mapped[str] = mapped_column(Text, nullable=False)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class WeatherPhrase(Base):
@@ -400,6 +392,10 @@ class UserSettings(Base):
     # List of ``{"name": str, "birthday": "YYYY-MM-DD"}``. Drives kid-age /
     # grade computation that feeds the prompt's school grade-filter rule.
     children_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # In-page TTS reader preferences: ``{voice_uri, voice_name, engine,
+    # rate, pitch, volume}``. Nullable so first-time users get client-side
+    # defaults; saved when the user touches a control in the bottom sheet.
+    tts_prefs_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Admin-controlled toggle. When false, this user sees the admin's shared
     # "Linh News" edition. When true, cron generates a personalized edition
     # for them and / serves it.

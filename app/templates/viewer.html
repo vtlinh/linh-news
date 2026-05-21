@@ -19,7 +19,7 @@
   <div class="tts-handle" aria-hidden="true"></div>
   <div class="tts-text" id="tts-text" aria-live="polite"></div>
   <div class="tts-controls">
-    <button type="button" id="tts-play" aria-label="Play / pause">▶</button>
+    <button type="button" id="tts-play" aria-label="Play / pause">⏵</button>
     <button type="button" id="tts-prev" aria-label="Previous paragraph">⏮</button>
     <button type="button" id="tts-next" aria-label="Next paragraph">⏭</button>
     <button type="button" id="tts-get-google" aria-label="Get Google voice" title="Get Google voice" hidden>↓G</button>
@@ -32,6 +32,9 @@
     <select id="tts-engine"></select>
     <label for="tts-voice">Voice</label>
     <select id="tts-voice"></select>
+    <small id="tts-android-hint" class="tts-android-hint" hidden>
+      Don't see all your voices? Open <strong>Android Settings → Accessibility → Text-to-speech output</strong>, set <strong>Google Text-to-Speech</strong> as the preferred engine, then enable each voice inside that app. Chrome only lists voices from the active engine.
+    </small>
     <label for="tts-rate">Rate</label>
     <div class="tts-slider-row">
       <button type="button" class="tts-step" data-key="rate" data-step="-0.1" aria-label="Decrease rate">−</button>
@@ -254,6 +257,9 @@
   if (!isAndroid) {
     engineSel.hidden = true;
     engineLabel.hidden = true;
+  } else {
+    const hint = document.getElementById('tts-android-hint');
+    if (hint) hint.hidden = false;
   }
 
   let voices = [];
@@ -548,7 +554,7 @@
     cancelSpeech();
     speaking = false;
     paused = false;
-    playBtn.textContent = '▶';
+    playBtn.textContent = '⏵';
   }
 
   function togglePlay() {
@@ -561,13 +567,24 @@
       return;
     }
     if (paused) {
-      synth.resume();
       paused = false;
       playBtn.textContent = '⏸';
+      // Chrome on Android silently drops `synth.pause()` / `synth.resume()`,
+      // so on Android we treat pause as "cancel and remember sentence" and
+      // resume by re-speaking from the current sentence.
+      if (isAndroid) {
+        speakCurrent();
+      } else {
+        synth.resume();
+      }
     } else {
-      synth.pause();
       paused = true;
-      playBtn.textContent = '▶';
+      playBtn.textContent = '⏵';
+      if (isAndroid) {
+        cancelSpeech();
+      } else {
+        synth.pause();
+      }
     }
   }
 

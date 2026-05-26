@@ -137,6 +137,9 @@
 {% block scripts %}
 <script>
 (function() {
+  const SAMPLE = {{ sample | default(false) | tojson }};
+  const DATA_URL = SAMPLE ? '/sample/movies/data' : '/admin/movies/data';
+  function sampleToast() { window.toast("This is a sample page — actions aren't saved."); }
   const grid = document.getElementById('movies-grid');
   const hiddenGrid = document.getElementById('hidden-grid');
   const hiddenSection = document.getElementById('hidden-section');
@@ -372,7 +375,7 @@
       const params = new URLSearchParams();
       if (force) params.set('refresh', '1');
       for (const r of selectedRatings()) params.append('ratings', r);
-      const r = await fetch('/admin/movies/data?' + params.toString());
+      const r = await fetch(DATA_URL + '?' + params.toString());
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
       const visible = data.movies.filter(m => !m.hidden);
@@ -394,6 +397,7 @@
   async function onToggleHide(ev) {
     const btn = ev.target.closest('button.movie-toggle');
     if (!btn) return;
+    if (SAMPLE) { sampleToast(); return; }
     const title = btn.dataset.title;
     const wasHidden = btn.dataset.hidden === '1';
     const hidden = !wasHidden;
@@ -416,6 +420,7 @@
   async function onToggleFavorite(ev) {
     const btn = ev.target.closest('button.movie-fav-toggle');
     if (!btn) return;
+    if (SAMPLE) { sampleToast(); return; }
     const title = btn.dataset.title;
     const wasFav = btn.dataset.favorite === '1';
     const favorite = !wasFav;
@@ -449,6 +454,7 @@
   hiddenGrid.addEventListener('click', onCornerClick);
 
   async function saveRatings(sel) {
+    if (SAMPLE) { sampleToast(); return false; }
     try {
       const r = await fetch('/admin/movies/ratings', {
         method: 'POST',

@@ -149,6 +149,7 @@
 <script>
 (function() {
   const initial = {{ settings_json | tojson }};
+  const SAMPLE = {{ sample | default(false) | tojson }};
 
   const $sections = document.getElementById('sections');
   const $children = document.getElementById('children');
@@ -323,6 +324,7 @@
 
   let cachedCalendars = null;
   async function loadCalendars(force = false) {
+    if (SAMPLE) return [];
     if (cachedCalendars && !force) return cachedCalendars;
     try {
       const r = await fetch('/api/calendars' + (force ? '?refresh=1' : ''));
@@ -543,6 +545,7 @@
   }
 
   $saveBtn.addEventListener('click', async () => {
+    if (SAMPLE) { window.toast("This is a sample page — actions aren't saved."); return; }
     clearSavedFade();
     clearErrors();
     const payload = collect();

@@ -1,6 +1,11 @@
 <header class="site">
   <h1 class="masthead">The {{ masthead_name }} News</h1>
-  {% if active_nav == 'home' %}
+  {% if sample %}
+  <p style="text-align:center; margin:0; color:var(--muted); font-size:0.9em;">
+    Sample edition — a frozen snapshot. Edits aren't saved.
+  </p>
+  {% endif %}
+  {% if active_nav == 'home' and not sample %}
   <form class="datepicker" method="get" action="/d/"
         onsubmit="event.preventDefault(); window.location='/d/'+this.d.value;">
     <a href="/d/{{ prev_date }}" class="actions" aria-label="Previous day">←</a>
@@ -14,6 +19,16 @@
   {% endif %}
   <div class="toolbar">
     <div class="actions toolbar-actions">
+    {% if sample %}
+      <a href="/sample" class="{% if active_nav == 'home' %}active{% endif %}">Home</a>
+      {% if active_nav == 'home' %}
+        <a href="/sample/pdf" target="_blank" class="primary">PDF</a>
+      {% endif %}
+      <a href="/sample/movies" class="{% if active_nav == 'movies' %}active{% endif %}">Movies</a>
+      <a href="/sample/stocks" class="{% if active_nav == 'stocks' %}active{% endif %}">Stocks</a>
+      <a href="/sample/data" class="{% if active_nav == 'data' %}active{% endif %}">Data</a>
+      <a href="/login">Exit sample</a>
+    {% else %}
       <a href="/" class="{% if active_nav == 'home' %}active{% endif %}">Home</a>
       {% if active_nav == 'home' %}
         <a href="/pdf/{{ edition_date }}{% if edition_generated_at %}?v={{ edition_generated_at }}{% endif %}" class="primary">PDF</a>
@@ -32,6 +47,7 @@
         <a href="/admin/users" class="{% if active_nav == 'users' %}active{% endif %}">Users</a>
       {% endif %}
       <a href="/logout">Logout</a>
+    {% endif %}
       <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
     </div>
   </div>

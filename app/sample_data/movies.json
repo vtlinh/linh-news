@@ -1,0 +1,557 @@
+{
+  "movies": [
+    {
+      "tmdb_id": 1301421,
+      "title": "The Sheep Detectives",
+      "release_date": "2026-05-08",
+      "rating": "PG",
+      "status": "in_theaters",
+      "summary": "George Hardy is a shepherd who reads detective novels to his beloved sheep every night, assuming they can't possibly understand. But when a mysterious incident disrupts life on the farm, the sheep realize they must become the detectives. As they follow the clues and investigate human suspects, they prove that even sheep can be brilliant crime-solvers.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=826SRt1CFbg",
+        "https://www.youtube.com/watch?v=pyZI5oM6hWk",
+        "https://www.youtube.com/watch?v=jVVR2jK954s"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/6QtL9rl3Zb4d8qW6EJ4qO5hSSfU.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/a8uQvrplTkhGJQog6GZ6CqF8An6.jpg",
+        "https://image.tmdb.org/t/p/w300/t6O6XWelu27BD0OmIDCCufZZT6d.jpg",
+        "https://image.tmdb.org/t/p/w300/rGmHJzGyvHgKisPWhagGrqlJmYg.jpg",
+        "https://image.tmdb.org/t/p/w300/ofZ8E3mq32fyzlc79uIrKX4OKPI.jpg",
+        "https://image.tmdb.org/t/p/w300/eDjIxljQCqDdw8n7i3eNcV1BxUZ.jpg",
+        "https://image.tmdb.org/t/p/w300/wNrPQ8NpO5SPEtGPLNyXJc5zQyI.jpg",
+        "https://image.tmdb.org/t/p/w300/g6uEVedSBXsZ3QuXKP4WDCeSsOy.jpg",
+        "https://image.tmdb.org/t/p/w300/9IbREjEPGs1JYMGWGSE1j28UyEr.jpg"
+      ],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1662716,
+      "title": "Threadbare",
+      "release_date": "2026-05-11",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "A boy crowns himself as king, unaware his kingdom is already losing someone.",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/gkuoouMoN1RAE5uBPSbKiNlwIfK.jpg",
+      "backdrops": [],
+      "hidden": true,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1665071,
+      "title": "The Big Break",
+      "release_date": "2026-05-12",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "A costumed mascot, fueled by an unyielding ambition to break into the entertainment industry, unexpectedly finds himself in a high-stakes situation: a chance encounter with a renowned Hollywood agent at a boisterous children's birthday party, where he must use his comedic timing and infectious energy to make a lasting impression, all while navigating a chaotic environment filled with cake, confetti, and the boundless enthusiasm of screaming kids…& Adults.",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/kA0ksxXUWxcibf9caiT04ZBvMCe.jpg",
+      "backdrops": [],
+      "hidden": true,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1671269,
+      "title": "Flower Bot",
+      "release_date": "2026-05-17",
+      "rating": "NR",
+      "status": "upcoming",
+      "summary": "In a scorching hot desert, Betty, a young robot still grieving her kind, discovers a miraculous flower. To protect her, Betty will have to face the elements and her ties to the past...",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/6TaBrbVAsm1vE1gwGVDWiI2ylOg.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/bjXq9pkT6NLmbw7tr4MfwPyTS5E.jpg",
+        "https://image.tmdb.org/t/p/w300/opeNM4teSKQvzjpDqyQ9nCKPp6f.jpg",
+        "https://image.tmdb.org/t/p/w300/jop3XY31XX0trZyIJqnqTxdzc9l.jpg",
+        "https://image.tmdb.org/t/p/w300/uXDMaMJYZ4M8LDQZSgdCdJ1Dcwj.jpg",
+        "https://image.tmdb.org/t/p/w300/dnHGzZGvrbITBNgniXPDxKX4Sqf.jpg",
+        "https://image.tmdb.org/t/p/w300/oJZkWOyHPmGMUwUIMHBsra8tQHR.jpg",
+        "https://image.tmdb.org/t/p/w300/6l8YtSXJgc6196nrnh7hLEYqmOb.jpg",
+        "https://image.tmdb.org/t/p/w300/pRatmbVJZg4hOvSqmfF7PyZ7T92.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1576653,
+      "title": "Holding Water",
+      "release_date": "2026-05-17",
+      "rating": "G",
+      "status": "upcoming",
+      "summary": "Over the course of an afternoon in late spring, two longtime friends reunite under a mulberry tree to confront the ways their time apart has changed them.",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/7nvk4syZlGXdMLcO8UdOR7jPS0G.jpg",
+      "backdrops": [],
+      "hidden": true,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1380291,
+      "title": "Tom Clancy's Jack Ryan: Ghost War",
+      "release_date": "2026-05-20",
+      "rating": "R",
+      "status": "upcoming",
+      "summary": "When an international covert mission unravels a deadly conspiracy, Ryan is forced back into the world of espionage to confront a rogue black-ops unit.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=-4ZVFspRn3M",
+        "https://www.youtube.com/watch?v=MNeoJI82BHI"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/vjUWJXdd275UYJDzblaNPZp9319.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/cdefY0RPcUKgdJVtfl9rvyTWvpF.jpg",
+        "https://image.tmdb.org/t/p/w300/rZ2FAI5MZgyAWjPgOLSeKJ3JA2V.jpg",
+        "https://image.tmdb.org/t/p/w300/81bhMcDJFZNCKjm1wRTPIHpWWwa.jpg",
+        "https://image.tmdb.org/t/p/w300/s0Bjci8DW0J2dviVbWfWxtkDbRI.jpg",
+        "https://image.tmdb.org/t/p/w300/dzH3QXE3tmHo7DGr9rQIrfUUjVb.jpg",
+        "https://image.tmdb.org/t/p/w300/vSlJcq8j8VgciDIrkq4IKNUZSyu.jpg",
+        "https://image.tmdb.org/t/p/w300/e2Ccj80Sfax7YRwjZFr5TTC1h80.jpg",
+        "https://image.tmdb.org/t/p/w300/982u80yy3hycbt6zH4HyRChKoVK.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1228710,
+      "title": "Star Wars: The Mandalorian and Grogu",
+      "release_date": "2026-05-22",
+      "rating": "PG-13",
+      "status": "upcoming",
+      "summary": "The evil Empire has fallen, and Imperial warlords remain scattered throughout the galaxy. As the fledgling New Republic works to protect everything the Rebellion fought for, they have enlisted the help of legendary Mandalorian bounty hunter Din Djarin and his young apprentice Grogu.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=uwild1rw7Aw",
+        "https://www.youtube.com/watch?v=IHWlvwu8t1w",
+        "https://www.youtube.com/watch?v=_pa1KLXuW0Y"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/5Vi8dSauVwH1HOsiZceDMbRr1Ca.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/7OedxK0BvSKJ0ZWCPRYADViTBx6.jpg",
+        "https://image.tmdb.org/t/p/w300/4VrLojD6Gl1HQkcDHAoHQjSDPh9.jpg",
+        "https://image.tmdb.org/t/p/w300/uhKu98XD2VFzzfDgNOM3wBrAOuH.jpg",
+        "https://image.tmdb.org/t/p/w300/6zg7A9ICOthNR2TSXlT51KvXrsA.jpg",
+        "https://image.tmdb.org/t/p/w300/wFKDH8nAz7l9iyVobjcNAPTrkNz.jpg",
+        "https://image.tmdb.org/t/p/w300/dYwISC4Jt5BBzBr5xS9OAkNE4zP.jpg",
+        "https://image.tmdb.org/t/p/w300/4lj7MZtcIDI2FmZXGkFWh0sNCsq.jpg",
+        "https://image.tmdb.org/t/p/w300/arjGfQaakBlmfWQGNdG2nFxrpMQ.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1440050,
+      "title": "The Breadwinner",
+      "release_date": "2026-05-29",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "After his wife Katie lands a once-in-a-lifetime deal on Shark Tank that takes her on a prolonged business trip - lifelong breadwinner Nate Wilcox now has to fend for his family as a first-time stay-at-home dad.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=m76VzoDfQWQ",
+        "https://www.youtube.com/watch?v=19PLc6hpTvA"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/4apG9Xk6HQvV48JKEjSUeiebju7.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/epIN71wb1bZBPmPu0EV4z6ce5J8.jpg",
+        "https://image.tmdb.org/t/p/w300/to7Z4tfKVk8hzxCbzjud6OIp6kA.jpg"
+      ],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1596278,
+      "title": "Time and Water",
+      "release_date": "2026-05-29",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "Facing the death of his country’s glaciers and the loss of his beloved grandparents, Icelandic writer Andri Snær Magnason turns his archives into a time capsule to hold what is slipping away — family, memory, time, and water.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=6oR0iVwdY7M"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/1hksIYHtsHCG70nZKbnrYBPk600.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/yPQA2LHKOzLb4e2iu5M0vj7F5H8.jpg"
+      ],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1645668,
+      "title": "A Butler's Job",
+      "release_date": "2026-05-30",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "A devoted butler tries to save his detective master from a mysterious vampiric kidnapping.",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/xVknTmYO91BVzVtEFIx4dHaTmQ9.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/AgyiCu5LhakA7JG21mPapaZ73nD.jpg"
+      ],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 677558,
+      "title": "The Last Whale Singer",
+      "release_date": "2026-06-05",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "When a monstrous creature escapes from a melting iceberg, a self-doubting teenage humpback whale must face his greatest fears and dive into the darkest depths with his friends, to discover the mystical song that can save the oceans from destruction.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=wwIMQDSBjJU",
+        "https://www.youtube.com/watch?v=KCRAresoEOM"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/pRLjnxFviHmzP8RvWq0PlLeQnc6.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/l57zMmISH0SCWsXR7iorceZTm8y.jpg"
+      ],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1623718,
+      "title": "Quando il Cielo Cade",
+      "release_date": "2026-06-08",
+      "rating": "G",
+      "status": "upcoming",
+      "summary": "",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/cXfn20e2GSyYoCKdPnoiQsVIeFq.jpg",
+      "backdrops": [],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1084244,
+      "title": "Toy Story 5",
+      "release_date": "2026-06-19",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "When Bonnie receives a Lilypad tablet as a gift and becomes obsessed, Buzz, Woody, Jessie and the rest of the gang's jobs become exponentially harder when they have to go head to head with the all-new threat to playtime.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=c51ND9Hdbw0",
+        "https://www.youtube.com/watch?v=GGBgf8dcgyY"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/dWIAOC9EKFehGs3CYvDQih3hxaG.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/coyHrYHD2xHhDoYD6o4uwoJ2o7b.jpg",
+        "https://image.tmdb.org/t/p/w300/gnAwcLTZ0ooeIc6DdIrwOZ383OR.jpg",
+        "https://image.tmdb.org/t/p/w300/jTqvAiKJcMtrDzpYfoR3c1BtcZ4.jpg",
+        "https://image.tmdb.org/t/p/w300/cEJqOZd7xrtk0GPCM0tZOad6pOD.jpg",
+        "https://image.tmdb.org/t/p/w300/p9Fa7g4UXBC0iI8cueCkCQgpsQa.jpg",
+        "https://image.tmdb.org/t/p/w300/mwwRvwmLtaFewmqm6XxlnHGsqo6.jpg",
+        "https://image.tmdb.org/t/p/w300/sDFtwXg6BxXmy9iSuMVv3K2jVB0.jpg",
+        "https://image.tmdb.org/t/p/w300/hnAjezkKotvN2wYNZRavU8TwaSl.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1315772,
+      "title": "Minions & Monsters",
+      "release_date": "2026-07-01",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "This is the rambunctious, ridiculous and totally true story of how the Minions conquered Hollywood, became movie stars, lost everything, unleashed monsters onto the world and then banded together to try and save the planet from the mayhem they had just created.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=ZSdOwt-G49w",
+        "https://www.youtube.com/watch?v=UaH6fShfpuY",
+        "https://www.youtube.com/watch?v=EVLrnh2Hj8I"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/s2IruLQG6577vX9SBMhuoEqK4WF.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/2lHxj082xknb8kt4gOcmn1yPjkk.jpg",
+        "https://image.tmdb.org/t/p/w300/6fK8gGx0ctR5wRcMtk9pC6F15N1.jpg",
+        "https://image.tmdb.org/t/p/w300/jZXCfWUi9gL3vKycryTZJ9zGSam.jpg",
+        "https://image.tmdb.org/t/p/w300/nzqjA60XpGUA0fJqjzSIFg4dkS.jpg",
+        "https://image.tmdb.org/t/p/w300/rHt0Ge70DNzw2rUDAeZOnEyludu.jpg",
+        "https://image.tmdb.org/t/p/w300/pclNFoWcWDeoaQ2pwrXPPw1mjs7.jpg",
+        "https://image.tmdb.org/t/p/w300/vmcUIYJazA9qZibaRSrfYEs9PAy.jpg",
+        "https://image.tmdb.org/t/p/w300/oZk08bq0CgC4C3ywPhDBHbF2Q6R.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1108427,
+      "title": "Moana",
+      "release_date": "2026-07-10",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "Moana answers the Ocean's call and, for the first time, voyages beyond the reef of her island of Motunui with the infamous demigod Maui on an unforgettable journey to restore prosperity to her people.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=n7f6hlKsxxo",
+        "https://www.youtube.com/watch?v=LehMd1L7XkI",
+        "https://www.youtube.com/watch?v=QKYFfYLe5rs"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/zKVgiv5qHCvCLT4A2ymJi5QeXDH.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/lniL0aoEvuWxfZOcZss7vWQfi1x.jpg",
+        "https://image.tmdb.org/t/p/w300/ogv0eTxwCVcrfKYsl2GKH4hNHJL.jpg",
+        "https://image.tmdb.org/t/p/w300/1Qf5ClZJpmEPJgBqBB03UvCVXzO.jpg",
+        "https://image.tmdb.org/t/p/w300/7gidpHWeWlnjJOgQQsQIxwJs2Pp.jpg",
+        "https://image.tmdb.org/t/p/w300/4j9H6C8oEWqRQQXbQk6oTbQHbOI.jpg",
+        "https://image.tmdb.org/t/p/w300/sC1HIGFZ1nBxJpNbjztUDvD5arc.jpg",
+        "https://image.tmdb.org/t/p/w300/dRqDXLVmPuvGJCegVHayK4WS6Cz.jpg",
+        "https://image.tmdb.org/t/p/w300/niOwJfnxk5lgShXOGMSe33k2J81.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 969681,
+      "title": "Spider-Man: Brand New Day",
+      "release_date": "2026-07-31",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "Four years have passed since the events of No Way Home, and Peter is now an adult living entirely alone, having voluntarily erased himself from the lives and memories of those he loves. Crime-fighting in a New York that no longer knows his name, he's devoted himself entirely to protecting his city — a full-time Spider-Man — but as the demands on him intensify, the pressure sparks a surprising physical evolution that threatens his existence, even as a strange new pattern of crimes gives rise to one of the most powerful threats he has ever faced.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=8TZMtslA3UY",
+        "https://www.youtube.com/watch?v=Vsn7sVxCq1M",
+        "https://www.youtube.com/watch?v=QZ9XFKF_nD0"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/pspkSVP39NGa6G2rvK5KlMjvYUe.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/vjMvFSmGUxEtqVdaZgvFee9XkZl.jpg",
+        "https://image.tmdb.org/t/p/w300/sYsaVy047cfGTLMfcRihee3ShnM.jpg",
+        "https://image.tmdb.org/t/p/w300/jenQoCLJ4FEfFGZS13op91jlxjy.jpg",
+        "https://image.tmdb.org/t/p/w300/r1ubLKr9XIZN6enAwOWelj47zgU.jpg",
+        "https://image.tmdb.org/t/p/w300/63JYqhefGrbVg0YqZ3xWqn0pwT2.jpg",
+        "https://image.tmdb.org/t/p/w300/2Es8HvjgIoNxYbsQnVa8OJVz2Wk.jpg",
+        "https://image.tmdb.org/t/p/w300/5glivQffWJkRJttJ5g5LW14kmeC.jpg",
+        "https://image.tmdb.org/t/p/w300/4Z6BVHejiiSpWzVh0QBYkUMYtVY.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1185806,
+      "title": "PAW Patrol: The Dino Movie",
+      "release_date": "2026-08-14",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "The PAW Patrol pups crash land on an uncharted tropical island filled with dinosaurs after their ship gets caught in a mysterious storm. They meet Rex, a pup who has been stranded on the island for years and has become an expert in all things dino-related. When the Patrol’s archrival, Mayor Humdinger, begins recklessly mining in hopes of exploiting the island for its natural resources, he inadvertently causes a huge, dormant volcano to erupt. The pups are thrown into a series of high-stakes, dino-sized rescues bigger than anything they’ve done before, as they must stop Humdinger before everything on the island goes extinct.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=aHw4PuLCUIc"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/3US9zyWBUbLTASwNwMSuZ0fO6hC.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/dSAGnA3OZs0cC3JQ0GLqQVndZON.jpg",
+        "https://image.tmdb.org/t/p/w300/rlREba6gEHwcIyxvZLrUebJjxsI.jpg",
+        "https://image.tmdb.org/t/p/w300/rMfDaKeyNiHXkszNxB065dKagV6.jpg",
+        "https://image.tmdb.org/t/p/w300/mtZCXtdDxVpPPG4JxWDGOtZ40Ow.jpg",
+        "https://image.tmdb.org/t/p/w300/sSKamRdD04b2LaTfLf8UQ5iA4lP.jpg",
+        "https://image.tmdb.org/t/p/w300/dY4LyVSvjk9dN20YsxuouaMIMox.jpg",
+        "https://image.tmdb.org/t/p/w300/IdSmuVixVHyuMhQI0JCL4H3uz6.jpg",
+        "https://image.tmdb.org/t/p/w300/whF8WoRWjhd6Fv05NYEwNnoIKgG.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1204680,
+      "title": "Coyote vs ACME",
+      "release_date": "2026-08-28",
+      "rating": "PG",
+      "status": "upcoming",
+      "summary": "After Acme products fail him one too many times in his dogged pursuit of the Roadrunner, Wile E. Coyote decides to hire a billboard lawyer to sue the Acme Corporation.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=H-43VeYGiPM",
+        "https://www.youtube.com/watch?v=qT6kR2nHI8M",
+        "https://www.youtube.com/watch?v=G11SytnNYqI"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/30vBiZBMVpIEfxbi2g4jHlYhjOI.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/linZzmvbivJnXAXthvblHZdkkpp.jpg",
+        "https://image.tmdb.org/t/p/w300/viZqGq9TNvQ5uXSD4ahg2RpRONT.jpg",
+        "https://image.tmdb.org/t/p/w300/s6WNALkMPnBDadiKaS1JdRx9Hnw.jpg",
+        "https://image.tmdb.org/t/p/w300/crBimurZuLZQG5muRaxQ5RWCUXz.jpg",
+        "https://image.tmdb.org/t/p/w300/rQMRCYoJd701iY0MDB73KvA7ZOd.jpg",
+        "https://image.tmdb.org/t/p/w300/9SWSsofLTvLeBraquZI73XZkGgv.jpg",
+        "https://image.tmdb.org/t/p/w300/hGTLRy53Q0c7FdF4AnvpXSJpR3j.jpg",
+        "https://image.tmdb.org/t/p/w300/et7RPs6lV4LbPZLZMJCUhTpfTIU.jpg"
+      ],
+      "hidden": false,
+      "favorite": false
+    },
+    {
+      "tmdb_id": 1117898,
+      "title": "The Cat in the Hat",
+      "release_date": "2026-11-06",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "Doing what he does best, the Cat spreads joy to kids in his hilarious, signature, and singularly irreverent way, transporting them and audiences on a fantastical journey through a world they've never seen before. Our hero takes on his toughest assignment yet for the I.I.I.I. (Institute for the Institution of Imagination and Inspiration, LLC) to cheer up Gabby and Sebastian, a pair of siblings struggling to move to a new town. Known for taking things too far, this could be this agent of chaos' last chance to prove himself...or lose his magical hat!",
+      "trailers": [
+        "https://www.youtube.com/watch?v=jz8pLlPhSeY"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/tYH4rQZlHtuFSeDS0bsV17khvJC.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/pFLeuwKNJLC9ETW17uBaUwTWxWl.jpg",
+        "https://image.tmdb.org/t/p/w300/xuesjsDedl4jrdKcFeDmtjP6ZXo.jpg",
+        "https://image.tmdb.org/t/p/w300/uiR8T1cuzmaOJM9ZuAYOMXNL8rL.jpg",
+        "https://image.tmdb.org/t/p/w300/pSxlXSJQ7tfKSgrxUWh9PAj4Hw9.jpg",
+        "https://image.tmdb.org/t/p/w300/eARqM31MdchM3DHfVp3vRXZ7OoM.jpg",
+        "https://image.tmdb.org/t/p/w300/34YKntX06U95OzKm7wGR7Z37KDx.jpg",
+        "https://image.tmdb.org/t/p/w300/piFhBCQkrn3zpHPvjgF8TbKUxIw.jpg",
+        "https://image.tmdb.org/t/p/w300/y7nLVmdcYOfNb4JrksMxlpEw9tC.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1300968,
+      "title": "The Hunger Games: Sunrise on the Reaping",
+      "release_date": "2026-11-20",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "Return to the world of Panem 24 years before the events of The Hunger Games, starting on the morning of the reaping of the 50th Hunger Games, also known as the Second Quarter Quell.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=fS35YSjopjE",
+        "https://www.youtube.com/watch?v=MPjxijuBuSo",
+        "https://www.youtube.com/watch?v=mfJnszx7LZc"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/jNcZH8yplxttRlf0wwqfGGMKHxX.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/cCGTwo2qtzKcvXvFvkvXO4J2f2D.jpg",
+        "https://image.tmdb.org/t/p/w300/6bM4RwgUsL8hPz5FjFDKM0vrDu2.jpg",
+        "https://image.tmdb.org/t/p/w300/Ac56cVxw43dUY7rUIjadk0ro0xt.jpg",
+        "https://image.tmdb.org/t/p/w300/mkDC4IqwDD04iAyn8L58ovBgUxs.jpg",
+        "https://image.tmdb.org/t/p/w300/bkIolhN89c74XKlUSp9UtlPIOnG.jpg",
+        "https://image.tmdb.org/t/p/w300/g0gJvByBw33eVr9YOqLWGSA9oGq.jpg",
+        "https://image.tmdb.org/t/p/w300/8QGPCd5l8UbPYWrf62ptNRbRP6z.jpg",
+        "https://image.tmdb.org/t/p/w300/qW47xOGl0dOMRUtAS2XugBlOO1t.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1003596,
+      "title": "Avengers: Doomsday",
+      "release_date": "2026-12-18",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "Beloved heroes from three distinct universes are set on a deadly collision course and face an existential threat unlike anything they've ever encountered.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=399Ez7WHK5s",
+        "https://www.youtube.com/watch?v=kH1XlwHQv9o",
+        "https://www.youtube.com/watch?v=1clWprLC5Ak"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/8HkIe2i4ScpCkcX9SzZ9IPasqWV.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/4OZznMYFmQPP4orKgbLaWRyYmBb.jpg",
+        "https://image.tmdb.org/t/p/w300/3eOINbgRs8WiWfQfViXeuZ3enrs.jpg",
+        "https://image.tmdb.org/t/p/w300/iA4mbnxs58l97r5yu44PzAsMi83.jpg",
+        "https://image.tmdb.org/t/p/w300/rGyYhezSXlgk3sqOgGSNooJSXLJ.jpg",
+        "https://image.tmdb.org/t/p/w300/wmmUDmLUKyI5MdIF0x5l7UzKX17.jpg",
+        "https://image.tmdb.org/t/p/w300/h4Y3gOi9ne9vr8Vum9gUtcFI397.jpg",
+        "https://image.tmdb.org/t/p/w300/kyLt1BlmgoQGA1ovwD4SgSbhpkp.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1170608,
+      "title": "Dune: Part Three",
+      "release_date": "2026-12-18",
+      "rating": "PG-13",
+      "status": "upcoming",
+      "summary": "As Emperor, Paul Atreides grapples with the consequences of his rise to power as political conspiracies and a galaxy-spanning holy war threaten the future he alone can foresee.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=3_9vCamtuPY",
+        "https://www.youtube.com/watch?v=TKiLsEVRPzc"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/b4wekkUaxExzOeGe7hKXzhnyXHt.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/bU206dN0ucfOFRK17OXabkdHKFC.jpg",
+        "https://image.tmdb.org/t/p/w300/5poP982Y3huFTkjJsJAq6MBQs5k.jpg",
+        "https://image.tmdb.org/t/p/w300/5BwQuI2RAXYZnwRrPlEjJbfuBr8.jpg",
+        "https://image.tmdb.org/t/p/w300/fgISFNlz8ZBplHa5cNXDsPe6VYK.jpg",
+        "https://image.tmdb.org/t/p/w300/dXOqWj2kjJQkHNbfoS8iYzbuwO3.jpg",
+        "https://image.tmdb.org/t/p/w300/kh7fyFrarDST6EKWnZOzACJ8seX.jpg",
+        "https://image.tmdb.org/t/p/w300/v9jKFPvKM9Rr8iUXqjst8Jbi0Vm.jpg",
+        "https://image.tmdb.org/t/p/w300/kCIBKrDkUGvGql8GmPVL6jsih0d.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1300926,
+      "title": "The Angry Birds Movie 3",
+      "release_date": "2026-12-23",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "The third installment in The Angry Birds Movie franchise. Plot TBA",
+      "trailers": [
+        "https://www.youtube.com/watch?v=8_nX4qQU1Wc"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/5WT2fuN2jExUWIATKjP4zvF1Dey.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/5ZCb6FaqXnsplFG4fDK8a3VFVz4.jpg",
+        "https://image.tmdb.org/t/p/w300/z7PVGznxo9fEdLV1w2JaDLcd4TE.jpg",
+        "https://image.tmdb.org/t/p/w300/6cHcwAOQwQlC5SVQEckTF65o8ko.jpg",
+        "https://image.tmdb.org/t/p/w300/yfHcc2mAkkFm9HuOIuQbcptKP8J.jpg",
+        "https://image.tmdb.org/t/p/w300/aIPdjeFZ4SxfXsjyAmmFyOjZuJU.jpg",
+        "https://image.tmdb.org/t/p/w300/rvwT9hxkFt1Y4yYu9q9hHntC3Z7.jpg",
+        "https://image.tmdb.org/t/p/w300/lu1kFtTdetlPSdmnCE7MNt0fqkl.jpg",
+        "https://image.tmdb.org/t/p/w300/uobn0qbaQINS0IolD4ejdftLPDa.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1384758,
+      "title": "Ice Age: Boiling Point",
+      "release_date": "2027-02-05",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "A dinosaur-and-lava-filled madcap adventure that takes Manny, Sid, Diego, Ellie, Scrat and the rest of the herd to visit never-before-seen corners of the treacherous Lost World.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=f93TgnGk66k"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/yga4pd5kMH7Zpto8biCjEKVkLAh.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/1Ky8ZGo6AQTNahyDg24grfhEUPu.jpg",
+        "https://image.tmdb.org/t/p/w300/dJNVKhw2tAc0S9lG7uSVwLnnLRj.jpg",
+        "https://image.tmdb.org/t/p/w300/g30NHIAOg76gacGVrT0uGPsJh40.jpg",
+        "https://image.tmdb.org/t/p/w300/9z7S2xm4iBHQFMdUdrPhhJz9oj2.jpg",
+        "https://image.tmdb.org/t/p/w300/m9jFepRueg0ExOR8lhJN02zO9DD.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1147572,
+      "title": "Narnia: The Magician's Nephew",
+      "release_date": "2027-02-10",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "The new upcoming film by Greta Gerwig.",
+      "trailers": [],
+      "poster_url": "https://image.tmdb.org/t/p/w500/lnVdfYxsPCYcgplY6h5dNl5fvjg.jpg",
+      "backdrops": [],
+      "hidden": false,
+      "favorite": true
+    },
+    {
+      "tmdb_id": 1401586,
+      "title": "Sonic the Hedgehog 4",
+      "release_date": "2027-03-19",
+      "rating": "",
+      "status": "upcoming",
+      "summary": "The fourth installment in the Sonic the Hedgehog film franchise. Plot TBA.",
+      "trailers": [
+        "https://www.youtube.com/watch?v=YShjCIA9aXk"
+      ],
+      "poster_url": "https://image.tmdb.org/t/p/w500/t8uoHBODkFlSQJRL6qc4IclUBlH.jpg",
+      "backdrops": [
+        "https://image.tmdb.org/t/p/w300/tt2lisqeBShFbGp1pDJzZyk9SRD.jpg",
+        "https://image.tmdb.org/t/p/w300/OjvX7v2VGbha4ZCHuajQz0Y1pR.jpg"
+      ],
+      "hidden": false,
+      "favorite": true
+    }
+  ],
+  "default_ratings": [
+    "G",
+    "PG"
+  ]
+}

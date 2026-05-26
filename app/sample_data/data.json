@@ -1,0 +1,94 @@
+{
+  "email": "vtlinh87@gmail.com",
+  "display_name": "Linh",
+  "address": "",
+  "weather_coords": "41.0223,-74.0635",
+  "temperature_unit": "C",
+  "sections": [
+    {
+      "key": "global",
+      "title": "🌍 Top Global News",
+      "description": "Breaking news and major stories from around the world covering international events, global politics, conflicts, and significant developments affecting multiple countries.",
+      "subsection_count": 4,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": true
+    },
+    {
+      "key": "us",
+      "title": "🇺🇸 Top US News",
+      "description": "Major news stories originating from the United States covering national politics, policy, events, and issues affecting the American public.",
+      "subsection_count": 3,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": true
+    },
+    {
+      "key": "njny",
+      "title": "🗽 Top NJ/NY News",
+      "description": "Top New Jersey and New York regional news.",
+      "subsection_count": 2,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": false
+    },
+    {
+      "key": "dorch",
+      "title": "🏫 Dorchester Elementary School News & Events",
+      "description": "Top Dorchester Elementary School (Woodcliff Lake, NJ) news and upcoming events within the next 4 weeks, with grade filtering applied and authoritative dates from the official calendar.",
+      "subsection_count": 2,
+      "preferred_sources": [
+        "https://www.wclpfa.com/WlL/index.cfm",
+        "https://www.woodcliff-lake.com/",
+        "https://des.woodcliff-lake.com/"
+      ],
+      "use_global_sources": true,
+      "can_be_headline": false
+    },
+    {
+      "key": "tech",
+      "title": "💻 Top Tech and AI News",
+      "description": "Product launches, acquisitions, regulatory actions, platform changes, and hardware releases, excluding AI-specific stories. AI news emphasizing coding AI tools such as Claude, Cursor, Copilot, and Codex.",
+      "subsection_count": 4,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": true
+    },
+    {
+      "key": "ukraine",
+      "title": "🇺🇦 Ukraine News",
+      "description": "Front-line military situation, diplomatic and peace-process news, Western aid and sanctions, significant domestic developments, and humanitarian stories from reliable sources.",
+      "subsection_count": 2,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": false
+    },
+    {
+      "key": "vietnamese-news",
+      "title": "🇻🇳 Vietnamese News",
+      "description": "News and developments from Vietnam including politics, economy, culture, and society.",
+      "subsection_count": 2,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": false
+    },
+    {
+      "key": "finance",
+      "title": "💰 Financial and Stock News",
+      "description": "Stock market updates, financial trends, investment analysis, and economic indicators.",
+      "subsection_count": 2,
+      "preferred_sources": [],
+      "use_global_sources": true,
+      "can_be_headline": false
+    }
+  ],
+  "children": [],
+  "tts_prefs": {
+    "voice_uri": "Google US English",
+    "voice_name": "Google US English",
+    "engine": "System",
+    "rate": 1.25,
+    "pitch": 0.9,
+    "volume": 0.5
+  }
+}

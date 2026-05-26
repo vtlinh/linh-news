@@ -31,6 +31,8 @@
 {% block scripts %}
 <script>
 (function() {
+  const SAMPLE = {{ sample | default(false) | tojson }};
+  function sampleToast() { window.toast("This is a sample page — actions aren't saved."); }
   const tbody = document.getElementById('stocks-tbody');
   const addForm = document.getElementById('add-form');
   const input = document.getElementById('symbol-input');
@@ -57,6 +59,7 @@
     e.preventDefault();
     const symbol = input.value.trim().toUpperCase();
     if (!symbol) return;
+    if (SAMPLE) { sampleToast(); input.value = ''; return; }
     try {
       const r = await fetch('/admin/stocks/add', {
         method: 'POST',
@@ -80,6 +83,7 @@
   tbody.addEventListener('click', async (e) => {
     const btn = e.target.closest('button.remove-btn');
     if (!btn) return;
+    if (SAMPLE) { sampleToast(); return; }
     const symbol = btn.dataset.symbol;
     btn.disabled = true;
     try {

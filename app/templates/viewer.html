@@ -627,8 +627,10 @@
     setTimeout(() => { sheet.hidden = true; }, 240);
   }
 
+  const SAMPLE = {{ sample | default(false) | tojson }};
   let saveTimer = null;
   function savePrefs() {
+    if (SAMPLE) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       fetch('/tts/prefs', {

@@ -31,6 +31,8 @@ client_secret*.json
 *.sqlite
 *.sqlite3
 *.pdf
+# The committed sample-newspaper snapshot PDF is an exception.
+!app/sample_data/sample.pdf
 /tmp/
 /local/
 

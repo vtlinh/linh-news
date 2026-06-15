@@ -179,12 +179,10 @@ def run(
     weather_alerts = ctx.pop("_weather_alerts", [])
 
     rendered_prompt = prompt_template.build_prompt(
-        display_name=masthead_name,
         today=today,
         sections=user_sections,
         children=user_children,
         watchlist_stocks=ctx.get("WATCHLIST_STOCKS") or [],
-        dorchester_events=ctx.get("DORCHESTER_CALENDAR_EVENTS") or "",
     )
 
     if linhnews_override is not None:
@@ -204,12 +202,12 @@ def run(
     _validate_and_log(linhnews, expected_keys=[s.get("key") for s in user_sections])
 
     with _step("backfill_missing_sections"):
-        linhnews = _backfill_missing_sections(linhnews, today, user_sections, masthead_name)
+        linhnews = _backfill_missing_sections(linhnews, today, user_sections)
 
     headline_eligible_titles = _headline_eligible_titles(user_sections)
     if headline_eligible_titles and not linhnews.get("headline"):
         with _step("reroll_headline"):
-            headline = _regenerate_headline(headline_eligible_titles, today, masthead_name)
+            headline = _regenerate_headline(headline_eligible_titles, today)
         if headline is not None:
             linhnews["headline"] = headline
 
@@ -719,7 +717,6 @@ def _build_context(
         pdf_calendar_html = cached_rail.get("calendar_html", "")
     else:
         pdf_calendar_html = calendar_summary.build_pdf_calendar(events, today, important_uids)
-    dorchester_text = calendar_summary.build_dorchester_event_list(events, cal_names)
 
     with _step("NWS hourly refresh + summarize"):
         weather_forecast = weather.refresh_and_summarize(s, coords, today)
@@ -739,7 +736,6 @@ def _build_context(
 
     return {
         "WATCHLIST_STOCKS": watchlist,
-        "DORCHESTER_CALENDAR_EVENTS": dorchester_text,
         "_pdf_movies_html": pdf_movies_html,
         "_pdf_calendar_html": pdf_calendar_html,
         "_weather_forecast": weather_forecast,
@@ -779,13 +775,13 @@ def _validate_and_log(linhnews: dict, *, expected_keys: list[str]) -> None:
             )
 
 
-def _regenerate_section(sec: dict, today: date, display_name: str) -> dict | None:
+def _regenerate_section(sec: dict, today: date) -> dict | None:
     """Re-roll one missing section and return a Section dict, or None."""
     key = sec.get("key", "")
     title = sec.get("title", "")
     topic = sec.get("description", "") or ""
     target = int(sec.get("subsection_count", MIN_SUBSECTIONS))
-    system = prompts.render("section_reroll_system", display_name=display_name)
+    system = prompts.render("section_reroll_system")
     user = prompts.render(
         "section_reroll_user",
         today_iso=today.isoformat(),
@@ -825,11 +821,11 @@ def _headline_eligible_titles(user_sections: list[dict]) -> list[str]:
     ]
 
 
-def _regenerate_headline(eligible_titles: list[str], today: date, display_name: str) -> dict | None:
+def _regenerate_headline(eligible_titles: list[str], today: date) -> dict | None:
     """Single-shot re-roll for a missing headline. Returns a Subsection-shaped
     dict ({title, text, sources}) or None on failure."""
     bullets = "\n".join(f"  - {t}" for t in eligible_titles)
-    system = prompts.render("headline_reroll_system", display_name=display_name)
+    system = prompts.render("headline_reroll_system")
     user = prompts.render(
         "headline_reroll_user",
         today_iso=today.isoformat(),
@@ -877,7 +873,6 @@ def _backfill_missing_sections(
     linhnews: dict,
     today: date,
     user_sections: list[dict],
-    display_name: str = "the reader",
 ) -> dict:
     keys_present = {s.get("key") for s in (linhnews.get("sections") or [])}
     missing = [s for s in user_sections if s.get("key") and s.get("key") not in keys_present]
@@ -891,7 +886,7 @@ def _backfill_missing_sections(
     sections = list(linhnews.get("sections") or [])
     for sec in missing:
         with _step(f"reroll_section:{sec.get('key')}"):
-            section = _regenerate_section(sec, today, display_name)
+            section = _regenerate_section(sec, today)
         if section:
             sections.append(section)
         else:

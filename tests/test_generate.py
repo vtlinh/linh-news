@@ -96,7 +96,7 @@ def test_backfill_missing_sections_calls_reroll_for_each_missing_key():
         return_value={"subsections": canned_subs},
     ) as call:
         out = generate._backfill_missing_sections(
-            {"sections": [], "stocks": []}, today, user_sections, "Tester"
+            {"sections": [], "stocks": []}, today, user_sections
         )
     assert call.call_count == len(user_sections)
     keys = {s["key"] for s in out["sections"]}
@@ -126,57 +126,12 @@ def test_build_context_includes_overlays(db_session, monkeypatch):
     assert "KID_AGE" not in ctx
     assert "KID_GRADE" not in ctx
     assert "CUSTOM_TOPICS" not in ctx
-    # Dorchester Parent Calendar is the lone exception — passed in so the
-    # LLM can ground the school news section in real upcoming events.
-    assert ctx["DORCHESTER_CALENDAR_EVENTS"] == "(none)"
+    assert "DORCHESTER_CALENDAR_EVENTS" not in ctx
     # Private keys are present here but get popped before the LLM call.
     assert "_pdf_calendar_html" in ctx
     assert "_pdf_movies_html" in ctx
     assert "_weather_forecast" in ctx
     assert "_weather_alerts" in ctx
-
-
-def test_build_context_dorchester_passthrough(db_session, monkeypatch):
-    today = date(2026, 4, 30)
-    cals = [
-        {"id": "dor", "name": "Dorchester Parent Calendar"},
-        {"id": "fam", "name": "Family"},
-    ]
-    events = [
-        {
-            "calendar_id": "dor",
-            "ical_uid": "u1",
-            "summary": "Spring concert",
-            "start": "2026-05-08T09:00:00",
-        },
-        {
-            "calendar_id": "dor",
-            "ical_uid": "u2",
-            "summary": "Field day",
-            "start": "2026-05-15",
-        },
-        {
-            "calendar_id": "fam",
-            "ical_uid": "u3",
-            "summary": "Dentist",
-            "start": "2026-05-03T14:00:00",
-        },
-    ]
-    with (
-        patch.object(generate.calendar_oauth, "list_calendars", return_value=cals),
-        patch.object(generate.calendar_oauth, "fetch_events", return_value=events),
-        patch.object(generate.calendar_summary, "persist_events_for_days", return_value=None),
-        patch.object(generate.movies_mod, "get_movies", return_value=[]),
-        patch.object(generate.weather, "refresh_and_summarize", return_value={}),
-        patch.object(generate.weather, "fetch_alerts", return_value=[]),
-    ):
-        ctx = generate._build_context(db_session, today, "evening")
-    txt = ctx["DORCHESTER_CALENDAR_EVENTS"]
-    assert "Spring concert" in txt
-    assert "Field day" in txt
-    assert "Dentist" not in txt
-    assert "9:00 AM" in txt
-    assert "all-day" in txt
 
 
 def test_build_context_dedupes_calendar_events(db_session, monkeypatch):

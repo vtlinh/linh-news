@@ -64,7 +64,7 @@ def _dhash(img: Image.Image, size: int = 8) -> int:
     identical for our purposes; small distances (≤5) usually indicate the
     same image with minor re-encoding or cropping differences."""
     g = img.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS)
-    px = list(g.getdata())
+    px = list(g.get_flattened_data())
     bits = 0
     for r in range(size):
         for c in range(size):

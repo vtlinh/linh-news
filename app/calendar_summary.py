@@ -534,53 +534,6 @@ def load_calendar_section(s: Session, email: str, today: date) -> str:
     return build_calendar_section(day_htmls)
 
 
-def build_dorchester_event_list(
-    events: list[dict],
-    cal_names: dict[str, str],
-) -> str:
-    """Compact bullet list of Dorchester Parent Calendar events for the LLM.
-
-    This is the one calendar feed that *does* get passed into the prompt, so
-    Claude can ground the Dorchester Elementary School news section in real
-    upcoming events instead of inventing dates. Format::
-
-        - 2026-05-08 (Fri) 9:00 AM: Spring concert
-        - 2026-05-15 (Fri) all-day: Field day
-
-    Returns ``"(none)"`` when no events match.
-    """
-    from app import calendar_oauth
-
-    lines: list[str] = []
-    for ev in sorted(events, key=lambda x: x.get("start", "")):
-        cn = (cal_names.get(ev.get("calendar_id"), "") or "").lower()
-        if "dorchester parent calendar" not in cn:
-            continue
-        title = (ev.get("summary") or "").strip()
-        start = ev.get("start", "")
-        if not title or not start:
-            continue
-        if calendar_oauth.is_filtered(cn, title):
-            continue
-        day_str = start[:10]
-        try:
-            d = date.fromisoformat(day_str)
-        except ValueError:
-            continue
-        dow = d.strftime("%a")
-        if "T" in start:
-            try:
-                dt = datetime.fromisoformat(start)
-                h = dt.hour % 12 or 12
-                t = f"{h}:{dt.strftime('%M')} {'AM' if dt.hour < 12 else 'PM'}"
-                lines.append(f"- {day_str} ({dow}) {t}: {title}")
-                continue
-            except ValueError:
-                pass
-        lines.append(f"- {day_str} ({dow}) all-day: {title}")
-    return "\n".join(lines) if lines else "(none)"
-
-
 def build_pdf_calendar(events: list[dict], today: date, important_uids: set[str]) -> str:
     """Format the calendar block for the PDF rail — no LLM.
 

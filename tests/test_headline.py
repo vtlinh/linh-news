@@ -97,7 +97,6 @@ def test_user_settings_save_persists_can_be_headline(tmp_path, monkeypatch):
 
 def test_prompt_template_omits_headline_block_when_none_eligible():
     out = prompt_template.build_prompt(
-        display_name="Linh",
         today=date(2026, 5, 13),
         sections=[
             {"key": "world", "title": "World", "subsection_count": 5},
@@ -105,14 +104,12 @@ def test_prompt_template_omits_headline_block_when_none_eligible():
         ],
         children=[],
         watchlist_stocks=[],
-        dorchester_events="",
     )
     assert "Headline" not in out or "front-page" not in out
 
 
 def test_prompt_template_emits_headline_block_when_eligible():
     out = prompt_template.build_prompt(
-        display_name="Linh",
         today=date(2026, 5, 13),
         sections=[
             {
@@ -131,7 +128,6 @@ def test_prompt_template_emits_headline_block_when_eligible():
         ],
         children=[],
         watchlist_stocks=[],
-        dorchester_events="",
     )
     # Block markers
     assert "Headline (top-of-front-page lead article)" in out

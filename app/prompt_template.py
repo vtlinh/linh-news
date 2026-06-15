@@ -2,9 +2,8 @@
 
 This module replaces the old static ``news.pr`` file. The section table is
 no longer hardcoded — it's pulled from the user's ``user_settings`` row at
-generation time. ``display_name`` (also from settings) replaces every
-"Linh"-branded reference. ``children`` (also from settings) drives the
-school grade-filter rule.
+generation time. ``children`` (also from settings) drives the school
+grade-filter rule.
 """
 
 from __future__ import annotations
@@ -92,18 +91,15 @@ def _render_children_block(children_json: list[dict], today: date) -> str:
 
 def build_prompt(
     *,
-    display_name: str,
     today: date,
     sections: list[dict],
     children: list[dict],
     watchlist_stocks: list[str],
-    dorchester_events: str,
 ) -> str:
     """Return the full system prompt sent to Claude. All `{{...}}` style
     placeholders that used to live in news.pr are now substituted in
     Python; the LLM receives a complete, ready-to-read prompt."""
 
-    name = display_name.strip() or "the reader"
     headline_titles = [
         (s.get("title") or "").strip()
         for s in sections
@@ -111,12 +107,10 @@ def build_prompt(
     ]
     return prompts.render(
         "edition_system",
-        name=name,
         today_iso=today.isoformat(),
         sections_table=_render_sections_table(sections),
         headline_block=_render_headline_block(headline_titles),
         children_block=_render_children_block(children, today),
         grade_label=kids.grades_label(children, today) or "(none)",
         watchlist_repr=", ".join(watchlist_stocks) if watchlist_stocks else "(empty)",
-        dorchester_events=dorchester_events,
     )

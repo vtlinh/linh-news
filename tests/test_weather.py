@@ -235,9 +235,11 @@ def test_cache_hourly_forecast_upserts_and_prunes(db_session):
         )
     )
     db_session.commit()
+    # Use a recent timestamp (relative to now) so the prune window — which is
+    # measured against the wall clock — never sweeps the row under test.
     periods = [
         {
-            "start_at": datetime(2026, 5, 14, 11, 0, tzinfo=UTC),
+            "start_at": datetime.now(UTC) - timedelta(hours=1),
             "temp_c": 15,
             "short_forecast": "Sunny",
         }
